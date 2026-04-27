@@ -84,7 +84,10 @@ with tab_rank:
             bar_ranked(ranking, "executiva", "receita", top_n=15, money=True),
             use_container_width=True,
         )
-        visible = ranking.head(10)
+        visible = ranking.head(10).copy()
+
+        # ---- defesa contra schema drift (produção pode ter view diferente) ----
+        # Garante que TODAS as colunas exibidas existam; preenche com 0 se faltar.
         cols_visible = [
             "executiva",
             "vendas", "receita", "ticket_medio",
@@ -92,6 +95,26 @@ with tab_rank:
             "pct_conversao", "pct_comparecimento",
             "pct_vendas", "pct_recebimento",
         ]
+        for col in cols_visible:
+            if col not in visible.columns:
+                visible[col] = 0 if col != "executiva" else ""
+
+        # Recalcula as 2 métricas-alvo aqui para garantir consistência mesmo
+        # se algum cálculo upstream tiver falhado (proteção 0/0 incluída).
+        def _pct(num, den):
+            try:
+                d = float(den)
+                return (float(num) / d) * 100 if d else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        visible["pct_recebimento"] = visible.apply(
+            lambda r: _pct(r.get("receita", 0), r.get("montante", 0)), axis=1
+        )
+        visible["pct_vendas"] = visible.apply(
+            lambda r: _pct(r.get("vendas", 0), r.get("comparecimentos", 0)), axis=1
+        )
+
         st.dataframe(
             visible[cols_visible],
             use_container_width=True, hide_index=True,

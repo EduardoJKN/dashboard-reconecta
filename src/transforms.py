@@ -116,31 +116,43 @@ def executivas_por_dia(df: pd.DataFrame) -> pd.DataFrame:
     return df.groupby("data_ref", as_index=False)[cols].sum().sort_values("data_ref")
 
 
+_RANKING_BASE_COLS = ("oportunidades", "agendamentos", "comparecimentos",
+                      "vendas", "montante", "receita",
+                      "perdidos", "cancelados",
+                      "novos", "ascensoes", "renovacoes", "indicacoes",
+                      "lead_in_consultoria_gratuita")
+_RANKING_DERIVED_COLS = ("pct_agendamento", "pct_comparecimento",
+                         "pct_conversao", "pct_vendas",
+                         "pct_recebimento", "ticket_medio")
+RANKING_FULL_SCHEMA = ("executiva",) + _RANKING_BASE_COLS + _RANKING_DERIVED_COLS
+
+
 def executivas_ranking(df: pd.DataFrame) -> pd.DataFrame:
-    """Ranking por executiva: absolutos + taxas recalculadas."""
-    if df.empty:
-        return df
+    """Ranking por executiva: absolutos + taxas recalculadas.
+
+    Sempre devolve um DataFrame com `RANKING_FULL_SCHEMA` (mesmo vazio).
+    Colunas absolutas ausentes na view são preenchidas com 0 antes do cálculo
+    das taxas, evitando KeyError em produção quando a view tiver schema
+    levemente diferente do esperado em dev."""
+    if df.empty or "executiva" not in df.columns:
+        return pd.DataFrame(columns=list(RANKING_FULL_SCHEMA))
+
     cols = [c for c in _EXEC_SUM if c in df.columns]
     agg = df.groupby("executiva", as_index=False)[cols].sum()
-    agg["pct_agendamento"] = agg.apply(
-        lambda r: _safe_div(r["agendamentos"], r["oportunidades"]) * 100, axis=1
-    )
-    agg["pct_comparecimento"] = agg.apply(
-        lambda r: _safe_div(r["comparecimentos"], r["agendamentos"]) * 100, axis=1
-    )
-    agg["pct_conversao"] = agg.apply(
-        lambda r: _safe_div(r["vendas"], r["agendamentos"]) * 100, axis=1
-    )
-    agg["pct_vendas"] = agg.apply(
-        lambda r: _safe_div(r["vendas"], r["comparecimentos"]) * 100, axis=1
-    )
-    agg["pct_recebimento"] = agg.apply(
-        lambda r: _safe_div(r["receita"], r["montante"]) * 100, axis=1
-    )
-    agg["ticket_medio"] = agg.apply(
-        lambda r: _safe_div(r["montante"], r["vendas"]), axis=1
-    )
-    return agg.sort_values("receita", ascending=False)
+
+    # Garante presença de TODAS as colunas absolutas usadas nas taxas.
+    for c in _RANKING_BASE_COLS:
+        if c not in agg.columns:
+            agg[c] = 0
+
+    agg["pct_agendamento"]    = agg.apply(lambda r: _safe_div(r["agendamentos"], r["oportunidades"]) * 100, axis=1)
+    agg["pct_comparecimento"] = agg.apply(lambda r: _safe_div(r["comparecimentos"], r["agendamentos"]) * 100, axis=1)
+    agg["pct_conversao"]      = agg.apply(lambda r: _safe_div(r["vendas"], r["agendamentos"]) * 100, axis=1)
+    agg["pct_vendas"]         = agg.apply(lambda r: _safe_div(r["vendas"], r["comparecimentos"]) * 100, axis=1)
+    agg["pct_recebimento"]    = agg.apply(lambda r: _safe_div(r["receita"], r["montante"]) * 100, axis=1)
+    agg["ticket_medio"]       = agg.apply(lambda r: _safe_div(r["montante"], r["vendas"]), axis=1)
+
+    return agg.sort_values("receita", ascending=False).reset_index(drop=True)
 
 
 def executivas_por_time(df: pd.DataFrame) -> pd.DataFrame:
