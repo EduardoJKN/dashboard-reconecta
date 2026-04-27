@@ -1,0 +1,30 @@
+# --- Segredos ---
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Virtualenvs ---
+.venv/
+venv/
+env/
+
+# --- Sistema ---
+.DS_Store
+Thumbs.db
+
+# --- IDEs ---
+.idea/
+.vscode/
+
+# --- Saídas locais (contêm dados sensíveis: emails, telefones, IDs) ---
+inspecao.txt
+*.csv
+*.xlsx
+*.parquet
