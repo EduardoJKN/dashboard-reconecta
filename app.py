@@ -37,15 +37,25 @@ with st.sidebar:
     )
 
 # -----------------------------------------------------------------------------
-# Navegação
+# Navegação — agrupada por área (Vendas / Marketing)
 # -----------------------------------------------------------------------------
-pages = [
-    st.Page("views/home.py",         title="Visão Geral",         default=True),
-    st.Page("views/executivas.py",   title="Executivas & Times"),
-    st.Page("views/sdr_closer.py",   title="SDR × Closer"),
-    st.Page("views/investimento.py", title="Investimento & ROAS"),
-    st.Page("views/inspecao.py",     title="Inspeção de Views"),
-]
+pages = {
+    "Time de Vendas": [
+        st.Page("views/home.py",         title="Visão Geral",        default=True),
+        st.Page("views/executivas.py",   title="Executivas & Times"),
+        st.Page("views/sdr_closer.py",   title="SDR × Closer"),
+        st.Page("views/investimento.py", title="Investimento & ROAS"),
+        st.Page("views/inspecao.py",     title="Inspeção de Views"),
+    ],
+    "Time de Marketing": [
+        st.Page("views/marketing_overview.py",  title="Visão Geral Marketing"),
+        st.Page("views/marketing_campaigns.py", title="Campanhas"),
+        st.Page("views/marketing_creatives.py", title="Criativos"),
+        st.Page("views/marketing_funnel.py",    title="Funil Marketing"),
+        st.Page("views/marketing_social.py",    title="Social"),
+        st.Page("views/marketing_roas.py",      title="ROAS / CAC"),
+    ],
+}
 
 pg = st.navigation(pages, position="sidebar")
 pg.run()
