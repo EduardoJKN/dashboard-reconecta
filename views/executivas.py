@@ -85,21 +85,27 @@ with tab_rank:
             use_container_width=True,
         )
         visible = ranking.head(10)
-        cols_visible = ["executiva"] + (
-            ["time_vendas"] if "time_vendas" in visible.columns else []
-        ) + ["vendas", "receita", "ticket_medio",
-             "pct_conversao", "pct_comparecimento"]
+        cols_visible = [
+            "executiva",
+            "vendas", "receita", "ticket_medio",
+            "agendamentos", "comparecimentos",
+            "pct_conversao", "pct_comparecimento",
+            "pct_vendas", "pct_recebimento",
+        ]
         st.dataframe(
             visible[cols_visible],
             use_container_width=True, hide_index=True,
             column_config={
-                "executiva": st.column_config.TextColumn("Executiva", width="medium"),
-                "time_vendas": st.column_config.TextColumn("Time"),
-                "vendas": st.column_config.NumberColumn("Vendas", format="%d"),
-                "receita": st.column_config.NumberColumn("Receita", format="R$ %.0f"),
-                "ticket_medio": st.column_config.NumberColumn("Ticket médio", format="R$ %.0f"),
-                "pct_conversao": st.column_config.NumberColumn("% Conversão", format="%.1f%%"),
-                "pct_comparecimento": st.column_config.NumberColumn("% Comparec.", format="%.1f%%"),
+                "executiva":          st.column_config.TextColumn("Executiva", width="medium"),
+                "vendas":             st.column_config.NumberColumn("Vendas", format="%d"),
+                "receita":            st.column_config.NumberColumn("Receita", format="R$ %.0f"),
+                "ticket_medio":       st.column_config.NumberColumn("Ticket médio", format="R$ %.0f"),
+                "agendamentos":       st.column_config.NumberColumn("Agendamentos", format="%d"),
+                "comparecimentos":    st.column_config.NumberColumn("Comparecimentos", format="%d"),
+                "pct_conversao":      st.column_config.NumberColumn("% Conversão",   format="%.1f%%"),
+                "pct_comparecimento": st.column_config.NumberColumn("% Comparec.",   format="%.1f%%"),
+                "pct_vendas":         st.column_config.NumberColumn("% Vendas",      format="%.1f%%"),
+                "pct_recebimento":    st.column_config.NumberColumn("% Recebimento", format="%.1f%%"),
             },
         )
         with st.expander("Ver ranking completo"):

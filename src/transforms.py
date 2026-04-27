@@ -134,6 +134,9 @@ def executivas_ranking(df: pd.DataFrame) -> pd.DataFrame:
     agg["pct_vendas"] = agg.apply(
         lambda r: _safe_div(r["vendas"], r["comparecimentos"]) * 100, axis=1
     )
+    agg["pct_recebimento"] = agg.apply(
+        lambda r: _safe_div(r["receita"], r["montante"]) * 100, axis=1
+    )
     agg["ticket_medio"] = agg.apply(
         lambda r: _safe_div(r["montante"], r["vendas"]), axis=1
     )
