@@ -41,10 +41,12 @@ PALETTE = {
 # Formatadores
 # ---------------------------------------------------------------------------
 
-def brl(v: float | int | None) -> str:
+def brl(v: float | int | None, casas: int = 0) -> str:
+    """Formato BR: R$ 87.699 (default) ou R$ 87.699,00 com `casas=2`.
+    Backward-compatible — chamadas antigas sem `casas` continuam com 0 decimais."""
     if v is None or v != v:  # NaN
         return "—"
-    s = f"R$ {v:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    s = f"R$ {v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return s
 
 

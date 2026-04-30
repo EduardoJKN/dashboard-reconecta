@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from .theme import PALETTE
+from .theme import PALETTE, int_br, pct
 
 # Paleta sequencial curada: dourados + vinhos + secundárias
 _SEQ = [
@@ -69,6 +69,38 @@ def _style_axes(fig: go.Figure, money_axis: str | None = None) -> None:
 def _truncate(s, max_len: int = 26) -> str:
     s = str(s)
     return s if len(s) <= max_len else s[: max_len - 1] + "…"
+
+
+def last_point_text(values, formatter=None) -> list[str]:
+    """Constrói array de `text` com SÓ o último valor formatado — usado em
+    Scatter `mode="lines+markers+text"` para anotar o ponto final de uma
+    série temporal sem poluir o gráfico.
+
+    Aceita lista, tuple, np.array ou pd.Series. Retorna ['', '', ..., 'last'].
+    Quando o último valor é None/NaN, retorna lista de strings vazias.
+    Quando `formatter` é None, formata como inteiro BR (`1.234`)."""
+    if values is None:
+        return []
+    try:
+        seq = list(values)
+    except TypeError:
+        return []
+    n = len(seq)
+    if n == 0:
+        return []
+    last = seq[-1]
+    try:
+        if last is None:
+            return [""] * n
+        if isinstance(last, float) and last != last:  # NaN
+            return [""] * n
+    except Exception:
+        return [""] * n
+    if formatter is None:
+        text = f"{float(last):,.0f}".replace(",", ".")
+    else:
+        text = formatter(last)
+    return [""] * (n - 1) + [text]
 
 
 def _fig(**kwargs) -> go.Figure:
@@ -256,22 +288,64 @@ def donut(df: pd.DataFrame, names: str, values: str,
 # Funnel
 # ---------------------------------------------------------------------------
 
-def funnel(labels: list[str], values: list[float], height: int = 320) -> go.Figure:
+def funnel(labels: list[str], values: list[float], height: int = 320,
+           show_dropoff: bool = False) -> go.Figure:
+    """Funil padrão do projeto.
+
+    Quando `show_dropoff=True`, cada estágio (a partir do 2º) ganha uma linha
+    secundária mostrando a queda percentual em relação ao estágio anterior:
+    `↓ X,Y% queda`. Útil para identificação rápida de gargalos.
+
+    Texto: cor por barra — claro sobre vinho (barras escuras), escuro
+    sobre dourado (barras claras). Resolve o problema de contraste em
+    barras vermelhas/escuras."""
     colors = [PALETTE["gold_bright"], PALETTE["gold"], PALETTE["wine_light"], PALETTE["wine"]]
-    # se houver mais estágios, interpola
     while len(colors) < len(labels):
         colors.append(PALETTE["wine_soft"])
-    fig = go.Figure(go.Funnel(
+
+    # Texto: claro sobre barras escuras (wine_*), escuro sobre barras claras (gold_*)
+    _LIGHT_BARS = {PALETTE["gold_bright"], PALETTE["gold"]}
+    text_colors = [
+        "#1a1410" if c in _LIGHT_BARS else PALETTE["text"]
+        for c in colors[:len(labels)]
+    ]
+
+    funnel_kwargs = dict(
         y=labels,
         x=values,
         marker=dict(
             color=colors[:len(labels)],
             line=dict(color=PALETTE["bg"], width=2),
         ),
-        textinfo="value+percent initial",
-        textfont=dict(color=PALETTE["bg"], family="Inter", size=13),
+        textfont=dict(color=text_colors, family="Inter", size=14),
         connector=dict(line=dict(color=PALETTE["border"], width=1)),
-    ))
+    )
+
+    if show_dropoff:
+        texts: list[str] = []
+        for i, v in enumerate(values):
+            valor_fmt = int_br(v)
+            if i == 0:
+                texts.append(f"<b>{valor_fmt}</b>")
+                continue
+            prev = values[i - 1]
+            if prev and prev > 0:
+                keep = (v / prev) * 100
+                drop = 100 - keep
+                texts.append(
+                    f"<b>{valor_fmt}</b><br>"
+                    f"<span style='font-size:0.78em;opacity:0.85'>"
+                    f"↓ {pct(drop)} queda"
+                    f"</span>"
+                )
+            else:
+                texts.append(f"<b>{valor_fmt}</b>")
+        funnel_kwargs["text"] = texts
+        funnel_kwargs["textinfo"] = "text"
+    else:
+        funnel_kwargs["textinfo"] = "value+percent initial"
+
+    fig = go.Figure(go.Funnel(**funnel_kwargs))
     fig.update_layout(**_base_layout(height=height))
     _style_axes(fig)
     return fig

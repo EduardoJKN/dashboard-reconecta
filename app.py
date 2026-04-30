@@ -54,6 +54,7 @@ pages = {
         st.Page("views/marketing_funnel.py",    title="Funil Marketing"),
         st.Page("views/marketing_social.py",    title="Social"),
         st.Page("views/marketing_roas.py",      title="ROAS / CAC"),
+        st.Page("views/marketing_growth.py",    title="Growth"),
     ],
 }
 
