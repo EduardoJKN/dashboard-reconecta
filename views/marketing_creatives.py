@@ -354,8 +354,19 @@ top = criativos_ranking(
 
 
 def _creative_card_html(row) -> str:
-    thumb = row.get("thumbnail_url") or row.get("image_url")
-    name = (row.get("ad_name") or "").strip() or "(sem nome)"
+    # pandas devolve NaN (float) em colunas vazias. `bool(NaN) == True` em
+    # Python, então `or` NÃO cai no fallback — html_lib.escape(NaN) explode
+    # porque float não tem .replace. Helper local normaliza NaN/None/""→None.
+    def _safe_str(v):
+        if v is None:
+            return None
+        if isinstance(v, float) and v != v:  # NaN
+            return None
+        s = str(v).strip()
+        return s if s else None
+
+    thumb = _safe_str(row.get("thumbnail_url")) or _safe_str(row.get("image_url"))
+    name = _safe_str(row.get("ad_name")) or "(sem nome)"
     name_safe = html_lib.escape(name[:60])
 
     if thumb:
@@ -384,7 +395,7 @@ def _creative_card_html(row) -> str:
             f'</div>'
         )
 
-    permalink = row.get("permalink_url") or ""
+    permalink = _safe_str(row.get("permalink_url"))
     if permalink:
         media = (
             f'<a href="{html_lib.escape(permalink)}" target="_blank" '
@@ -392,7 +403,7 @@ def _creative_card_html(row) -> str:
             f'{media}</a>'
         )
 
-    status = row.get("status_label") or "—"
+    status = _safe_str(row.get("status_label")) or "—"
     invest = float(row.get("investimento") or 0)
     ctr = float(row.get("ctr") or 0)
     cpc = float(row.get("cpc") or 0)
