@@ -164,7 +164,10 @@ _FILTER_LABELS: dict[str, str] = {
 }
 
 _FILTER_DEFAULTS: dict[str, str] = {
-    "tipo_sdr":    "all_except_unknown",
+    # tipo_sdr abre vazio (= "Todos") — pedido do user. As categorias
+    # "Sem SDR" e "SDR não classificado" só aparecem quando o usuário
+    # explicitamente seleciona algo no filtro.
+    "tipo_sdr":    "none",
     "time_closer": "all_except_unknown",
     "times":       "all_except_unknown",
     "time":        "all_except_unknown",
