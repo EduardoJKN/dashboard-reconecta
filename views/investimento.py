@@ -31,7 +31,7 @@ r = roas_resumo(df_inv, df_exec)
 # KPIs principais
 # ---------------------------------------------------------------------------
 section_title("Resumo do período")
-c1, c2, c3, c4 = st.columns(4, gap="small")
+c1, c2, c3, c4, c5 = st.columns(5, gap="small")
 with c1:
     metric_card_v2("ROAS", f"{r['roas']:.2f}x",
                    hint=f"R$ {r['roas']:.2f} / R$ 1 investido", accent=True)
@@ -42,6 +42,9 @@ with c3:
     metric_card_v2("Receita atribuída", brl(r["receita"]),
                    hint=f"{int_br(r['vendas'])} vendas")
 with c4:
+    metric_card_v2("Montante", brl(r["montante"]),
+                   hint="SUM(montante) · período filtrado")
+with c5:
     metric_card_v2("CPA", brl(r["cac"]) if r["cac"] else "—",
                    hint="investimento ÷ vendas")
 

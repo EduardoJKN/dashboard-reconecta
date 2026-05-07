@@ -194,7 +194,10 @@ def annotate_and_clean_sdr_closer(df: pd.DataFrame) -> pd.DataFrame:
       - o valor de `sdr` é um Closer conhecido
       - o valor de `closer` é um SDR conhecido
     Esses casos são misclassifications cruzadas — não devem aparecer na matriz.
-    Pessoas em `Sem Time Definido` permanecem (podem ser qualquer um dos dois)."""
+    Pessoas em `SDR não classificado` / `Closer não classificado` permanecem
+    (podem ser qualquer um dos dois — sem evidência pra dropar). `Sem SDR`
+    e `Sem Closer` (placeholders do SQL) também permanecem como categoria
+    própria."""
     if df.empty:
         return df
     df = df.copy()
@@ -301,11 +304,13 @@ def roas_resumo(df_invest: pd.DataFrame, df_exec: pd.DataFrame) -> dict:
     totais_inv = investimento_totais(df_invest)
     totais_exec = executivas_kpis(df_exec)
     receita = totais_exec.get("receita", 0)
+    montante = totais_exec.get("montante", 0)
     vendas = totais_exec.get("vendas", 0)
     invest = totais_inv.get("total", 0)
     return {
         "investimento": invest,
         "receita": receita,
+        "montante": montante,
         "vendas": vendas,
         "roas": _safe_div(receita, invest),
         "cac": _safe_div(invest, vendas),

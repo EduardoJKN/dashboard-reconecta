@@ -4,14 +4,13 @@ import streamlit as st
 
 from src.repositories import (
     get_executivas,
-    get_funil_leads_diario,
     get_investimento_diario,
+    get_leads_visao_geral,
     get_media_movel_vendas,
 )
 from src.transforms import (
     delta_pct,
     executivas_ranking,
-    leads_totais_lp,
     receita_por_mes,
     visao_geral_kpis,
 )
@@ -42,12 +41,15 @@ except Exception as e:
     st.error(f"Falha ao consultar Postgres: {e}")
     st.stop()
 
-# Leads (LP) — fonte separada (vw_funil_leads_diario), opcional/tolerante
+# Leads — fonte oficial (ext_reconecta.leads + lead→deal priority match
+# para resolver closer/time). Substitui bi.vw_funil_leads_diario, que não
+# tinha dimensão de closer/time e não respondia aos filtros da página.
+# Validado abr/2026: total=854, Leidianne=156, Marcelo=180, Hawinne=63.
 try:
-    df_leads = get_funil_leads_diario(ctx.data_ini, ctx.data_fim)
+    df_leads_all = get_leads_visao_geral(ctx.data_ini, ctx.data_fim)
 except Exception as e:
-    st.warning(f"Falha ao consultar leads (LP): {e}")
-    df_leads = None
+    st.warning(f"Falha ao consultar leads: {e}")
+    df_leads_all = None
 
 # Média móvel de vendas (sempre últimos 21 dias absolutos)
 try:
@@ -73,11 +75,14 @@ except Exception:
     df_exec_prev = df_exec.iloc[0:0]
     df_inv_prev = df_inv_all.iloc[0:0]
 
-# Leads do período anterior (para delta)
+# Leads do período anterior (para delta) — mesmo refilter que o atual
 try:
-    df_leads_prev = get_funil_leads_diario(prev_ini, prev_fim) if df_leads is not None else None
+    df_leads_prev_all = (
+        get_leads_visao_geral(prev_ini, prev_fim)
+        if df_leads_all is not None else None
+    )
 except Exception:
-    df_leads_prev = None
+    df_leads_prev_all = None
 
 k = visao_geral_kpis(df_exec, df_inv_all)
 kp = visao_geral_kpis(df_exec_prev, df_inv_prev)
@@ -120,18 +125,26 @@ section_title("Operacional", "volume, conversão e eficiência")
 
 s1, s2, s3, s4 = st.columns(4, gap="small")
 with s1:
-    if df_leads is not None:
-        leads_atual = leads_totais_lp(df_leads)
-        leads_prev = leads_totais_lp(df_leads_prev) if df_leads_prev is not None else None
+    if df_leads_all is not None:
+        # Aplica os mesmos filtros (Closer / Times) já populados pelo
+        # df_exec_all. `refilter` reaproveita as seleções renderizadas no
+        # 1º apply_filters; col_map mapeia para as colunas da nova fonte.
+        leads_col_map = {"closer": "executiva", "times": "time_vendas"}
+        df_leads = ctx.refilter(df_leads_all, leads_col_map)
+        leads_atual = len(df_leads)
+        leads_prev = (
+            len(ctx.refilter(df_leads_prev_all, leads_col_map))
+            if df_leads_prev_all is not None else None
+        )
         metric_card_v2(
             "Leads Totais",
             int_br(leads_atual),
             delta_pct=delta_pct(leads_atual, leads_prev) if leads_prev is not None else None,
-            hint="leads únicos LP · vw_funil_leads_diario",
+            hint="leads únicos/dia · ext_reconecta.leads",
         )
     else:
         metric_card_v2("Leads Totais", "—",
-                       hint="vw_funil_leads_diario indisponível")
+                       hint="fonte de leads indisponível")
 with s2:
     metric_card_v2(
         "Vendas Novas",

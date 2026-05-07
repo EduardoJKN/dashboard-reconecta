@@ -31,9 +31,13 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo SDR × Closer…")
 def get_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
+    # Migrado de bi.vw_compatibilidade_sdr_closer (defasada e com regra
+    # divergente) para zoho_deals + zoho_users diretos. Janela agora é
+    # data_hora_compra::date no dia exato do header (data_ini/data_fim) —
+    # alinhado com Visão Geral, em vez do truncamento mes_ini/mes_fim antigo.
     df = run_sql_file(
         "compatibilidade_sdr_closer.sql",
-        _month_params(data_ini, data_fim),
+        _date_params(data_ini, data_fim),
     )
     if not df.empty:
         df["mes_ref"] = pd.to_datetime(df["mes_ref"])
@@ -60,6 +64,27 @@ def get_funil_leads_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
         df["data_ref"] = pd.to_datetime(df["data_ref"])
         if "leads_lp_unicos" in df.columns:
             df["leads_lp_unicos"] = pd.to_numeric(df["leads_lp_unicos"], errors="coerce").fillna(0)
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo leads…")
+def get_leads_visao_geral(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Leads únicos/dia para o card 'Leads Totais' da Visão Geral comercial.
+
+    Substitui `get_funil_leads_diario` no card específico — esta fonte
+    devolve 1 row por (data_ref, email_norm) com `executiva` e
+    `time_vendas` resolvidos via lead → deal pareado (priority match
+    `zoho_id > session_id > email`). Permite que `ctx.refilter` aplique
+    os filtros de Closer / Times da página sobre o card. Leads sem deal
+    pareado (~1%) ou com deal sem closer atribuído (~57%) ficam com
+    NULL nessas colunas — entram só quando filtro = Todos.
+    Validado abr/2026: total=854, Leidianne=156, Marcelo=180, Hawinne=63.
+    """
+    df = run_sql_file(
+        "leads_visao_geral.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty:
+        df["data_ref"] = pd.to_datetime(df["data_ref"])
     return df
 
 

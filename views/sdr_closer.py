@@ -44,19 +44,24 @@ if df.empty:
 t = sdr_closer_totais(df)
 
 # ---------------------------------------------------------------------------
-# KPIs
+# KPIs — página opera sobre vendas fechadas (data_hora_compra), então
+# "Leads recebidos" virou tautológico (= Ganhos) e foi removido. Sequência
+# alinhada com a leitura comercial: contagem → financeiro → ticket.
 # ---------------------------------------------------------------------------
 section_title("Resumo do período")
 c1, c2, c3, c4 = st.columns(4, gap="small")
 with c1:
-    metric_card_v2("Leads recebidos", int_br(t["leads"]))
+    metric_card_v2("Ganhos", int_br(t["ganhos"]), accent=True,
+                   hint="vendas novas no período")
 with c2:
-    metric_card_v2("Ganhos", int_br(t["ganhos"]),
-                   hint=pct(t["taxa_conversao"]) + " conversão")
+    metric_card_v2("Montante", brl(t["montante_total"]),
+                   hint="SUM(amount) zoho_deals")
 with c3:
-    metric_card_v2("Receita", brl(t["receita_total"]), accent=True)
+    metric_card_v2("Receita", brl(t["receita_total"]),
+                   hint="SUM(receita) zoho_deals")
 with c4:
-    metric_card_v2("Ticket médio", brl(t["ticket_medio"]))
+    metric_card_v2("Ticket médio", brl(t["ticket_medio"]),
+                   hint="montante ÷ ganhos")
 
 # ---------------------------------------------------------------------------
 # Tabs
@@ -69,8 +74,7 @@ with tab_matrix:
     section_title("Matriz de compatibilidade", "escolha a métrica exibida na célula")
     metrica = st.selectbox(
         "Métrica",
-        ["ganhos", "leads_recebidos", "receita_total",
-         "taxa_conversao", "ticket_medio"],
+        ["ganhos", "montante_total", "receita_total", "ticket_medio"],
         index=0,
         label_visibility="collapsed",
     )

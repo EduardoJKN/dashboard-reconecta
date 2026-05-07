@@ -34,31 +34,39 @@ if df.empty:
 k = executivas_kpis(df)
 
 # ---------------------------------------------------------------------------
-# KPIs
+# KPIs — 2 linhas de 4 cards (linha 1: financeiro; linha 2: taxas)
 # ---------------------------------------------------------------------------
 section_title("Resumo do período")
-c1, c2, c3, c4, c5, c6, c7 = st.columns(7, gap="small")
-with c1:
+
+# Linha 1 — financeiro
+r1c1, r1c2, r1c3, r1c4 = st.columns(4, gap="small")
+with r1c1:
     metric_card_v2("Receita", brl(k["receita"]),
                    hint=f"{int_br(k['vendas'])} vendas", accent=True)
-with c2:
+with r1c2:
+    metric_card_v2("Montante", brl(k["montante"]),
+                   hint="SUM(montante) · período filtrado")
+with r1c3:
     metric_card_v2("Ticket Médio", brl(k["ticket_medio"]),
                    hint="montante ÷ vendas")
-with c3:
-    metric_card_v2("% Conversão", pct(k["pct_conversao"]),
-                   hint="vendas ÷ agendamentos")
-with c4:
-    metric_card_v2("% Comparecimento", pct(k["pct_comparecimento"]),
-                   hint="comparec. ÷ agendamentos")
-with c5:
-    metric_card_v2("% Agendamento", pct(k["pct_agendamento"]),
-                   hint="agend. ÷ oportunidades")
-with c6:
-    metric_card_v2("% Vendas", pct(k["pct_vendas"]),
-                   hint="vendas ÷ comparecimentos")
-with c7:
+with r1c4:
     metric_card_v2("% Recebimento", pct(k["pct_recebimento"]),
                    hint="receita ÷ montante")
+
+# Linha 2 — taxas do funil
+r2c1, r2c2, r2c3, r2c4 = st.columns(4, gap="small")
+with r2c1:
+    metric_card_v2("% Agendamento", pct(k["pct_agendamento"]),
+                   hint="agend. ÷ oportunidades")
+with r2c2:
+    metric_card_v2("% Comparecimento", pct(k["pct_comparecimento"]),
+                   hint="comparec. ÷ agendamentos")
+with r2c3:
+    metric_card_v2("% Conversão", pct(k["pct_conversao"]),
+                   hint="vendas ÷ agendamentos")
+with r2c4:
+    metric_card_v2("% Vendas", pct(k["pct_vendas"]),
+                   hint="vendas ÷ comparecimentos")
 
 section_title("Funil (absolutos)", "leads → reunião agendada → reunião concluída → cancelados → ganhos → perdidos")
 f1, f2, f3, f4, f5, f6 = st.columns(6, gap="small")
