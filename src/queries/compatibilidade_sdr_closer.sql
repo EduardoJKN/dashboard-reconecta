@@ -15,7 +15,10 @@
 --      `Sem Closer`.
 --
 -- Regra oficial alinhada com Visão Geral / Funil Marketing / ROAS-CAC:
---   - Janela:    `data_hora_compra::date BETWEEN :data_ini AND :data_fim`
+--   - Janela:    `data_hora_compra::date BETWEEN :mes_ini AND :mes_fim`
+--                (binds `mes_ini/mes_fim` mantidos pra resiliência de
+--                deploy — ver get_sdr_closer em src/repositories.py.
+--                A janela é dia exato do header, NÃO truncada pra mês.)
 --   - Stage:     `stage IN ('Ganho','Fechado Ganho')`
 --   - Tipo:      `tipo_venda = 'Novo cliente'`  (caminho de aquisição)
 --   - SDR:       `zoho_deals.sdr_ss` → `zoho_users` (sem fallback de
@@ -73,7 +76,7 @@ WITH base AS (
            ON closer.id::text = d.executiva_vendas::text
     LEFT JOIN zoho_users sdr
            ON sdr.id::text = d.sdr_ss::text
-    WHERE d.data_hora_compra::date BETWEEN :data_ini AND :data_fim
+    WHERE d.data_hora_compra::date BETWEEN :mes_ini AND :mes_fim
       AND d.stage IN ('Ganho', 'Fechado Ganho')
       AND d.tipo_venda = 'Novo cliente'
 )

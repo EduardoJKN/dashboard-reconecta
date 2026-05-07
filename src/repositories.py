@@ -32,13 +32,22 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
 @st.cache_data(ttl=_TTL, show_spinner="Lendo SDR × Closer…")
 def get_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
     # Migrado de bi.vw_compatibilidade_sdr_closer (defasada e com regra
-    # divergente) para zoho_deals + zoho_users diretos. Janela agora é
-    # data_hora_compra::date no dia exato do header (data_ini/data_fim) —
-    # alinhado com Visão Geral, em vez do truncamento mes_ini/mes_fim antigo.
-    df = run_sql_file(
-        "compatibilidade_sdr_closer.sql",
-        _date_params(data_ini, data_fim),
-    )
+    # divergente) para zoho_deals + zoho_users diretos. Janela = dia exato
+    # do header (data_ini/data_fim) — alinhado com Visão Geral, em vez do
+    # truncamento de mês antigo.
+    #
+    # Blindagem de bind parameters: enviamos AMBOS `data_ini/data_fim` e
+    # `mes_ini/mes_fim` apontando pra mesma janela. SQLAlchemy ignora
+    # parâmetros não referenciados pela SQL, então o payload aceita
+    # qualquer versão da query (atual usa `:mes_ini/:mes_fim`; histórico
+    # usava `:data_ini/:data_fim`). Resolve cenário de deploy parcial
+    # onde Python e SQL ficam dessincronizados.
+    params = _date_params(data_ini, data_fim)
+    params.update({
+        "mes_ini": data_ini,
+        "mes_fim": data_fim,
+    })
+    df = run_sql_file("compatibilidade_sdr_closer.sql", params)
     if not df.empty:
         df["mes_ref"] = pd.to_datetime(df["mes_ref"])
     return df
