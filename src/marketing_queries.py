@@ -31,6 +31,64 @@ def get_mkt_overview(data_ini: date, data_fim: date) -> pd.DataFrame:
     return _to_datetime(run_sql_file("mkt_overview.sql", _params(data_ini, data_fim)))
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Visão Geral Marketing…")
+def get_mkt_visao_geral_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Visão Geral Marketing — fonte oficial validada (regra pgAdmin).
+
+    Retorna 1 linha por `data_ref` com investimento total geral, leads
+    canônicos por e-mail/dia, classificação canônica do e-mail no período
+    (+12 / -12) e financeiro direto de zoho_deals (stages Ganho / Fechado
+    Ganho). Substitui mkt_overview_v2 nos cards principais.
+    """
+    return _to_datetime(
+        run_sql_file("mkt_visao_geral_diario.sql", _params(data_ini, data_fim))
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Visão Geral Marketing por canal…")
+def get_mkt_visao_geral_canal(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Geração de leads POR CANAL — fonte: bi_mkt.vw_visao_geral_canal_base.
+
+    Retorna 1 linha por canal com leads_totais, leads_qualificados,
+    leads_mais_12, leads_menos_12 e leads_nao_atua. Usado para sobrescrever
+    os cards de Geração de leads na Visão Geral Marketing quando o usuário
+    seleciona canais específicos no filtro do header. Cards financeiros
+    seguem a fonte total geral.
+    """
+    return run_sql_file("mkt_visao_geral_canal.sql", _params(data_ini, data_fim))
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo KPIs por canal…")
+def get_mkt_visao_geral_kpis_canal(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """KPIs completos POR CANAL — investimento + leads + financeiro atribuído.
+
+    1 linha por canal (incluindo 'Sem canal' para deals sem lead match).
+    Usado quando o usuário filtra canal específico — substitui os 3 blocos
+    superiores da Visão Geral Marketing (Visão executiva, Geração de leads,
+    Eficiência) pela parcela atribuída aos canais selecionados.
+
+    Atribuição financeira: zoho_deals → ext_reconecta.leads (priority key
+    zoho_id > session_id > email) → bi_mkt.vw_visao_geral_canal_base no
+    (data_ref, email) do lead matched.
+    """
+    return run_sql_file(
+        "mkt_visao_geral_kpis_canal.sql", _params(data_ini, data_fim)
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Visão Geral Marketing (V2)…")
+def get_mkt_overview_v2(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Visão Geral Marketing V2 — fonte única `bi.vw_mkt_overview_daily_v2`.
+
+    Retorna 1 linha por `data_ref` (grão diário, SEM canal) com 3 blocos:
+      - mídia rastreável (investimento_midia, impressões, leads_*, ganhos_atribuidos…)
+      - total geral comercial (investimento_total_geral, vendas_total_geral, montante_total_geral…)
+      - ratios diários pré-calculados (roas_*, cpl_*) — recalcular sobre SUM no agregado do período."""
+    return _to_datetime(
+        run_sql_file("mkt_overview_v2.sql", _params(data_ini, data_fim))
+    )
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo ROAS Marketing…")
 def get_mkt_roas(data_ini: date, data_fim: date) -> pd.DataFrame:
     return _to_datetime(run_sql_file("mkt_roas.sql", _params(data_ini, data_fim)))
@@ -44,6 +102,52 @@ def get_mkt_campanhas(data_ini: date, data_fim: date) -> pd.DataFrame:
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Funil Marketing…")
 def get_mkt_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
     return _to_datetime(run_sql_file("mkt_funil.sql", _params(data_ini, data_fim)))
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo leads por página / variante…")
+def get_mkt_paginas_variantes(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Comparar páginas / variantes — leads agregados por
+    (page_pathname, lp_variante) com classificação canônica.
+
+    Period-distinct: cada e-mail conta 1× por (path, variante) no período.
+    Sem dado de visit/sessão — só geração de leads. Usado pelo MVP de
+    "Comparar páginas / variantes" na página Growth.
+    """
+    return run_sql_file(
+        "mkt_paginas_variantes.sql", _params(data_ini, data_fim)
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo leads por campanha (UTM)…")
+def get_mkt_campanhas_leads_por_utm(data_ini: date,
+                                    data_fim: date) -> pd.DataFrame:
+    """Leads por campanha — match `campaign_name` ↔ `utm_campaign`.
+
+    1 linha por `utm_campaign` normalizado (LOWER+BTRIM) com
+    leads_totais, leads_qualificados, leads_mais_12, leads_menos_12 —
+    period-distinct (cada e-mail conta 1× por campanha no período).
+    Classificação canônica via última row do e-mail (mesma regra
+    Visão Geral). Usado pra enriquecer a tabela "Campanhas ativas".
+    """
+    return run_sql_file(
+        "mkt_campanhas_leads_por_utm.sql", _params(data_ini, data_fim)
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo leads por canal (Campanhas)…")
+def get_mkt_campanhas_leads_canal_diario(data_ini: date,
+                                         data_fim: date) -> pd.DataFrame:
+    """Tendência diária de leads por canal — fonte oficial Visão Geral.
+
+    1 linha por (data_ref, canal). Mesma semântica de
+    `mkt_visao_geral_canal.sql` (regra last_row + canal_final), mas com
+    grão diário pra alimentar o gráfico Tendência diária da página
+    Campanhas. Cards de leads/CPL agregam essa fonte por canal.
+    """
+    return _to_datetime(
+        run_sql_file("mkt_campanhas_leads_canal_diario.sql",
+                     _params(data_ini, data_fim))
+    )
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Criativos…")
@@ -89,6 +193,27 @@ def get_mkt_criativos_cobertura(data_ini: date, data_fim: date) -> pd.DataFrame:
     )
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo funil por criativo…")
+def get_mkt_criativo_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Funil completo POR CRIATIVO (grão `ad_name` consolidado).
+
+    1 linha por `ad_name_norm` no período, com mídia (invest/imp/cliques/
+    link_clicks/alcance/CTR/CPC) + leads (totais/+12/-12/qualif) + funil
+    (agendamentos/comparecimentos/vendas_novas) e derivadas (CPL/CPL+12/
+    CAC/taxas).
+
+    Match único viável: `lower(btrim(ad_name)) =
+    lower(btrim(utm_content))` — `ad_id` está vazio em
+    `ext_reconecta.leads`, `zoho_deals` e `zoho_activities`. Granularidade
+    `ad_name` consolida múltiplos `ad_id` do mesmo criativo (CBO/A-B).
+    Lead → deal por priority `zoho_id > session_id > email`; deal →
+    activity via `what_id`. Mesma regra oficial Visão Geral / Growth.
+    """
+    return run_sql_file(
+        "mkt_criativo_funil.sql", _params(data_ini, data_fim)
+    )
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Growth (mart diária)…")
 def get_mkt_growth_daily(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Resultado atribuído POR DATA — agrega `odam.mart_ad_funnel_daily`
@@ -102,6 +227,42 @@ def get_mkt_growth_daily(data_ini: date, data_fim: date) -> pd.DataFrame:
     do funil — atribuição por anúncio é diagnosticada na página Criativos)."""
     return _to_datetime(
         run_sql_file("mkt_growth_daily.sql", _params(data_ini, data_fim))
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Growth (atividades por canal)…")
+def get_mkt_growth_atividades_canal(data_ini: date,
+                                    data_fim: date) -> pd.DataFrame:
+    """Funil Growth — leads únicos com Agendamento / Comparecimento por canal.
+
+    Substitui as etapas Agendamentos/Comparecimentos do funil principal
+    (que vinham de odam.mart_ad_funnel_daily, Meta-only) pela contagem
+    de leads únicos via priority match `lead → deal → activity` em
+    `zoho_activities`. Atividades filtradas por
+    `activity_type IN ('Consulta','Indicação')` e janela
+    `start_datetime::date`. Comparecimento exige `status_reuniao='Concluída'`.
+
+    Validação abril/2026: leads_com_agendamento=279, leads_com_comparecimento=199.
+    """
+    return run_sql_file(
+        "mkt_growth_atividades_canal.sql", _params(data_ini, data_fim)
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Growth (mart por canal)…")
+def get_mkt_growth_daily_by_canal(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Mesma agregação de `get_mkt_growth_daily`, mas com canal derivado por
+    LEFT JOIN com `bi.vw_mkt_campanhas` (campaign_id → canal). Linhas da
+    mart com `campaign_id` NULL ficam com `canal=NaN` no DataFrame —
+    a página Growth as inclui apenas quando o filtro está em 'todos canais'.
+
+    Diferença vs `get_mkt_growth_daily`:
+      - `get_mkt_growth_daily`        → 1 linha por data_ref (sem canal)
+      - `get_mkt_growth_daily_by_canal`→ 1 linha por (data_ref × canal),
+                                        canal pode ser NULL"""
+    return _to_datetime(
+        run_sql_file("mkt_growth_daily_by_canal.sql",
+                     _params(data_ini, data_fim))
     )
 
 
@@ -151,6 +312,7 @@ def get_mkt_social(data_ini: date, data_fim: date) -> pd.DataFrame:
 # se algum dia quisermos. Não é importado pelo `repositories.VIEW_REGISTRY`
 # (mantido intocado).
 MKT_VIEW_REGISTRY: dict[str, str] = {
+    "Marketing — Visão Geral V2": "bi.vw_mkt_overview_daily_v2",
     "Marketing — Visão Geral": "bi.vw_mkt_overview",
     "Marketing — Campanhas":   "bi.vw_mkt_campanhas",
     "Marketing — Criativos":   "bi.vw_mkt_criativos",

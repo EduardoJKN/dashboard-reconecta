@@ -1,27 +1,26 @@
-"""Visão Geral Marketing — KPIs consolidados (paid + leads + ROAS).
+"""Visão Geral Marketing — KPIs executivos validados em pgAdmin.
 
-Consome `bi.vw_mkt_overview` (P0) e `bi.mv_mkt_roas` (opcional, via materialized
-view por performance — fonte lógica `bi.vw_mkt_roas`). Se uma das views ainda
-não existir, mostra aviso amigável e segue."""
+Cards principais lêem `mkt_visao_geral_diario.sql` (regra oficial: investimento
+total geral + leads canônicos por e-mail + zoho_deals Ganho/Fechado Ganho).
+Tabela "Por canal" e detalhamento continuam usando `bi.vw_mkt_overview` /
+`bi.mv_mkt_roas` / `bi.vw_mkt_leads_classificacao`."""
 from datetime import timedelta
 
 import plotly.graph_objects as go
 import streamlit as st
 
 from src.marketing_queries import (
-    get_mkt_leads_classif_canal,
-    get_mkt_leads_classificacao,
-    get_mkt_leads_funil_diario,
     get_mkt_overview,
-    get_mkt_roas,
+    get_mkt_visao_geral_diario,
+    get_mkt_visao_geral_kpis_canal,
 )
 from src.marketing_safe import safe_run
 from src.marketing_transforms import (
     CANAIS_VISIVEIS_OVERVIEW,
     filtro_canais_padrao,
-    overview_diario,
-    overview_kpis,
-    overview_por_canal,
+    visao_geral_diario,
+    visao_geral_kpis,
+    visao_geral_kpis_canal,
 )
 from src.transforms import delta_pct
 from src.ui.charts import donut, last_point_text
@@ -34,7 +33,7 @@ from src.ui.theme import PALETTE, brl, int_br, pct
 # ---------------------------------------------------------------------------
 ctx = start_page(
     title="Visão Geral Marketing",
-    subtitle="Investimento, leads e ROAS consolidados",
+    subtitle="Investimento, leads e resultado oficial CRM/comercial",
     filters=["canal"],
 )
 col_map = {"canal": "canal"}
@@ -42,31 +41,22 @@ col_map = {"canal": "canal"}
 # ---------------------------------------------------------------------------
 # Carga (período atual)
 # ---------------------------------------------------------------------------
+# Fonte oficial dos cards principais — regra validada em pgAdmin.
+# Substitui mkt_overview_v2 (LATERAL JOIN pesado em zoho_deals).
+df_vg_all = safe_run(
+    lambda: get_mkt_visao_geral_diario(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_visao_geral_diario",
+)
+# KPIs completos por canal — invest + leads + financeiro atribuído.
+# Usado quando o usuário filtra canal específico: substitui k/kp e afeta
+# Visão executiva, Geração de leads e Eficiência (mas não Tendência diária).
+df_kpc_all = safe_run(
+    lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_visao_geral_kpis_canal",
+)
 df_ov_all = safe_run(
     lambda: get_mkt_overview(ctx.data_ini, ctx.data_fim),
     view_label="bi.vw_mkt_overview",
-)
-df_roas_all = safe_run(
-    lambda: get_mkt_roas(ctx.data_ini, ctx.data_fim),
-    view_label="bi.mv_mkt_roas",
-)
-# Fonte canônica de Leads totais quando o filtro está em "todos canais".
-# Não tem grão de canal — quando o filtro é parcial, caímos para vw_mkt_overview.
-df_lp_funil_all = safe_run(
-    lambda: get_mkt_leads_funil_diario(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_funil_leads_diario",
-)
-# Classificação consolidada (+12 / -12 / ambíguos) com dedupe correto.
-# Sem grão de canal — só usada nos KPIs quando filtro = todos canais.
-df_classif_all = safe_run(
-    lambda: get_mkt_leads_classificacao(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_leads_classificacao",
-)
-# Mesma fonte mas COM grão de canal — usado pela tabela "Por canal" para
-# substituir Qualif +12 / CPL +12 / Tx Qualif +12 pelos números validados.
-df_classif_canal_all = safe_run(
-    lambda: get_mkt_leads_classif_canal(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_leads_classificacao (canal)",
 )
 
 # Seed do filtro com a lista canônica de canais — garante que LinkedIn,
@@ -74,235 +64,239 @@ df_classif_canal_all = safe_run(
 # dados no período. Filtros aplicados em seguida usam refilter() na fonte real.
 ctx.apply_filters(filtro_canais_padrao(CANAIS_VISIVEIS_OVERVIEW), col_map)
 
-if df_ov_all.empty:
-    st.warning("Sem dados para o período selecionado em `bi.vw_mkt_overview`.")
+if df_vg_all.empty and df_ov_all.empty:
+    st.warning("Sem dados para o período selecionado.")
     st.stop()
 
 df_ov = ctx.refilter(df_ov_all, col_map)
-df_roas = (
-    ctx.refilter(df_roas_all, col_map) if not df_roas_all.empty else df_roas_all
-)
-# df_classif_canal já tem coluna `canal` — refilter aplica o filtro do header
-df_classif_canal = (
-    ctx.refilter(df_classif_canal_all, col_map)
-    if not df_classif_canal_all.empty else df_classif_canal_all
-)
-
-# Detecta se o filtro de canal está em "todos canais" — base para escolher
-# entre lp_form (validado, sem canal) e vw_mkt_overview (canal-aware).
-canais_no_dado = set(df_ov_all["canal"].dropna().astype(str).unique())
-canais_sel = set(ctx.selections.get("canal") or [])
-filtro_todos_canais = (not canais_sel) or (canais_sel >= canais_no_dado)
-usar_lp_form = (
-    filtro_todos_canais
-    and df_lp_funil_all is not None
-    and not df_lp_funil_all.empty
-)
 
 # ---------------------------------------------------------------------------
-# Período anterior — base para deltas (inclusive ROAS)
+# Período anterior — base para deltas
 # ---------------------------------------------------------------------------
 dias = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias - 1)
 
-df_ov_prev_all = safe_run(
-    lambda: get_mkt_overview(prev_ini, prev_fim),
-    view_label="bi.vw_mkt_overview",
+df_vg_prev_all = safe_run(
+    lambda: get_mkt_visao_geral_diario(prev_ini, prev_fim),
+    view_label="mkt_visao_geral_diario",
 )
-df_roas_prev_all = safe_run(
-    lambda: get_mkt_roas(prev_ini, prev_fim),
-    view_label="bi.mv_mkt_roas",
-)
-df_lp_funil_prev_all = safe_run(
-    lambda: get_mkt_leads_funil_diario(prev_ini, prev_fim),
-    view_label="bi.vw_funil_leads_diario",
-)
-df_classif_prev_all = safe_run(
-    lambda: get_mkt_leads_classificacao(prev_ini, prev_fim),
-    view_label="bi.vw_mkt_leads_classificacao",
-)
-df_ov_prev = (
-    ctx.refilter(df_ov_prev_all, col_map) if not df_ov_prev_all.empty else df_ov_prev_all
-)
-df_roas_prev = (
-    ctx.refilter(df_roas_prev_all, col_map) if not df_roas_prev_all.empty else df_roas_prev_all
+df_kpc_prev_all = safe_run(
+    lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
+    view_label="mkt_visao_geral_kpis_canal",
 )
 
-# Mesma regra do período atual: só usa lp_form quando filtro = todos canais.
-df_lp_para_kpis = df_lp_funil_all if usar_lp_form else None
-df_lp_para_kpis_prev = (
-    df_lp_funil_prev_all
-    if (usar_lp_form
-        and df_lp_funil_prev_all is not None
-        and not df_lp_funil_prev_all.empty)
-    else None
-)
+# Filtro de canal: detecta quando o usuário escolhe canais específicos.
+# Comparação contra a LISTA CANÔNICA (CANAIS_VISIVEIS_OVERVIEW), não contra
+# o universo de canais com dados no período — caso contrário, selecionar
+# um canal sem dados no mês (ex.: TikTok) cairia para "todos" em vez de
+# zerar os cards. Regra:
+#   - vazio                                → todos (filtro inativo)
+#   - == set(CANAIS_VISIVEIS_OVERVIEW)     → todos (filtro inativo)
+#   - qualquer outro caso                  → filtro ativo
+# Quando o canal selecionado não tem linhas em df_kpc_all,
+# visao_geral_kpis_canal retorna zeros (já tratado no transform).
+canais_sel: list[str] = list(ctx.selections.get("canal") or [])
+canais_canonicos = set(CANAIS_VISIVEIS_OVERVIEW)
+filtro_canal_ativo = bool(canais_sel) and set(canais_sel) != canais_canonicos
 
-# Classificação dedupada — sem grão de canal, só faz sentido em "todos canais".
-# A decisão de usar/não usar agora depende APENAS do filtro: passamos o
-# DataFrame mesmo se ele vier vazio (a guarda interna em overview_kpis decide
-# se aplica a sobrescrita). Isso facilita debugar quando a query devolve vazio.
-usar_classif = filtro_todos_canais
-df_classif_para_kpis = df_classif_all if filtro_todos_canais else None
-df_classif_para_kpis_prev = df_classif_prev_all if filtro_todos_canais else None
+# K = KPIs principais. Quando há filtro, troca pra parcela atribuída aos
+# canais selecionados (afeta Visão executiva + Geração de leads + Eficiência).
+# Senão, fica o total geral comercial (regra validada pgAdmin).
+if filtro_canal_ativo:
+    k = visao_geral_kpis_canal(df_kpc_all, canais_sel)
+    kp = visao_geral_kpis_canal(df_kpc_prev_all, canais_sel)
+else:
+    k = visao_geral_kpis(df_vg_all)
+    kp = visao_geral_kpis(df_vg_prev_all)
+    # leads_nao_atua só existe no canal-grain — preenche pra evitar KeyError.
+    k["leads_nao_atua"] = 0
+    kp["leads_nao_atua"] = 0
 
-k = overview_kpis(df_ov, df_roas, df_lp_para_kpis, df_classif_para_kpis)
-kp = overview_kpis(df_ov_prev, df_roas_prev,
-                   df_lp_para_kpis_prev, df_classif_para_kpis_prev)
-
-# Hint do card "Leads totais" — indica qual fonte foi usada
-leads_hint = (
-    "lp_form · todos canais (validado)" if usar_lp_form
-    else (
-        "vw_mkt_overview · filtro de canal aplicado"
-        if not filtro_todos_canais
-        else "vw_mkt_overview · lp_form indisponível"
+if filtro_canal_ativo:
+    st.caption(
+        "ℹ️ Quando há filtro de canal, os KPIs exibem a parcela atribuída "
+        "aos canais selecionados. Vendas sem correspondência de lead entram "
+        "como **Sem canal**. A **Tendência diária** continua mostrando o "
+        "total geral comercial."
     )
-)
-
-# Hint do card "Leads qualificados" — mostra split +12/-12 e ambíguos quando
-# a fonte com dedupe está disponível.
-qualif_hint = (
-    f"+12: {int_br(k['leads_qualif_mais_12'])} · "
-    f"-12: {int_br(k['leads_qualif_menos_12'])}"
-)
-if usar_classif:
-    qualif_hint += (
-        f" · ambíguos: {int_br(k.get('leads_qualif_ambiguos', 0))} (excluídos)"
+else:
+    st.caption(
+        "ℹ️ Os KPIs do topo seguem o total geral comercial. Selecione um "
+        "ou mais canais no filtro pra ver a parcela atribuída — afeta "
+        "Visão executiva, Geração de leads e Eficiência. A Tendência "
+        "diária continua total geral."
     )
 
 # ---------------------------------------------------------------------------
-# Linha 1 — Financeiro (3 cards: Investimento · Investimento/dia · ROAS)
+# Bloco 1 — Visão executiva (resultado oficial CRM/comercial)
 # ---------------------------------------------------------------------------
 section_title(
-    "Financeiro",
-    f"{ctx.data_ini.strftime('%d/%m/%Y')} → {ctx.data_fim.strftime('%d/%m/%Y')}",
+    "Visão executiva",
+    f"{ctx.data_ini.strftime('%d/%m/%Y')} → {ctx.data_fim.strftime('%d/%m/%Y')} · "
+    "investimento total + zoho_deals (Ganho/Fechado Ganho)",
 )
 
-c1, c2, c3 = st.columns(3, gap="small")
-with c1:
+v1, v2, v3, v4, v5, v6 = st.columns(6, gap="small")
+with v1:
     metric_card_v2(
-        "Investimento",
-        brl(k["investimento"], casas=2),
-        delta_pct=delta_pct(k["investimento"], kp["investimento"]),
+        "Investimento total geral",
+        brl(k["investimento_total_geral"], casas=2),
+        delta_pct=delta_pct(k["investimento_total_geral"],
+                            kp["investimento_total_geral"]),
         hint="Meta + Google + Pinterest",
         accent=True,
     )
-with c2:
+with v2:
+    # Período atual e anterior têm o MESMO nº de dias (prev_ini calculado
+    # a partir de `dias`), então `dias` serve para os dois lados do delta.
+    invest_dia = k["investimento_total_geral"] / dias if dias else 0
+    invest_dia_prev = kp["investimento_total_geral"] / dias if dias else 0
     metric_card_v2(
         "Investimento / dia",
-        brl(k["investimento_dia"], casas=2),
-        delta_pct=delta_pct(k["investimento_dia"], kp["investimento_dia"]),
-        hint=f"{k['dias_com_invest']} dias com invest > 0",
+        brl(invest_dia, casas=2),
+        delta_pct=delta_pct(invest_dia, invest_dia_prev),
+        hint=f"invest total ÷ {dias} dia{'s' if dias != 1 else ''}",
     )
-with c3:
-    if k["roas"]:
+with v3:
+    metric_card_v2(
+        "Vendas novas",
+        int_br(k["vendas_novas_total_geral"]),
+        delta_pct=delta_pct(k["vendas_novas_total_geral"],
+                            kp["vendas_novas_total_geral"]),
+        hint="tipo_venda = 'Novo cliente'",
+    )
+with v4:
+    metric_card_v2(
+        "Montante total geral",
+        brl(k["montante_total_geral"], casas=2),
+        delta_pct=delta_pct(k["montante_total_geral"], kp["montante_total_geral"]),
+        hint="SUM(amount) · zoho_deals",
+    )
+with v5:
+    metric_card_v2(
+        "Receita total geral",
+        brl(k["receita_total_geral"], casas=2),
+        delta_pct=delta_pct(k["receita_total_geral"], kp["receita_total_geral"]),
+        hint="SUM(receita) · zoho_deals",
+    )
+with v6:
+    if k["investimento_total_geral"] > 0:
         metric_card_v2(
-            "ROAS",
-            f"{k['roas']:.2f}x".replace(".", ","),
-            delta_pct=delta_pct(k["roas"], kp["roas"]),
-            hint=f"R$ {k['roas']:.2f} de receita / R$ 1 investido".replace(".", ","),
+            "ROAS total geral",
+            f"{k['roas_total_geral']:.2f}x".replace(".", ","),
+            delta_pct=delta_pct(k["roas_total_geral"],
+                                kp["roas_total_geral"]),
+            hint="montante total ÷ invest total",
             accent=True,
         )
     else:
-        metric_card_v2(
-            "ROAS", "—",
-            hint="vw_mkt_roas indisponível ou sem vendas atribuídas",
-        )
+        metric_card_v2("ROAS total geral", "—",
+                       hint="sem investimento no período")
+
+st.caption(
+    "**Total geral comercial** = resultado oficial do CRM/vendas. Inclui "
+    "vendas de fontes ainda não totalmente rastreáveis por anúncio "
+    "(orgânico, social sellers, direct, link in bio)."
+)
 
 # ---------------------------------------------------------------------------
-# Linha 2 — Leads (4 cards: total · qualificados · +12 · -12)
+# Bloco 2 — Geração de leads (e-mails únicos por dia · classificação canônica)
 # ---------------------------------------------------------------------------
-section_title("Leads", "volume e qualificação")
+hint_canal = (
+    f"canal: {', '.join(canais_sel)}" if filtro_canal_ativo
+    else "todos os canais"
+)
+section_title(
+    "Geração de leads",
+    f"e-mail único por dia · última classificação do e-mail no período · {hint_canal}",
+)
 
-l1, l2, l3, l4 = st.columns(4, gap="small")
-with l1:
+g1, g2, g3, g4 = st.columns(4, gap="small")
+with g1:
     metric_card_v2(
         "Leads totais",
-        int_br(k["leads"]),
-        delta_pct=delta_pct(k["leads"], kp["leads"]),
-        hint=leads_hint,
+        int_br(k["leads_totais"]),
+        delta_pct=delta_pct(k["leads_totais"], kp["leads_totais"]),
+        hint="ext_reconecta.leads · sem testes/internos",
     )
-with l2:
+with g2:
     metric_card_v2(
         "Leads qualificados",
         int_br(k["leads_qualificados"]),
         delta_pct=delta_pct(k["leads_qualificados"], kp["leads_qualificados"]),
-        hint=qualif_hint,
+        hint="+12 ou -12 · classificação final do e-mail",
     )
-with l3:
+with g3:
     metric_card_v2(
         "Leads +12",
-        int_br(k["leads_qualif_mais_12"]),
-        delta_pct=delta_pct(k["leads_qualif_mais_12"], kp["leads_qualif_mais_12"]),
-        hint="classificado = 'Atua +12'",
+        int_br(k["leads_mais_12"]),
+        delta_pct=delta_pct(k["leads_mais_12"], kp["leads_mais_12"]),
+        hint="classificado ILIKE '%+12%'",
     )
-with l4:
+with g4:
     metric_card_v2(
         "Leads -12",
-        int_br(k["leads_qualif_menos_12"]),
-        delta_pct=delta_pct(k["leads_qualif_menos_12"], kp["leads_qualif_menos_12"]),
-        hint="classificado = 'Atua -12'",
+        int_br(k["leads_menos_12"]),
+        delta_pct=delta_pct(k["leads_menos_12"], kp["leads_menos_12"]),
+        hint="classificado ILIKE '%-12%'",
     )
 
 # ---------------------------------------------------------------------------
-# Linha 3 — Eficiência (3 cards: CPL · CPL qualificado · Taxa de qualificação)
+# Bloco 3 — Eficiência (CPL · CPL qualificado · Taxa qualificação)
 # ---------------------------------------------------------------------------
-section_title("Eficiência", "custo por aquisição e qualificação")
+section_title(
+    "Eficiência",
+    "CPL e taxa de qualificação calculados sobre o investimento total geral",
+)
 
-e1, e2, e3, e4 = st.columns(4, gap="small")
+e1, e2, e3 = st.columns(3, gap="small")
 with e1:
     metric_card_v2(
         "CPL",
         brl(k["cpl"], casas=2),
         delta_pct=delta_pct(k["cpl"], kp["cpl"]),
-        hint="invest ÷ leads",
+        hint="invest total geral ÷ leads totais",
     )
 with e2:
     metric_card_v2(
         "CPL qualificado",
         brl(k["cpl_qualificado"], casas=2),
         delta_pct=delta_pct(k["cpl_qualificado"], kp["cpl_qualificado"]),
-        hint="invest ÷ leads (Atua +12 ou -12)",
+        hint="invest total geral ÷ leads qualificados",
     )
 with e3:
     metric_card_v2(
-        "CPL +12",
-        brl(k["cpl_mais_12"], casas=2),
-        delta_pct=delta_pct(k["cpl_mais_12"], kp["cpl_mais_12"]),
-        hint="invest ÷ leads Atua +12",
-    )
-with e4:
-    metric_card_v2(
         "Taxa de qualificação",
-        pct(k["taxa_qualif"], casas=2),
-        delta_pct=delta_pct(k["taxa_qualif"], kp["taxa_qualif"]),
-        hint="qualif ÷ totais",
+        pct(k["taxa_qualificacao"], casas=2),
+        delta_pct=delta_pct(k["taxa_qualificacao"], kp["taxa_qualificacao"]),
+        hint="qualificados ÷ leads totais",
     )
 
 # ---------------------------------------------------------------------------
-# Tendência diária — Investimento × Leads × Leads qualificados
+# Tendência diária — Investimento × Leads totais × Leads qualificados
 # ---------------------------------------------------------------------------
-section_title("Tendência diária", "investimento × leads × leads qualificados")
+section_title("Tendência diária",
+              "investimento total geral × leads totais × leads qualificados")
 
-diario = overview_diario(df_ov)
+diario = visao_geral_diario(df_vg_all)
 if diario.empty:
     st.info("Sem dados diários no período.")
 else:
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=diario["data_ref"], y=diario["investimento"], name="Investimento",
+        x=diario["data_ref"], y=diario["investimento_total_geral"],
+        name="Investimento total",
         marker=dict(color=PALETTE["gold"],
                     line=dict(color=PALETTE["gold_soft"], width=0.6)),
         yaxis="y",
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>R$ %{y:,.2f}<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
-        x=diario["data_ref"], y=diario["leads"], name="Leads",
+        x=diario["data_ref"], y=diario["leads_totais"], name="Leads totais",
         line=dict(color=PALETTE["wine_light"], width=2.5),
         mode="lines+markers+text", marker=dict(size=6),
-        text=last_point_text(diario["leads"], int_br),
+        text=last_point_text(diario["leads_totais"], int_br),
         textposition="top center",
         textfont=dict(color=PALETTE["wine_light"], size=11, family="Inter"),
         yaxis="y2",
@@ -351,63 +345,95 @@ else:
     st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Tabela "Por canal" — formato 2 casas (en-US locale do Streamlit)
+# Por canal — fonte única `mkt_visao_geral_kpis_canal` (mesma dos KPIs do topo)
 # ---------------------------------------------------------------------------
-section_title("Por canal", "distribuição de leads e performance comparativa")
+section_title("Por canal",
+              "investimento + leads + financeiro atribuído por canal")
 
-by_canal = overview_por_canal(df_ov, df_roas, df_classif_canal)
+# Quando o filtro de canal estiver ativo, mostra só os selecionados; quando
+# inativo, mostra todos os canais com dados (incluindo 'Sem canal' p/ deals
+# não atribuídos). Canal selecionado SEM linha em df_kpc_all aparece zerado
+# (não cai pra total geral), garantido pelo reindex abaixo.
+if filtro_canal_ativo:
+    df_canal = (
+        df_kpc_all.set_index("canal")
+                  .reindex(canais_sel, fill_value=0)
+                  .reset_index()
+    )
+else:
+    df_canal = df_kpc_all.copy()
 
 col_donut, col_tab = st.columns([1, 2], gap="large")
 
 with col_donut:
-    # Mesma fonte da tabela ao lado — só as linhas com leads > 0 entram no donut
-    # (canais sem volume não fazem sentido como fatias do total).
-    donut_data = by_canal[by_canal["leads"] > 0][["canal", "leads"]].copy()
+    # Donut distribui leads_totais — canais sem leads ficam fora.
+    donut_data = (
+        df_canal[df_canal["leads_totais"] > 0][["canal", "leads_totais"]].copy()
+    )
     if donut_data.empty:
-        st.caption("Sem leads no período.")
+        st.caption("Sem leads no período/filtro.")
     else:
         st.plotly_chart(
-            donut(donut_data, names="canal", values="leads",
+            donut(donut_data, names="canal", values="leads_totais",
                   height=300, total_label="Leads"),
             use_container_width=True,
         )
 
 with col_tab:
-    if by_canal.empty:
+    if df_canal.empty:
         st.caption("Sem canais no período selecionado.")
     else:
-        # Foco da qualificação na tabela é em +12 (Qualif +12 / CPL +12 /
-        # Tx Qualif +12). "Qualif." consolidado fica como referência. Os
-        # consolidados antigos "CPL Qualif." e "Tx Qualif." saíram da view.
-        cols_show = ["canal", "investimento", "leads",
-                     "leads_qualificados", "cpl",
-                     "leads_qualif_mais_12", "cpl_mais_12", "tx_qualif_mais_12"]
+        cols_show = [
+            "canal", "investimento_total_geral",
+            "leads_totais", "leads_qualificados",
+            "leads_mais_12", "leads_menos_12", "leads_nao_atua",
+            "vendas_total_geral", "vendas_novas_total_geral",
+            "montante_total_geral", "receita_total_geral",
+            "roas_total_geral", "cpl", "cpl_qualificado", "cpl_mais_12",
+            "taxa_qualificacao", "taxa_qualificacao_mais_12",
+            "ticket_medio",
+        ]
         col_cfg = {
             "canal": "Canal",
-            "investimento": st.column_config.NumberColumn(
+            "investimento_total_geral": st.column_config.NumberColumn(
                 "Investimento", format="R$ %.2f"),
-            "leads": st.column_config.NumberColumn("Leads", format="%d"),
+            "leads_totais": st.column_config.NumberColumn(
+                "Leads", format="%d"),
             "leads_qualificados": st.column_config.NumberColumn(
-                "Qualif.", format="%d"),
-            "cpl": st.column_config.NumberColumn("CPL", format="R$ %.2f"),
-            "leads_qualif_mais_12": st.column_config.NumberColumn(
-                "Qualif +12", format="%d"),
+                "Qualificados", format="%d"),
+            "leads_mais_12": st.column_config.NumberColumn(
+                "+12", format="%d"),
+            "leads_menos_12": st.column_config.NumberColumn(
+                "-12", format="%d"),
+            "leads_nao_atua": st.column_config.NumberColumn(
+                "Não atua", format="%d"),
+            "vendas_total_geral": st.column_config.NumberColumn(
+                "Vendas", format="%d"),
+            "vendas_novas_total_geral": st.column_config.NumberColumn(
+                "Vendas novas", format="%d"),
+            "montante_total_geral": st.column_config.NumberColumn(
+                "Montante", format="R$ %.2f"),
+            "receita_total_geral": st.column_config.NumberColumn(
+                "Receita", format="R$ %.2f"),
+            "roas_total_geral": st.column_config.NumberColumn(
+                "ROAS", format="%.2fx"),
+            "cpl": st.column_config.NumberColumn(
+                "CPL", format="R$ %.2f"),
+            "cpl_qualificado": st.column_config.NumberColumn(
+                "CPL qualificado", format="R$ %.2f"),
             "cpl_mais_12": st.column_config.NumberColumn(
                 "CPL +12", format="R$ %.2f"),
-            "tx_qualif_mais_12": st.column_config.NumberColumn(
+            "taxa_qualificacao": st.column_config.NumberColumn(
+                "Taxa qualificação", format="%.2f%%"),
+            "taxa_qualificacao_mais_12": st.column_config.NumberColumn(
                 "Tx Qualif +12", format="%.2f%%"),
+            "ticket_medio": st.column_config.NumberColumn(
+                "Ticket médio", format="R$ %.2f"),
         }
-        if df_roas is not None and not df_roas.empty:
-            cols_show += ["vendas", "cac", "roas"]
-            col_cfg["vendas"] = st.column_config.NumberColumn(
-                "Vendas", format="%d")
-            col_cfg["cac"] = st.column_config.NumberColumn(
-                "CAC", format="R$ %.2f")
-            col_cfg["roas"] = st.column_config.NumberColumn(
-                "ROAS", format="%.2fx")
-
         st.dataframe(
-            by_canal[cols_show],
+            df_canal[cols_show].sort_values(
+                "investimento_total_geral", ascending=False
+            ),
             use_container_width=True, hide_index=True,
             column_config=col_cfg,
         )

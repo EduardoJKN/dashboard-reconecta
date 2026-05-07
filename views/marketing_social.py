@@ -145,25 +145,31 @@ if diario.empty:
     st.info("Sem posts no período para os filtros aplicados.")
 else:
     fig = go.Figure()
+    # zorder garante que as linhas fiquem desenhadas sobre as barras mesmo
+    # quando os traces usam yaxes diferentes (yaxis2 da barra renderiza em
+    # camada separada, e a ordem natural de fig.data não basta nesse caso).
     fig.add_trace(go.Bar(
         x=diario["data_ref"], y=diario["posts"], name="Posts",
         marker=dict(color=PALETTE["wine"],
                     line=dict(color=PALETTE["wine_soft"], width=0.6)),
         yaxis="y2",
+        zorder=1,
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:.0f} posts<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
         x=diario["data_ref"], y=diario["alcance"], name="Alcance",
-        line=dict(color=PALETTE["gold"], width=2.5),
-        mode="lines+markers", marker=dict(size=6),
+        line=dict(color=PALETTE["gold"], width=3.2),
+        mode="lines+markers", marker=dict(size=8, line=dict(width=1, color=PALETTE["card"])),
         yaxis="y",
+        zorder=2,
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} alcance<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
         x=diario["data_ref"], y=diario["engajamento"], name="Engajamento",
-        line=dict(color=PALETTE["green"], width=2.2, dash="dot"),
-        mode="lines+markers", marker=dict(size=6),
+        line=dict(color=PALETTE["green"], width=2.8, dash="dot"),
+        mode="lines+markers", marker=dict(size=8, line=dict(width=1, color=PALETTE["card"])),
         yaxis="y",
+        zorder=3,
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} eng<extra></extra>",
     ))
     fig.update_layout(

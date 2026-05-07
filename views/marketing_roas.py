@@ -1,21 +1,36 @@
-"""ROAS / CAC — eficiência consolidada de mídia paga (página executiva).
+"""ROAS / CAC — eficiência consolidada (regra oficial Visão Geral).
 
-Consome `bi.mv_mkt_roas` (materialized view — REFRESH manual via
-`REFRESH MATERIALIZED VIEW bi.mv_mkt_roas;`). Cruza investimento, leads,
-vendas atribuídas e receita por (data_ref, canal)."""
+Fontes alinhadas com a Visão Geral Marketing e Growth:
+    `mkt_visao_geral_kpis_canal.sql`        — invest + leads + financeiro
+                                              (vendas, vendas_novas, montante,
+                                              receita) por canal, atribuído via
+                                              priority `zoho_id > session_id >
+                                              email`. Inclui 'Sem canal' para
+                                              deals não atribuídos.
+    `mkt_campanhas_leads_canal_diario.sql`  — leads/qualif por (data_ref, canal)
+                                              via regra last_row + canal_final.
+    `mkt_visao_geral_diario.sql`            — série diária total geral
+                                              (invest + montante + receita por
+                                              data_ref) usada na Tendência
+                                              diária — mesma política da
+                                              Visão Geral.
+
+ROAS = Montante total / Investimento. CAC = Investimento / Vendas novas
+(`tipo_venda='Novo cliente'` — caminho de aquisição). Mesmas regras dos
+demais painéis de marketing — métricas 'totais', não 'atribuídas via UTM'.
+"""
 from datetime import timedelta
 
 import streamlit as st
 
 from src.marketing_queries import (
-    get_mkt_leads_classif_canal,
-    get_mkt_leads_classificacao,
-    get_mkt_leads_funil_diario,
-    get_mkt_roas,
+    get_mkt_campanhas_leads_canal_diario,
+    get_mkt_visao_geral_diario,
+    get_mkt_visao_geral_kpis_canal,
 )
 from src.marketing_safe import safe_run
 from src.marketing_transforms import (
-    CANAIS_PADRAO,
+    CANAIS_VISIVEIS_OVERVIEW,
     filtro_canais_padrao,
     roas_diario,
     roas_kpis,
@@ -28,149 +43,126 @@ from src.ui.page import start_page
 from src.ui.theme import brl, int_br, pct  # noqa: F401  (pct reservado p/ futuras métricas)
 
 # ---------------------------------------------------------------------------
-# Header + filtros (período + canal — 4 canais sempre visíveis)
+# Header + filtros (período + canal — mesma lista canônica da Visão Geral)
 # ---------------------------------------------------------------------------
 ctx = start_page(
     title="ROAS / CAC",
-    subtitle="Eficiência consolidada · receita atribuída ÷ investimento",
+    subtitle="Eficiência consolidada · ROAS = montante total ÷ investimento",
     filters=["canal"],
 )
 col_map = {"canal": "canal"}
 
-# Mantém Pinterest/Google sempre no filtro, mesmo zerados
-ctx.apply_filters(filtro_canais_padrao(CANAIS_PADRAO), col_map)
+# Seed do filtro com a lista canônica de canais (mesma da Visão Geral) —
+# garante visibilidade dos canais sem dados no período.
+ctx.apply_filters(filtro_canais_padrao(CANAIS_VISIVEIS_OVERVIEW), col_map)
 
 # ---------------------------------------------------------------------------
 # Carga (período atual + período anterior para deltas)
 # ---------------------------------------------------------------------------
-df_all = safe_run(
-    lambda: get_mkt_roas(ctx.data_ini, ctx.data_fim),
-    view_label="bi.mv_mkt_roas",
+df_kpc = safe_run(
+    lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_visao_geral_kpis_canal",
 )
-df = ctx.refilter(df_all, col_map) if not df_all.empty else df_all
-
-# Fontes deduplicadas para leads/qualif (mesmo padrão da Visão Geral)
-df_lp_funil_all = safe_run(
-    lambda: get_mkt_leads_funil_diario(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_funil_leads_diario",
+df_leads_canal_diario = safe_run(
+    lambda: get_mkt_campanhas_leads_canal_diario(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_campanhas_leads_canal_diario",
 )
-df_classif_all = safe_run(
-    lambda: get_mkt_leads_classificacao(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_leads_classificacao",
-)
-df_classif_canal_all = safe_run(
-    lambda: get_mkt_leads_classif_canal(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_leads_classificacao (canal)",
-)
-
-# Detecta filtro = todos canais (mesma regra da Visão Geral)
-canais_no_dado = (
-    set(df_all["canal"].dropna().astype(str).unique()) if not df_all.empty else set()
-)
-canais_sel = set(ctx.selections.get("canal") or [])
-filtro_todos_canais = (not canais_sel) or (canais_sel >= canais_no_dado)
-usar_lp_form = (
-    filtro_todos_canais
-    and df_lp_funil_all is not None
-    and not df_lp_funil_all.empty
-)
-usar_classif = (
-    filtro_todos_canais
-    and df_classif_all is not None
-    and not df_classif_all.empty
+df_vg_diario = safe_run(
+    lambda: get_mkt_visao_geral_diario(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_visao_geral_diario",
 )
 
 dias = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias - 1)
 
-df_prev_all = safe_run(
-    lambda: get_mkt_roas(prev_ini, prev_fim),
-    view_label="bi.mv_mkt_roas",
+df_kpc_prev = safe_run(
+    lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
+    view_label="mkt_visao_geral_kpis_canal",
 )
-df_prev = (
-    ctx.refilter(df_prev_all, col_map) if not df_prev_all.empty else df_prev_all
+df_leads_canal_diario_prev = safe_run(
+    lambda: get_mkt_campanhas_leads_canal_diario(prev_ini, prev_fim),
+    view_label="mkt_campanhas_leads_canal_diario",
 )
-df_lp_funil_prev_all = safe_run(
-    lambda: get_mkt_leads_funil_diario(prev_ini, prev_fim),
-    view_label="bi.vw_funil_leads_diario",
-)
-df_classif_prev_all = safe_run(
-    lambda: get_mkt_leads_classificacao(prev_ini, prev_fim),
-    view_label="bi.vw_mkt_leads_classificacao",
-)
-
-# Para a tabela "Por canal" — refilter pelo canal selecionado pelo usuário
-df_classif_canal = (
-    ctx.refilter(df_classif_canal_all, col_map)
-    if not df_classif_canal_all.empty else df_classif_canal_all
-)
-
-# KPIs: leads/qualif do dedup só quando filtro = todos canais
-df_lp_para_kpis = df_lp_funil_all if usar_lp_form else None
-df_classif_para_kpis = df_classif_all if usar_classif else None
-df_lp_para_kpis_prev = (
-    df_lp_funil_prev_all
-    if (usar_lp_form
-        and df_lp_funil_prev_all is not None
-        and not df_lp_funil_prev_all.empty)
-    else None
-)
-df_classif_para_kpis_prev = (
-    df_classif_prev_all
-    if (usar_classif
-        and df_classif_prev_all is not None
-        and not df_classif_prev_all.empty)
-    else None
-)
-
-k = roas_kpis(df, df_lp_para_kpis, df_classif_para_kpis)
-kp = roas_kpis(df_prev, df_lp_para_kpis_prev, df_classif_para_kpis_prev)
 
 # ---------------------------------------------------------------------------
-# Hero — eficiência (ROAS / CAC / Invest / Receita)
+# Filtro de canal — mesma regra da Visão Geral:
+#   vazio  ou  == lista canônica → todos os canais (filtro inativo)
+#   qualquer subset            → filtro ativo, soma só os selecionados
+# Quando inativo, soma TODAS as rows (inclusive 'Sem canal') — bate com o
+# total geral oficial. Selecionar canal sem linha em df_kpc zera os cards
+# (não cai pra total geral).
+# ---------------------------------------------------------------------------
+canais_sel: list[str] = list(ctx.selections.get("canal") or [])
+canais_canonicos = set(CANAIS_VISIVEIS_OVERVIEW)
+filtro_canal_ativo = bool(canais_sel) and set(canais_sel) != canais_canonicos
+filtro_todos_canais = not filtro_canal_ativo
+
+k = roas_kpis(df_kpc, df_leads_canal_diario,
+              canais=canais_sel, todos_canais=filtro_todos_canais)
+kp = roas_kpis(df_kpc_prev, df_leads_canal_diario_prev,
+               canais=canais_sel, todos_canais=filtro_todos_canais)
+
+# ---------------------------------------------------------------------------
+# Hero — eficiência (ROAS / CAC / Invest / Montante / Receita)
 # ---------------------------------------------------------------------------
 section_title(
     "Eficiência",
     f"{ctx.data_ini.strftime('%d/%m/%Y')} → {ctx.data_fim.strftime('%d/%m/%Y')}",
 )
 
-c1, c2, c3, c4 = st.columns(4, gap="small")
+c1, c2, c3, c4, c5 = st.columns(5, gap="small")
 with c1:
     if k["roas"]:
         metric_card_v2(
             "ROAS",
             f"{k['roas']:.2f}x".replace(".", ","),
             delta_pct=delta_pct(k["roas"], kp["roas"]),
-            hint=f"R$ {k['roas']:.2f} de receita / R$ 1 investido".replace(".", ","),
+            hint="montante total ÷ investimento",
             accent=True,
         )
     else:
         metric_card_v2(
             "ROAS", "—",
-            hint="sem vendas atribuídas no período",
+            hint="sem montante no período",
         )
 with c2:
     metric_card_v2(
         "CAC",
         brl(k["cac"], casas=2) if k["cac"] else "—",
         delta_pct=delta_pct(k["cac"], kp["cac"]),
-        hint="invest ÷ vendas atribuídas",
+        hint="invest ÷ vendas novas",
     )
 with c3:
     metric_card_v2(
         "Investimento",
         brl(k["investimento"], casas=2),
         delta_pct=delta_pct(k["investimento"], kp["investimento"]),
-        hint="canais filtrados no período",
+        hint="canais filtrados · vw_mkt_overview (oficial)",
     )
 with c4:
     metric_card_v2(
-        "Receita atribuída",
+        "Montante total",
+        brl(k["montante"], casas=2),
+        delta_pct=delta_pct(k["montante"], kp["montante"]),
+        hint=f"SUM(amount) zoho_deals · {int_br(k['vendas'])} vendas "
+             f"({int_br(k['vendas_novas'])} novas)",
+    )
+with c5:
+    metric_card_v2(
+        "Receita total",
         brl(k["valor_receita"], casas=2),
         delta_pct=delta_pct(k["valor_receita"], kp["valor_receita"]),
-        hint=f"{int_br(k['vendas'])} vendas · "
-             f"ticket {brl(k['ticket_medio'], casas=2) if k['ticket_medio'] else '—'}",
+        hint=f"SUM(receita) zoho_deals · ticket "
+             f"{brl(k['ticket_medio'], casas=2) if k['ticket_medio'] else '—'}",
+    )
+
+if filtro_canal_ativo:
+    st.caption(
+        "ℹ️ Filtro de canal ativo — KPIs exibem a parcela atribuída aos "
+        "canais selecionados. Vendas sem correspondência de lead entram "
+        "como **Sem canal** e ficam fora quando o filtro é específico. "
+        "A **Tendência diária** continua mostrando o total geral."
     )
 
 # ---------------------------------------------------------------------------
@@ -184,7 +176,7 @@ with s1:
         "Leads",
         int_br(k["leads"]),
         delta_pct=delta_pct(k["leads"], kp["leads"]),
-        hint="únicos via lp_form.leads",
+        hint="únicos · regra oficial Visão Geral",
     )
 with s2:
     metric_card_v2(
@@ -209,13 +201,14 @@ with s4:
     )
 
 # ---------------------------------------------------------------------------
-# Tendência diária — investimento × receita atribuída
+# Tendência diária — investimento × receita total (sempre total geral,
+# mesma política da Visão Geral; filtro de canal não altera a série)
 # ---------------------------------------------------------------------------
-section_title("Tendência diária", "investimento × receita atribuída")
+section_title("Tendência diária", "investimento × receita total")
 
-diario = roas_diario(df)
+diario = roas_diario(df_vg_diario)
 if diario.empty:
-    st.info("Sem dados no período para os canais selecionados.")
+    st.info("Sem dados no período.")
 else:
     st.plotly_chart(
         dual_line(
@@ -230,7 +223,7 @@ else:
 # ---------------------------------------------------------------------------
 # ROAS e CAC por canal
 # ---------------------------------------------------------------------------
-by_canal = roas_por_canal(df, df_classif_canal)
+by_canal = roas_por_canal(df_kpc, df_leads_canal_diario)
 
 col_roas, col_cac = st.columns(2, gap="large")
 
@@ -248,15 +241,15 @@ with col_roas:
         )
 
 with col_cac:
-    section_title("CAC por canal", "menor = melhor · só canais com vendas")
-    # CAC = invest/vendas. Sem vendas, CAC=0 seria visualmente "ótimo" mas
-    # é informativamente errado. Filtramos vendas > 0.
-    by_canal_vendas = by_canal[by_canal["vendas"] > 0]
-    if by_canal_vendas.empty:
-        st.info("Nenhum canal com vendas atribuídas no período.")
+    section_title("CAC por canal", "menor = melhor · só canais com vendas novas")
+    # CAC = invest / vendas novas. Sem vendas novas, CAC=0 seria visualmente
+    # "ótimo" mas é informativamente errado. Filtramos vendas_novas > 0.
+    by_canal_cac = by_canal[by_canal["vendas_novas"] > 0]
+    if by_canal_cac.empty:
+        st.info("Nenhum canal com vendas novas no período.")
     else:
         st.plotly_chart(
-            bar_simple(by_canal_vendas, x="canal", y="cac", height=280, money=True),
+            bar_simple(by_canal_cac, x="canal", y="cac", height=280, money=True),
             use_container_width=True,
         )
 
@@ -264,7 +257,7 @@ with col_cac:
 # Detalhamento por canal — todos os canais (preserva Pinterest/Google zerados)
 # ---------------------------------------------------------------------------
 section_title("Detalhamento por canal",
-              "métricas consolidadas · todos os canais filtrados")
+              "métricas consolidadas · todos os canais com dados no período")
 if by_canal.empty:
     st.info("Sem dados no período.")
 else:
@@ -278,6 +271,10 @@ else:
             "leads_qualificados": st.column_config.NumberColumn(
                 "Qualif.", format="%d"),
             "vendas": st.column_config.NumberColumn("Vendas", format="%d"),
+            "vendas_novas": st.column_config.NumberColumn(
+                "Vendas novas", format="%d"),
+            "valor_venda": st.column_config.NumberColumn(
+                "Montante", format="R$ %.2f"),
             "valor_receita": st.column_config.NumberColumn(
                 "Receita", format="R$ %.2f"),
             "roas": st.column_config.NumberColumn("ROAS", format="%.2fx"),
@@ -288,8 +285,16 @@ else:
         },
     )
 
-# Nota de freshness — a MV precisa ser atualizada periodicamente
 st.caption(
-    "Dados consumidos de `bi.mv_mkt_roas` (materialized view). "
-    "Atualize com `REFRESH MATERIALIZED VIEW bi.mv_mkt_roas;` se notar atraso."
+    "**Mesmas fontes da Visão Geral Marketing.** Investimento: "
+    "`bi.vw_mkt_overview`. Leads e qualificados: regra oficial via "
+    "`bi_mkt.vw_visao_geral_canal_base` (canal-aware, classificação canônica "
+    "last_row do e-mail no período). Vendas / vendas novas / montante / "
+    "receita: `zoho_deals` (stages Ganho/Fechado Ganho) com priority match "
+    "`zoho_id > session_id > email` para atribuição por canal — deals sem "
+    "lead correspondente entram como **Sem canal**. "
+    "**ROAS = Montante total ÷ Investimento.** **CAC = Investimento ÷ "
+    "Vendas novas** (`tipo_venda='Novo cliente'` — caminho de aquisição; "
+    "ascensão / renovação / indicação ficam fora). Receita inclui todos os "
+    "deals Ganho do período."
 )

@@ -7,29 +7,35 @@ Consome:
 Os 3 canais pagos sempre aparecem no filtro, mesmo quando zerados — Pinterest
 e Google podem não ter volume hoje, e o time pediu para preservar a estrutura
 da página em qualquer cenário."""
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 from src.marketing_queries import (
     get_mkt_campanha_cobertura,
-    get_mkt_campanha_resultados,
     get_mkt_campanhas,
+    get_mkt_campanhas_leads_canal_diario,
+    get_mkt_campanhas_leads_por_utm,
     get_mkt_funil,
-    get_mkt_leads_classif_canal,
+    get_mkt_paginas_variantes,
 )
 from src.marketing_safe import safe_run
 from src.marketing_transforms import (
     CANAIS_PAGOS,
-    campanha_kpis,
-    campanhas_diario,
+    agregar_campanhas_por_utm,
+    campanha_utm_kpis,
+    campanhas_diario_v2,
     campanhas_kpis,
+    campanhas_leads_canal_kpis,
     campanhas_objetivo,
     campanhas_tabela_ativas,
+    campanhas_tabela_total_row,
     cobertura_atribuicao_kpis,
-    compara_campanhas,
+    compara_campanhas_utm,
     filtro_canais_padrao,
-    lista_campanhas,
+    lista_campanhas_por_utm,
 )
+from src.transforms import _safe_div
 from src.ui.charts import donut, last_point_text
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
@@ -62,38 +68,58 @@ df_funil_all = safe_run(
     lambda: get_mkt_funil(ctx.data_ini, ctx.data_fim),
     view_label="bi.vw_mkt_funil",
 )
-# Fonte deduplicada por canal — KPIs de leads usam isso quando disponível.
-# Sem grão de canal próprio? Tem sim — `df_classif_canal` traz `canal` e nós
-# refiltramos pelos canais selecionados pelo usuário antes de somar.
-df_classif_canal_all = safe_run(
-    lambda: get_mkt_leads_classif_canal(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_leads_classificacao (canal)",
+# Fonte oficial alinhada com Visão Geral — leads/qualif por canal pela regra
+# canal_final (last_row do e-mail). Substitui bi.vw_mkt_leads_classificacao
+# nos cards de Volume e CPL e na Tendência diária. NÃO afeta tabela
+# "Campanhas ativas" / donut "Por objetivo" / seção "Comparar campanhas",
+# que continuam usando bi.vw_mkt_campanhas e a mart de atribuição.
+df_leads_canal_diario_all = safe_run(
+    lambda: get_mkt_campanhas_leads_canal_diario(ctx.data_ini, ctx.data_fim),
+    view_label="bi_mkt.vw_visao_geral_canal_base (canal-diario)",
 )
-# Resultados atribuídos por campanha (V1.5 da seção Comparar campanhas).
-# Vem de odam.mart_ad_funnel_daily agregado por campaign_id. Cobertura
-# primária Meta — Google/Pinterest geralmente sem linha aqui.
-df_resultados_camp = safe_run(
-    lambda: get_mkt_campanha_resultados(ctx.data_ini, ctx.data_fim),
-    view_label="odam.mart_ad_funnel_daily (por campanha)",
+# Leads por campanha — match campaign_name = utm_campaign para enriquecer
+# a tabela "Campanhas ativas". Sem grão de canal (1 linha por utm_campaign
+# normalizado). Não afeta cards/Tendência diária/Comparar campanhas.
+df_leads_por_utm = safe_run(
+    lambda: get_mkt_campanhas_leads_por_utm(ctx.data_ini, ctx.data_fim),
+    view_label="ext_reconecta.leads (por utm_campaign)",
 )
-
 df_camp = (
     ctx.refilter(df_camp_all, col_map) if not df_camp_all.empty else df_camp_all
 )
 df_funil = (
     ctx.refilter(df_funil_all, col_map) if not df_funil_all.empty else df_funil_all
 )
-df_classif_canal = (
-    ctx.refilter(df_classif_canal_all, col_map)
-    if not df_classif_canal_all.empty else df_classif_canal_all
-)
+# Lista de canais selecionados no header — base do filtro do novo source.
+# `canais_sel` vazio = todos os canais pagos seedados pelo filtro.
+canais_sel: list[str] = list(ctx.selections.get("canal") or list(CANAIS_PAGOS))
 
 # ---------------------------------------------------------------------------
 # KPIs financeiros
 # ---------------------------------------------------------------------------
-# Quando df_classif_canal está disponível, leads/qualif vêm dele (deduplicado
-# por canal+email na janela). Senão, fallback automático para df_funil (V1).
-k = campanhas_kpis(df_camp, df_funil, df_classif_canal)
+# campanhas_kpis() carrega invest/impressões/cliques/CTR/CPC do grão de
+# campanhas (`bi.vw_mkt_campanhas`). Os campos de leads e CPL produzidos
+# por essa função (e que vinham de bi.vw_mkt_leads_classificacao / vw_mkt_funil)
+# são SOBRESCRITOS abaixo pelos números canal-aware da fonte oficial Visão
+# Geral. `investimento_dia` também é recalculado com denominador =
+# `(data_fim - data_ini).days + 1` (total de dias do período), substituindo
+# a regra antiga "dias com invest > 0".
+k = campanhas_kpis(df_camp, df_funil, None)  # df_classif_canal=None → ignora fallback antigo
+
+# Override leads/qualif/+12/-12 com a fonte oficial (mesma regra da
+# Visão Geral por canal). canais_sel já restrito a Meta/Google/Pinterest.
+kc = campanhas_leads_canal_kpis(df_leads_canal_diario_all, canais_sel)
+k["leads"]                 = kc["leads_totais"]
+k["leads_qualificados"]    = kc["leads_qualificados"]
+k["leads_qualif_mais_12"]  = kc["leads_mais_12"]
+k["leads_qualif_menos_12"] = kc["leads_menos_12"]
+k["cpl"]                   = _safe_div(k["investimento"], k["leads"])
+k["cpl_qualificado"]       = _safe_div(k["investimento"], k["leads_qualificados"])
+
+# Investimento / dia → denominador = total de dias do período (mesma regra
+# da Visão Geral). Antes era "nº de dias com invest > 0".
+total_dias = (ctx.data_fim - ctx.data_ini).days + 1
+k["investimento_dia"] = _safe_div(k["investimento"], total_dias)
 
 section_title(
     "Financeiro",
@@ -112,19 +138,19 @@ with c2:
     metric_card_v2(
         "Investimento / dia",
         brl(k["investimento_dia"], casas=2),
-        hint=f"{k['dias_com_invest']} dias com invest > 0",
+        hint=f"invest ÷ {total_dias} dia{'s' if total_dias != 1 else ''}",
     )
 with c3:
     metric_card_v2(
         "CPL",
         brl(k["cpl"], casas=2),
-        hint="invest ÷ leads (mesmos canais)",
+        hint="invest ÷ leads totais",
     )
 with c4:
     metric_card_v2(
         "CPL qualificado",
         brl(k["cpl_qualificado"], casas=2),
-        hint="invest ÷ leads (Atua +12 ou -12)",
+        hint="invest ÷ qualificados (+12 ou -12)",
     )
 
 # ---------------------------------------------------------------------------
@@ -137,7 +163,7 @@ with s1:
     metric_card_v2(
         "Leads totais",
         int_br(k["leads"]),
-        hint="únicos via lp_form.leads",
+        hint="bi_mkt.vw_visao_geral_canal_base · canal-aware",
     )
 with s2:
     metric_card_v2(
@@ -158,7 +184,9 @@ with s3:
 # ---------------------------------------------------------------------------
 section_title("Tendência diária", "investimento × leads × leads qualificados")
 
-diario = campanhas_diario(df_camp, df_funil)
+# Leads/qualif diários da fonte canal-aware (mesma regra dos cards).
+# Investimento diário continua de bi.vw_mkt_campanhas via df_camp.
+diario = campanhas_diario_v2(df_camp, df_leads_canal_diario_all, canais_sel)
 if diario.empty:
     st.info("Sem dados no período para os canais selecionados.")
 else:
@@ -241,12 +269,20 @@ with col_obj:
 with col_tab:
     section_title("Campanhas ativas",
                   "investimento > 0 no período · ordenadas por invest. desc")
-    ativas = campanhas_tabela_ativas(df_camp)
+    ativas = campanhas_tabela_ativas(df_camp, df_leads_por_utm)
     if ativas.empty:
         st.info("Nenhuma campanha ativa para os canais selecionados.")
     else:
+        # Linha "Total" no final — taxas (CTR/CPC/CPL/CPL+12/Tx Qualif)
+        # recalculadas a partir das somas, não média das taxas. Leads
+        # deduplicados por campaign_name antes de somar (evita dupla
+        # contagem quando 1 campaign_name tem múltiplos campaign_id).
+        ativas_view = pd.concat(
+            [ativas, campanhas_tabela_total_row(ativas)],
+            ignore_index=True,
+        )
         st.dataframe(
-            ativas, use_container_width=True, hide_index=True,
+            ativas_view, use_container_width=True, hide_index=True,
             column_config={
                 "campaign_name": "Campanha",
                 "canal": "Canal",
@@ -259,26 +295,96 @@ with col_tab:
                 "ctr": st.column_config.NumberColumn("CTR", format="%.2f%%"),
                 "cpc": st.column_config.NumberColumn("CPC", format="R$ %.2f"),
                 "alcance": st.column_config.NumberColumn("Alcance", format="%d"),
+                "leads": st.column_config.NumberColumn("Leads", format="%d"),
+                "leads_qualificados": st.column_config.NumberColumn(
+                    "Qualificados", format="%d"),
+                "leads_mais_12": st.column_config.NumberColumn(
+                    "+12", format="%d"),
+                "leads_menos_12": st.column_config.NumberColumn(
+                    "-12", format="%d"),
+                "cpl": st.column_config.NumberColumn(
+                    "CPL", format="R$ %.2f"),
+                "cpl_mais_12": st.column_config.NumberColumn(
+                    "CPL +12", format="R$ %.2f"),
+                "tx_qualif_mais_12": st.column_config.NumberColumn(
+                    "Tx Qualif +12", format="%.2f%%"),
             },
+        )
+        st.caption(
+            "Leads por campanha são associados via `campaign_name = "
+            "utm_campaign`. Campanhas sem correspondência de UTM aparecem "
+            "com 0 até padronização. Quando o mesmo `campaign_name` tem "
+            "mais de um `campaign_id` na plataforma, o total de leads "
+            "do nome é repetido em cada linha (não há como atribuir leads "
+            "a um `campaign_id` específico via UTM)."
         )
 
 # ---------------------------------------------------------------------------
-# Comparar campanhas (V1.5 — plataforma + resultado atribuído via mart)
-# Plataforma: bi.vw_mkt_campanhas (oficial)
-# Resultado:  odam.mart_ad_funnel_daily agregado por campaign_id (atribuído)
-# Derivadas:  invest oficial / contagens da mart
+# Comparar campanhas (V2 — UTM + Zoho, modelo herdado do "Comparar páginas
+# / variantes" da Growth)
+# Plataforma: bi.vw_mkt_campanhas agregada por campaign_name normalizado.
+# Leads/CRM:  ext_reconecta.leads + zoho_deals (priority match
+#             zoho_id > session_id > email).
+# Vendas:     apenas tipo_venda='Novo cliente' (caminho de aquisição).
+# Cobertura mart abaixo continua como diagnóstico.
 # ---------------------------------------------------------------------------
 section_title("Comparar campanhas",
-              "plataforma + resultado atribuído · lado a lado")
+              "plataforma + leads/CRM + origem da campanha · grão utm_campaign")
 
-camp_list = lista_campanhas(df_camp)
+# DF email-level — base pros filtros desta seção e pra agregação Python.
+df_pv_raw = safe_run(
+    lambda: get_mkt_paginas_variantes(ctx.data_ini, ctx.data_fim),
+    view_label="ext_reconecta.leads (email-level pra Comparar campanhas)",
+)
+
+# Opções de filtro vêm do DF email-level no período.
+def _opts(col: str, default: str = "Todas") -> list[str]:
+    if df_pv_raw.empty or col not in df_pv_raw.columns:
+        return [default]
+    vals = sorted(df_pv_raw[col].dropna().astype(str).unique().tolist())
+    return [default] + vals
+
+# Filtros que afetam SOMENTE essa seção (não tocam cards/tabela/donut).
+_HELP = ("Filtra apenas a comparação de campanhas — não afeta os cards "
+         "superiores, tabela 'Campanhas ativas' nem donut 'Por objetivo'.")
+
+flt_l1_a, flt_l1_b = st.columns(2, gap="small")
+with flt_l1_a:
+    sel_origem = st.selectbox(
+        "Origem", options=_opts("utm_source", "Todas"),
+        index=0, key="cmp_camp_origem", help=_HELP,
+    )
+with flt_l1_b:
+    sel_midia = st.selectbox(
+        "Mídia", options=_opts("utm_medium", "Todas"),
+        index=0, key="cmp_camp_midia", help=_HELP,
+    )
+flt_l2_a, flt_l2_b = st.columns(2, gap="small")
+with flt_l2_a:
+    sel_timezone = st.selectbox(
+        "Fuso / região", options=_opts("timezone", "Todos"),
+        index=0, key="cmp_camp_timezone", help=_HELP,
+    )
+with flt_l2_b:
+    sel_device = st.selectbox(
+        "Dispositivo", options=_opts("device_type", "Todos"),
+        index=0, key="cmp_camp_device", help=_HELP,
+    )
+
+df_camp_utm_agg = agregar_campanhas_por_utm(
+    df_pv_raw, df_camp,
+    origem=sel_origem, midia=sel_midia,
+    timezone=sel_timezone, device_type=sel_device,
+)
+camp_list = lista_campanhas_por_utm(df_camp_utm_agg)
+
 if camp_list.empty:
-    st.caption("Sem campanhas no período selecionado para comparar.")
+    st.caption("Sem campanhas para os filtros selecionados.")
 else:
-    options = camp_list["campaign_id"].tolist()
-    labels_map = dict(zip(camp_list["campaign_id"], camp_list["label"]))
+    options = camp_list["campaign_norm"].tolist()
+    labels_map = dict(zip(camp_list["campaign_norm"], camp_list["label"]))
 
-    # Defaults: top 1 e top 2 por investimento (já vêm ordenados)
+    # Defaults: top 1 e top 2 por leads (lista já vem ordenada)
     idx_default_b = 1 if len(options) > 1 else 0
 
     sel_col_a, sel_col_b = st.columns(2, gap="small")
@@ -286,7 +392,7 @@ else:
         sel_a = st.selectbox(
             "Campanha A",
             options=options,
-            format_func=lambda cid: labels_map.get(cid, "—"),
+            format_func=lambda c: labels_map.get(c, "—"),
             index=0,
             key="cmp_campanha_a",
         )
@@ -294,37 +400,21 @@ else:
         sel_b = st.selectbox(
             "Campanha B",
             options=options,
-            format_func=lambda cid: labels_map.get(cid, "—"),
+            format_func=lambda c: labels_map.get(c, "—"),
             index=idx_default_b,
             key="cmp_campanha_b",
         )
 
-    kA = campanha_kpis(df_camp, sel_a, df_resultados_camp)
-    kB = campanha_kpis(df_camp, sel_b, df_resultados_camp)
-
-    # Badge sutil sob cada selectbox indicando se a campanha tem resultado
-    # atribuído na mart. Ajuda o usuário a interpretar "—" nas linhas de
-    # resultado/derivadas.
-    bdg_col_a, bdg_col_b = st.columns(2, gap="small")
-    with bdg_col_a:
-        st.caption(
-            "✓ resultados atribuídos" if kA["tem_resultados"]
-            else "⚠ sem atribuição no mart"
-        )
-    with bdg_col_b:
-        st.caption(
-            "✓ resultados atribuídos" if kB["tem_resultados"]
-            else "⚠ sem atribuição no mart"
-        )
-
-    cmp = compara_campanhas(kA, kB)
+    kA = campanha_utm_kpis(df_camp_utm_agg, sel_a)
+    kB = campanha_utm_kpis(df_camp_utm_agg, sel_b)
+    cmp = compara_campanhas_utm(kA, kB)
 
     # ---- Formatadores -----------------------------------------------------
-    # None → "—" para qualquer métrica numérica (sem atribuição OU
-    # denominador zero em derivada).
-    _MONEY_METRICS = {"Investimento", "CPC", "CPL", "CPL +12", "CAC", "Receita"}
-    _PCT_METRICS = {"CTR"}
-    _ROAS_METRIC = {"ROAS"}
+    _MONEY_METRICS = {"Investimento", "CPC"}
+    _PCT_METRICS   = {"CTR", "Taxa qualificação", "Taxa +12",
+                       "Taxa Lead → Venda nova"}
+    _STR_METRICS   = {"Canal", "Página principal", "Variante principal",
+                       "URL exemplo"}
 
     def _fmt_value(metrica: str, val) -> str:
         if val is None:
@@ -334,16 +424,14 @@ else:
                 return "—"
         except Exception:
             pass
-        if metrica in ("Canal", "Objetivo"):
-            return str(val) if val else "—"
+        if metrica in _STR_METRICS:
+            s = str(val).strip()
+            return s if s and s != "—" else "—"
         if metrica in _MONEY_METRICS:
             return brl(float(val), casas=2)
         if metrica in _PCT_METRICS:
             return pct(float(val), casas=2)
-        if metrica in _ROAS_METRIC:
-            return f"{float(val):.2f}x".replace(".", ",")
-        # Inteiros (Impressões, Cliques, Alcance, Leads, +12, -12,
-        # Agendamentos, Comparecimentos, No-shows, Deals, Deals ganhos, Vendas)
+        # Inteiros — Impressões/Cliques/Alcance/Leads*/Vendas novas
         return int_br(float(val))
 
     def _fmt_delta(d) -> str:
@@ -374,30 +462,96 @@ else:
             "valor_a_fmt": "Campanha A",
             "valor_b_fmt": "Campanha B",
             "delta_fmt": st.column_config.TextColumn(
-                "Δ%", help="(B − A) / A × 100. — quando A=0 ou algum lado "
-                          "sem dado."),
+                "Δ%", help="(B − A) / A × 100. — quando A=0, valor "
+                          "categórico, ou algum lado vazio."),
             "vencedor_fmt": st.column_config.TextColumn(
                 "Vencedor",
-                help="Maior em métricas de volume/qualidade; menor em "
-                     "CPL/CPC/CAC/No-shows. Sem vencedor quando algum "
-                     "lado é '—' (atribuição incompleta) ou em "
-                     "Investimento/Canal/Objetivo."),
+                help="Maior em volume/qualidade/CTR/Vendas novas/Taxas; "
+                     "menor em CPC. Investimento, Canal, Leads -12 e Não "
+                     "atua não destacam vencedor."),
         },
     )
 
+    # Links clicáveis pra abrir as URLs em nova aba (st.dataframe não
+    # transforma a string da linha "URL exemplo" em link).
+    def _url_valido(u) -> str | None:
+        if u is None:
+            return None
+        if isinstance(u, float) and u != u:  # NaN
+            return None
+        s = str(u).strip()
+        if not s or s == "—":
+            return None
+        if not (s.startswith("http://") or s.startswith("https://")):
+            return None
+        return s
+
+    url_a = _url_valido(kA.get("page_url_exemplo"))
+    url_b = _url_valido(kB.get("page_url_exemplo"))
+    partes = []
+    if url_a:
+        partes.append(f"[Abrir URL da Campanha A]({url_a})")
+    if url_b:
+        partes.append(f"[Abrir URL da Campanha B]({url_b})")
+    if partes:
+        st.markdown(" · ".join(partes))
+
     st.caption(
-        "Métricas de plataforma (Invest., Impressões, Cliques, Alcance, "
-        "CTR, CPC, Canal, Objetivo) vêm de **`bi.vw_mkt_campanhas`** "
-        "(fonte oficial). "
-        "Métricas de resultado (Leads, +12, -12, Agendamentos, "
-        "Comparecimentos, No-shows, Deals, Deals ganhos, Vendas, Receita) "
-        "são **atribuídas via `odam.mart_ad_funnel_daily`** — cobertura "
-        "primária para Meta. "
-        "Derivadas (CPL, CPL +12, CAC, ROAS) usam **investimento oficial** "
-        "sobre numerador atribuído. "
-        "\"—\" indica ausência de atribuição na mart ou denominador zero "
-        "(ex.: CPL sem leads, ROAS sem invest)."
+        "Métricas de **plataforma** (Invest., Impressões, Cliques, "
+        "Alcance, CTR, CPC, Canal) vêm de **`bi.vw_mkt_campanhas`**, "
+        "agregadas por `campaign_name` normalizado. "
+        "**Leads, qualificados, +12, -12, Não atua, Taxas** e métricas "
+        "de origem (página/variante/URL) vêm de "
+        "`mkt_paginas_variantes.sql` (email-level) agregado por "
+        "`utm_campaign` — mesma regra da Visão Geral. "
+        "**Vendas novas** = `zoho_deals` (Ganho/Fechado Ganho) com "
+        "`tipo_venda = 'Novo cliente'`, atribuído ao lead via priority "
+        "`zoho_id > session_id > email` (mesma regra do funil Growth — "
+        "ascensão/renovação/indicação ficam de fora do caminho de "
+        "aquisição)."
     )
+
+    # ---------------------- Expander: Detalhamento de origem ---------------
+    with st.expander("Detalhamento de origem da campanha"):
+        det = df_camp_utm_agg[[
+            "utm_campaign", "pagina_principal", "variante_principal",
+            "page_url_exemplo",
+            "origens", "midias", "criativos",
+            "fusos", "dispositivos",
+            "qtd_paginas", "qtd_variantes", "qtd_criativos",
+            "criativo_principal",
+        ]].copy()
+        # Listas → string separada por vírgula. Listas vazias → "—".
+        for c in ("origens", "midias", "criativos",
+                  "fusos", "dispositivos"):
+            det[c] = det[c].apply(
+                lambda lst: ", ".join(lst) if isinstance(lst, list) and lst else "—"
+            )
+        det["page_url_exemplo"]   = det["page_url_exemplo"].fillna("—")
+        det["pagina_principal"]   = det["pagina_principal"].fillna("—")
+        det["variante_principal"] = det["variante_principal"].fillna("—")
+        det["criativo_principal"] = det["criativo_principal"].fillna("—")
+        st.dataframe(
+            det, use_container_width=True, hide_index=True,
+            column_config={
+                "utm_campaign":        "Campanha",
+                "pagina_principal":    "Página principal",
+                "variante_principal":  "Variante principal",
+                "page_url_exemplo":    "URL exemplo",
+                "origens":             "Origens",
+                "midias":              "Mídias",
+                "criativos":           "Criativos",
+                "fusos":               "Fusos / regiões",
+                "dispositivos":        "Dispositivos",
+                "qtd_paginas":         st.column_config.NumberColumn(
+                    "Qtd. páginas", format="%d"),
+                "qtd_variantes":       st.column_config.NumberColumn(
+                    "Qtd. variantes", format="%d"),
+                "qtd_criativos":       st.column_config.NumberColumn(
+                    "Qtd. criativos", format="%d"),
+                "criativo_principal":  "Criativo principal",
+            },
+        )
 
     # ---------- Diagnóstico de cobertura da atribuição (expander) -----------
     df_cob = safe_run(

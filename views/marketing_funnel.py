@@ -1,27 +1,39 @@
 """Funil Marketing — pipeline completo do investimento à venda.
 
-Consome `bi.vw_mkt_funil` (paid + odam.v_attribution_lead_to_deal). KPIs com
-delta vs período anterior, funil visual com drop-off entre estágios, evolução
-diária e tabela por canal preservando Pinterest/Google quando zerados."""
+Migrada da `bi.mv_mkt_funil` (defasada, dependia de REFRESH manual) para as
+fontes oficiais já validadas em Visão Geral / Growth / ROAS-CAC:
+
+    mkt_visao_geral_kpis_canal.sql      — invest/leads/qualif/vendas/montante/
+                                          receita por canal (priority match
+                                          zoho_id > session_id > email; inclui
+                                          'Sem canal' p/ deals não atribuídos).
+    mkt_growth_atividades_canal.sql     — leads únicos com activity Consulta/
+                                          Indicação por canal (otimizada UNION
+                                          ALL — antes 46s, hoje ~3s).
+    mkt_visao_geral_diario.sql          — série diária total geral (mesma
+                                          política da Visão Geral / ROAS-CAC).
+
+Vendas = Vendas novas (`tipo_venda='Novo cliente'`) — caminho de aquisição.
+Vendas totais (todos `Ganho/Fechado Ganho`) ficam como métrica complementar.
+"""
 from datetime import timedelta
 
 import plotly.graph_objects as go
 import streamlit as st
 
 from src.marketing_queries import (
-    get_mkt_funil,
-    get_mkt_leads_classif_canal,
-    get_mkt_leads_classificacao,
-    get_mkt_leads_funil_diario,
+    get_mkt_growth_atividades_canal,
+    get_mkt_visao_geral_diario,
+    get_mkt_visao_geral_kpis_canal,
 )
 from src.marketing_safe import safe_run
 from src.marketing_transforms import (
-    CANAIS_PADRAO,
+    CANAIS_VISIVEIS_OVERVIEW,
     filtro_canais_padrao,
-    funil_diario,
-    funil_estagios,
-    funil_kpis,
-    funil_por_canal,
+    funil_diario_oficial,
+    funil_estagios_oficial,
+    funil_kpis_oficial,
+    funil_por_canal_oficial,
 )
 from src.transforms import delta_pct
 from src.ui.charts import funnel, last_point_text
@@ -30,7 +42,7 @@ from src.ui.page import start_page
 from src.ui.theme import PALETTE, brl, int_br, pct
 
 # ---------------------------------------------------------------------------
-# Header + filtros (período + canal — 4 canais sempre visíveis)
+# Header + filtros (período + canal — lista canônica da Visão Geral)
 # ---------------------------------------------------------------------------
 ctx = start_page(
     title="Funil Marketing",
@@ -38,103 +50,56 @@ ctx = start_page(
     filters=["canal"],
 )
 col_map = {"canal": "canal"}
-ctx.apply_filters(filtro_canais_padrao(CANAIS_PADRAO), col_map)
+ctx.apply_filters(filtro_canais_padrao(CANAIS_VISIVEIS_OVERVIEW), col_map)
 
 # ---------------------------------------------------------------------------
 # Carga (período atual + período anterior para deltas)
 # ---------------------------------------------------------------------------
-df_all = safe_run(
-    lambda: get_mkt_funil(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_funil",
+df_kpc = safe_run(
+    lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_visao_geral_kpis_canal",
 )
-df = ctx.refilter(df_all, col_map) if not df_all.empty else df_all
-
-# Fontes deduplicadas (mesmo padrão de Visão Geral / ROAS-CAC):
-# - lp_form: total de leads validado (sem grão de canal)
-# - classificação consolidada: +12 / -12 / ambíguos por janela
-# - classif_canal: tabela "Por canal" com leads/qualif por canal (dedup)
-df_lp_funil_all = safe_run(
-    lambda: get_mkt_leads_funil_diario(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_funil_leads_diario",
+df_atividades = safe_run(
+    lambda: get_mkt_growth_atividades_canal(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_growth_atividades_canal",
 )
-df_classif_all = safe_run(
-    lambda: get_mkt_leads_classificacao(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_leads_classificacao",
-)
-df_classif_canal_all = safe_run(
-    lambda: get_mkt_leads_classif_canal(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_leads_classificacao (canal)",
-)
-
-# Detecta filtro = todos canais (mesma regra da Visão Geral / ROAS-CAC).
-# Quando filtro é parcial, KPIs caem para fallback (lp_form e classif não
-# têm grão de canal). A tabela "Por canal" usa classif_canal direto via
-# refilter (essa fonte tem coluna `canal`).
-canais_no_dado = (
-    set(df_all["canal"].dropna().astype(str).unique()) if not df_all.empty else set()
-)
-canais_sel = set(ctx.selections.get("canal") or [])
-filtro_todos_canais = (not canais_sel) or (canais_sel >= canais_no_dado)
-usar_lp_form = (
-    filtro_todos_canais
-    and df_lp_funil_all is not None
-    and not df_lp_funil_all.empty
-)
-usar_classif = (
-    filtro_todos_canais
-    and df_classif_all is not None
-    and not df_classif_all.empty
+df_vg_diario = safe_run(
+    lambda: get_mkt_visao_geral_diario(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_visao_geral_diario",
 )
 
 dias = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias - 1)
 
-df_prev_all = safe_run(
-    lambda: get_mkt_funil(prev_ini, prev_fim),
-    view_label="bi.vw_mkt_funil",
+df_kpc_prev = safe_run(
+    lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
+    view_label="mkt_visao_geral_kpis_canal",
 )
-df_prev = (
-    ctx.refilter(df_prev_all, col_map) if not df_prev_all.empty else df_prev_all
+df_atividades_prev = safe_run(
+    lambda: get_mkt_growth_atividades_canal(prev_ini, prev_fim),
+    view_label="mkt_growth_atividades_canal",
 )
-df_lp_funil_prev_all = safe_run(
-    lambda: get_mkt_leads_funil_diario(prev_ini, prev_fim),
-    view_label="bi.vw_funil_leads_diario",
-)
-df_classif_prev_all = safe_run(
-    lambda: get_mkt_leads_classificacao(prev_ini, prev_fim),
-    view_label="bi.vw_mkt_leads_classificacao",
-)
-
-# Para a tabela "Por canal" — refilter pelo canal selecionado pelo usuário
-df_classif_canal = (
-    ctx.refilter(df_classif_canal_all, col_map)
-    if not df_classif_canal_all.empty else df_classif_canal_all
-)
-
-# KPIs: dedup só quando filtro = todos canais
-df_lp_para_kpis = df_lp_funil_all if usar_lp_form else None
-df_classif_para_kpis = df_classif_all if usar_classif else None
-df_lp_para_kpis_prev = (
-    df_lp_funil_prev_all
-    if (usar_lp_form
-        and df_lp_funil_prev_all is not None
-        and not df_lp_funil_prev_all.empty)
-    else None
-)
-df_classif_para_kpis_prev = (
-    df_classif_prev_all
-    if (usar_classif
-        and df_classif_prev_all is not None
-        and not df_classif_prev_all.empty)
-    else None
-)
-
-k = funil_kpis(df, df_lp_para_kpis, df_classif_para_kpis)
-kp = funil_kpis(df_prev, df_lp_para_kpis_prev, df_classif_para_kpis_prev)
 
 # ---------------------------------------------------------------------------
-# Topo do funil — investimento, leads, qualificados, taxa qualif (4 cards)
+# Filtro de canal — mesma regra da Visão Geral / ROAS-CAC:
+#   vazio  ou  == lista canônica → todos os canais (filtro inativo)
+#   qualquer subset            → filtro ativo, soma só os selecionados
+# Quando inativo, soma TODAS as rows (inclusive 'Sem canal') — bate com o
+# total geral oficial.
+# ---------------------------------------------------------------------------
+canais_sel: list[str] = list(ctx.selections.get("canal") or [])
+canais_canonicos = set(CANAIS_VISIVEIS_OVERVIEW)
+filtro_canal_ativo = bool(canais_sel) and set(canais_sel) != canais_canonicos
+filtro_todos_canais = not filtro_canal_ativo
+
+k = funil_kpis_oficial(df_kpc, df_atividades,
+                       canais=canais_sel, todos_canais=filtro_todos_canais)
+kp = funil_kpis_oficial(df_kpc_prev, df_atividades_prev,
+                        canais=canais_sel, todos_canais=filtro_todos_canais)
+
+# ---------------------------------------------------------------------------
+# Topo do funil — Investimento, Leads, Qualif, Tx qualificação (4 cards)
 # ---------------------------------------------------------------------------
 section_title(
     "Topo do funil",
@@ -147,7 +112,7 @@ with c1:
         "Investimento",
         brl(k["investimento"], casas=2),
         delta_pct=delta_pct(k["investimento"], kp["investimento"]),
-        hint="canais filtrados no período",
+        hint="canais filtrados · vw_mkt_overview (oficial)",
         accent=True,
     )
 with c2:
@@ -155,15 +120,15 @@ with c2:
         "Leads",
         int_br(k["leads"]),
         delta_pct=delta_pct(k["leads"], kp["leads"]),
-        hint="lp_form.leads · únicos",
+        hint="únicos · regra oficial Visão Geral",
     )
 with c3:
     metric_card_v2(
         "Leads qualificados",
         int_br(k["leads_qualificados"]),
         delta_pct=delta_pct(k["leads_qualificados"], kp["leads_qualificados"]),
-        hint=f"+12: {int_br(k['leads_qualif_mais_12'])} · "
-             f"-12: {int_br(k['leads_qualif_menos_12'])}",
+        hint=f"+12: {int_br(k['leads_mais_12'])} · "
+             f"-12: {int_br(k['leads_menos_12'])}",
     )
 with c4:
     metric_card_v2(
@@ -174,75 +139,93 @@ with c4:
     )
 
 # ---------------------------------------------------------------------------
-# Meio do funil — deals, deals ganhos, taxas (4 cards)
+# Meio do funil — Agendamentos, Comparecimentos, Vendas, Vendas novas (4 cards)
 # ---------------------------------------------------------------------------
-section_title("Meio do funil", "lead → deal → venda")
+section_title("Meio do funil", "lead → reunião → venda")
 
 m1, m2, m3, m4 = st.columns(4, gap="small")
 with m1:
     metric_card_v2(
-        "Deals",
-        int_br(k["deals"]),
-        delta_pct=delta_pct(k["deals"], kp["deals"]),
-        hint="deals atribuídos no Zoho",
+        "Agendamentos",
+        int_br(k["agendamentos"]),
+        delta_pct=delta_pct(k["agendamentos"], kp["agendamentos"]),
+        hint=f"taxa {pct(k['tx_lead_agend'], casas=1)} · zoho_activities",
     )
 with m2:
     metric_card_v2(
-        "Deals ganhos",
-        int_br(k["deals_ganhos"]),
-        delta_pct=delta_pct(k["deals_ganhos"], kp["deals_ganhos"]),
-        hint="stage = 'Ganho'",
+        "Comparecimentos",
+        int_br(k["comparecimentos"]),
+        delta_pct=delta_pct(k["comparecimentos"], kp["comparecimentos"]),
+        hint=f"taxa {pct(k['tx_agend_compar'], casas=1)} · status='Concluída'",
     )
 with m3:
     metric_card_v2(
-        "Tx lead → deal",
-        pct(k["tx_lead_deal"], casas=2),
-        delta_pct=delta_pct(k["tx_lead_deal"], kp["tx_lead_deal"]),
-        hint="deals ÷ leads",
+        "Vendas (totais)",
+        int_br(k["vendas"]),
+        delta_pct=delta_pct(k["vendas"], kp["vendas"]),
+        hint="stage Ganho/Fechado Ganho · todos os tipos de venda",
     )
 with m4:
     metric_card_v2(
-        "Tx deal → venda",
-        pct(k["tx_deal_venda"], casas=2),
-        delta_pct=delta_pct(k["tx_deal_venda"], kp["tx_deal_venda"]),
-        hint="vendas ÷ deals",
+        "Vendas novas",
+        int_br(k["vendas_novas"]),
+        delta_pct=delta_pct(k["vendas_novas"], kp["vendas_novas"]),
+        hint=f"tipo_venda='Novo cliente' · "
+             f"taxa {pct(k['tx_lead_venda'], casas=1)} dos leads",
+        accent=True,
     )
 
 # ---------------------------------------------------------------------------
-# Fim do funil — vendas, receita, CPL (3 cards)
+# Fim do funil — Receita, Montante, CPL (3 cards)
 # ---------------------------------------------------------------------------
-section_title("Fim do funil", "vendas e custo")
+section_title("Fim do funil", "valor gerado e custo de aquisição")
 
 f1, f2, f3 = st.columns(3, gap="small")
 with f1:
     metric_card_v2(
-        "Vendas",
-        int_br(k["vendas"]),
-        delta_pct=delta_pct(k["vendas"], kp["vendas"]),
-        hint="stage 'Ganho' com data_compra",
-        accent=True,
+        "Receita total",
+        brl(k["valor_receita"], casas=2),
+        delta_pct=delta_pct(k["valor_receita"], kp["valor_receita"]),
+        hint=f"SUM(receita) zoho_deals · ticket "
+             f"{brl(k['ticket_medio'], casas=2) if k['ticket_medio'] else '—'}",
     )
 with f2:
     metric_card_v2(
-        "Receita",
-        brl(k["valor_receita"], casas=2),
-        delta_pct=delta_pct(k["valor_receita"], kp["valor_receita"]),
-        hint="receita atribuída via odam.v_attribution",
+        "Montante total",
+        brl(k["montante"], casas=2),
+        delta_pct=delta_pct(k["montante"], kp["montante"]),
+        hint="SUM(amount) zoho_deals",
     )
 with f3:
     metric_card_v2(
         "CPL",
-        brl(k["cpl"], casas=2),
+        brl(k["cpl"], casas=2) if k["cpl"] else "—",
         delta_pct=delta_pct(k["cpl"], kp["cpl"]),
         hint="invest ÷ leads",
     )
 
-# ---------------------------------------------------------------------------
-# Funil visual com drop-off entre estágios
-# ---------------------------------------------------------------------------
-section_title("Funil visual", "queda percentual entre estágios destaca gargalos")
+if filtro_canal_ativo:
+    st.caption(
+        "ℹ️ Filtro de canal ativo — KPIs exibem a parcela atribuída aos canais "
+        "selecionados. Vendas sem correspondência de lead entram como **Sem "
+        "canal** e ficam fora quando o filtro é específico. A **Evolução "
+        "diária** continua mostrando o total geral."
+    )
 
-labels, values = funil_estagios(k)
+# ---------------------------------------------------------------------------
+# Funil visual com drop-off entre estágios (6 etapas)
+# Investimento entra com escala R$ — somado como contagem no Plotly funnel
+# fica distorcido. Mantemos só as 5 etapas de contagem (Leads → Vendas novas)
+# no chart e exibimos o invest no card e na evolução diária.
+# ---------------------------------------------------------------------------
+section_title("Funil visual",
+              "leads → vendas novas · queda percentual entre estágios")
+
+labels_full, values_full = funil_estagios_oficial(k)
+# Drop "Investimento" (índice 0) do funnel chart — escala incompatível.
+labels = labels_full[1:]
+values = values_full[1:]
+
 if all(v == 0 for v in values):
     st.info("Sem dados no período para os canais selecionados.")
 else:
@@ -252,11 +235,12 @@ else:
     )
 
 # ---------------------------------------------------------------------------
-# Evolução diária — invest (barra) + leads/deals/vendas (linhas)
+# Evolução diária — sempre TOTAL GERAL (alinhado com Visão Geral / ROAS-CAC)
 # ---------------------------------------------------------------------------
-section_title("Evolução diária", "investimento × leads × deals × vendas")
+section_title("Evolução diária",
+              "investimento × leads × qualificados × vendas novas")
 
-diario = funil_diario(df)
+diario = funil_diario_oficial(df_vg_diario)
 if diario.empty:
     st.info("Sem dados diários no período.")
 else:
@@ -279,24 +263,24 @@ else:
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} leads<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
-        x=diario["data_ref"], y=diario["deals"], name="Deals",
-        line=dict(color=PALETTE["blue"], width=2.2, dash="dash"),
-        mode="lines+markers+text", marker=dict(size=6),
-        text=last_point_text(diario["deals"], int_br),
-        textposition="top center",
-        textfont=dict(color=PALETTE["blue"], size=11, family="Inter"),
-        yaxis="y2",
-        hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} deals<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=diario["data_ref"], y=diario["vendas"], name="Vendas",
-        # Roxo vibrante (#7C3AED) — distingue Vendas de Leads (vinho) e
-        # Deals (azul). O verde anterior se misturava com o azul.
-        line=dict(color="#7C3AED", width=2.2, dash="dot"),
+        x=diario["data_ref"], y=diario["leads_qualificados"],
+        name="Qualificados",
+        line=dict(color="#7C3AED", width=2.2, dash="dash"),
         mode="lines+markers+text", marker=dict(size=6, color="#7C3AED"),
-        text=last_point_text(diario["vendas"], int_br),
+        text=last_point_text(diario["leads_qualificados"], int_br),
         textposition="top center",
         textfont=dict(color="#7C3AED", size=11, family="Inter"),
+        yaxis="y2",
+        hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} qualif<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=diario["data_ref"], y=diario["vendas_novas"], name="Vendas novas",
+        line=dict(color=PALETTE["gold_bright"], width=2.2, dash="dot"),
+        mode="lines+markers+text",
+        marker=dict(size=6, color=PALETTE["gold_bright"]),
+        text=last_point_text(diario["vendas_novas"], int_br),
+        textposition="top center",
+        textfont=dict(color=PALETTE["gold_bright"], size=11, family="Inter"),
         yaxis="y2",
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} vendas<extra></extra>",
     ))
@@ -329,13 +313,25 @@ else:
     st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Tabela por canal — todos canais selecionados, mesmo zerados
+# Tabela por canal — preserva canais sem dado quando o filtro inclui canais
+# canônicos sem volume (Pinterest, LinkedIn, etc.)
 # ---------------------------------------------------------------------------
-section_title("Por canal", "métricas consolidadas · canais selecionados")
+section_title("Por canal",
+              "métricas consolidadas · canais selecionados (inclui Sem canal "
+              "quando filtro = todos)")
 
-canais_visiveis = ctx.selections.get("canal") or list(CANAIS_PADRAO)
-by_canal = funil_por_canal(
-    df, canais_visiveis=canais_visiveis, df_classif_canal=df_classif_canal
+if filtro_canal_ativo:
+    canais_visiveis = canais_sel
+else:
+    # Todos canais: mostra todos os canais que aparecem em df_kpc (incluindo
+    # 'Sem canal'). Não força a lista canônica pra que 'Sem canal' apareça.
+    canais_visiveis = (
+        df_kpc["canal"].dropna().astype(str).unique().tolist()
+        if not df_kpc.empty else list(CANAIS_VISIVEIS_OVERVIEW)
+    )
+
+by_canal = funil_por_canal_oficial(
+    df_kpc, df_atividades, canais_visiveis=canais_visiveis,
 )
 
 if by_canal.empty:
@@ -350,11 +346,37 @@ else:
             "leads": st.column_config.NumberColumn("Leads", format="%d"),
             "leads_qualificados": st.column_config.NumberColumn(
                 "Qualif.", format="%d"),
-            "deals": st.column_config.NumberColumn("Deals", format="%d"),
+            "leads_mais_12": st.column_config.NumberColumn("+12", format="%d"),
+            "leads_menos_12": st.column_config.NumberColumn("-12", format="%d"),
+            "agendamentos": st.column_config.NumberColumn(
+                "Agend.", format="%d"),
+            "comparecimentos": st.column_config.NumberColumn(
+                "Compar.", format="%d"),
             "vendas": st.column_config.NumberColumn("Vendas", format="%d"),
+            "vendas_novas": st.column_config.NumberColumn(
+                "Vendas novas", format="%d"),
+            "montante": st.column_config.NumberColumn(
+                "Montante", format="R$ %.2f"),
             "valor_receita": st.column_config.NumberColumn(
                 "Receita", format="R$ %.2f"),
-            "conversoes_pct": st.column_config.NumberColumn(
-                "Conversões", format="%.2f%%"),
+            "cpl": st.column_config.NumberColumn("CPL", format="R$ %.2f"),
+            "tx_qualificacao": st.column_config.NumberColumn(
+                "Tx Qualif.", format="%.2f%%"),
+            "tx_lead_venda": st.column_config.NumberColumn(
+                "Tx Lead→Venda", format="%.2f%%"),
         },
     )
+
+st.caption(
+    "**Mesmas fontes da Visão Geral Marketing / Growth / ROAS-CAC.** "
+    "Investimento: `bi.vw_mkt_overview`. Leads / qualificados / +12 / -12: "
+    "regra oficial via `bi_mkt.vw_visao_geral_canal_base` (canal-aware, "
+    "classif canônica last_row). Agendamentos / Comparecimentos: leads "
+    "únicos com activity `Consulta`/`Indicação` em `zoho_activities` ligada "
+    "via `what_id` a deal pareado. Vendas / Vendas novas / Montante / "
+    "Receita: `zoho_deals` com priority match `zoho_id > session_id > "
+    "email`; deals sem lead correspondente entram como **Sem canal**. "
+    "**Vendas novas** = `tipo_venda='Novo cliente'` (caminho de aquisição). "
+    "Página migrada da `bi.mv_mkt_funil` (defasada) — não depende mais de "
+    "REFRESH manual."
+)

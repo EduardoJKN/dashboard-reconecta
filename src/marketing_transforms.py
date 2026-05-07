@@ -316,6 +316,289 @@ def overview_diario(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Visão Geral Marketing — versão executiva (regra validada em pgAdmin)
+# ---------------------------------------------------------------------------
+# Fonte: mkt_visao_geral_diario.sql (1 linha por data_ref, sem canal).
+# Métricas absolutas viram SUM. Ratios (ROAS / CPL / Taxa / Ticket) são
+# recalculados sobre o agregado do período — nunca média de ratios diários.
+
+_VISAO_GERAL_ZEROS = {
+    "investimento_total_geral": 0.0,
+    "leads_totais": 0,
+    "leads_qualificados": 0,
+    "leads_mais_12": 0,
+    "leads_menos_12": 0,
+    "vendas_total_geral": 0,
+    "vendas_novas_total_geral": 0,
+    "montante_total_geral": 0.0,
+    "receita_total_geral": 0.0,
+    # Derivados (recalculados sobre SUMs)
+    "roas_total_geral": 0.0,
+    "cpl": 0.0,
+    "cpl_qualificado": 0.0,
+    "taxa_qualificacao": 0.0,
+    "ticket_medio": 0.0,
+}
+
+_VISAO_GERAL_SUM_COLS = (
+    "investimento_total_geral",
+    "leads_totais", "leads_qualificados", "leads_mais_12", "leads_menos_12",
+    "vendas_total_geral", "vendas_novas_total_geral",
+    "montante_total_geral", "receita_total_geral",
+)
+
+
+def visao_geral_kpis(df: pd.DataFrame) -> dict:
+    """KPIs executivos da Visão Geral Marketing.
+
+    Fórmulas (recalculadas sobre SUMs do período):
+      roas_total_geral   = SUM(montante_total_geral)   / SUM(investimento_total_geral)
+      cpl                = SUM(investimento_total_geral) / SUM(leads_totais)
+      cpl_qualificado    = SUM(investimento_total_geral) / SUM(leads_qualificados)
+      taxa_qualificacao  = SUM(leads_qualificados) / SUM(leads_totais) * 100
+      ticket_medio       = SUM(montante_total_geral) / SUM(vendas_total_geral)
+    """
+    if df.empty:
+        return dict(_VISAO_GERAL_ZEROS)
+
+    s = {c: float(df[c].sum()) for c in _VISAO_GERAL_SUM_COLS if c in df.columns}
+
+    out = dict(_VISAO_GERAL_ZEROS)
+    out.update(s)
+
+    invest = s.get("investimento_total_geral", 0.0)
+    leads = s.get("leads_totais", 0)
+    qualif = s.get("leads_qualificados", 0)
+    montante = s.get("montante_total_geral", 0.0)
+    vendas = s.get("vendas_total_geral", 0)
+
+    out["roas_total_geral"] = _safe_div(montante, invest)
+    out["cpl"] = _safe_div(invest, leads)
+    out["cpl_qualificado"] = _safe_div(invest, qualif)
+    out["taxa_qualificacao"] = _safe_div(qualif, leads) * 100
+    out["ticket_medio"] = _safe_div(montante, vendas)
+
+    return out
+
+
+def visao_geral_diario(df: pd.DataFrame) -> pd.DataFrame:
+    """Série diária para o gráfico de tendência da Visão Geral Marketing.
+    Projeção direta — a fonte já é 1 linha por data_ref."""
+    cols = ["data_ref", "investimento_total_geral",
+            "leads_totais", "leads_qualificados"]
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    out = df.copy()
+    for c in cols[1:]:
+        if c not in out.columns:
+            out[c] = 0
+    return out[cols].sort_values("data_ref").reset_index(drop=True)
+
+
+_VISAO_GERAL_CANAL_LEAD_COLS = (
+    "leads_totais", "leads_qualificados", "leads_mais_12",
+    "leads_menos_12", "leads_nao_atua",
+)
+
+
+def visao_geral_canal_kpis(df: pd.DataFrame,
+                           canais: list[str] | None = None) -> dict:
+    """Agrega `mkt_visao_geral_canal.sql` somando os canais selecionados.
+
+    Recebe DataFrame com 1 linha por canal e a lista de canais a considerar
+    (vinda de `ctx.selections["canal"]`). Lista vazia ou None = todos os
+    canais. Usado pra sobrescrever os cards de Geração de leads quando o
+    usuário filtra canal — os demais cards (financeiro / eficiência)
+    continuam vindo de `visao_geral_kpis` (total geral comercial).
+    """
+    out = {c: 0 for c in _VISAO_GERAL_CANAL_LEAD_COLS}
+    if df.empty:
+        return out
+
+    sub = df if not canais else df[df["canal"].isin(canais)]
+    if sub.empty:
+        return out
+
+    for c in _VISAO_GERAL_CANAL_LEAD_COLS:
+        if c in sub.columns:
+            out[c] = int(sub[c].sum())
+    return out
+
+
+def visao_geral_kpis_canal(df: pd.DataFrame,
+                           canais: list[str] | None = None) -> dict:
+    """Agrega KPIs completos por canal (`mkt_visao_geral_kpis_canal.sql`).
+
+    Soma os absolutos dos canais selecionados (lista vazia/None = todos os
+    canais) e recalcula os ratios sobre os SUMs — exatamente como
+    `visao_geral_kpis` faz na fonte sem grão de canal. Saída tem o MESMO
+    shape de `visao_geral_kpis` (mais `leads_nao_atua`) pra que o page
+    code possa fazer drop-in replacement quando o filtro de canal estiver
+    ativo.
+
+    Inclui 'Sem canal' como um canal selecionável, p/ permitir focar
+    apenas em deals não atribuídos quando útil.
+    """
+    out = dict(_VISAO_GERAL_ZEROS)
+    out["leads_nao_atua"] = 0  # presente apenas no canal-grain
+
+    if df.empty:
+        return out
+
+    sub = df if not canais else df[df["canal"].isin(canais)]
+    if sub.empty:
+        return out
+
+    abs_cols = (
+        "investimento_total_geral",
+        "leads_totais", "leads_qualificados",
+        "leads_mais_12", "leads_menos_12", "leads_nao_atua",
+        "vendas_total_geral", "vendas_novas_total_geral",
+        "montante_total_geral", "receita_total_geral",
+    )
+    for c in abs_cols:
+        if c in sub.columns:
+            out[c] = float(sub[c].sum())
+
+    # Cast inteiros pra display
+    for c in ("leads_totais", "leads_qualificados", "leads_mais_12",
+              "leads_menos_12", "leads_nao_atua",
+              "vendas_total_geral", "vendas_novas_total_geral"):
+        out[c] = int(out[c])
+
+    invest = out["investimento_total_geral"]
+    leads = out["leads_totais"]
+    qualif = out["leads_qualificados"]
+    montante = out["montante_total_geral"]
+    vendas = out["vendas_total_geral"]
+
+    out["roas_total_geral"] = _safe_div(montante, invest)
+    out["cpl"] = _safe_div(invest, leads)
+    out["cpl_qualificado"] = _safe_div(invest, qualif)
+    out["taxa_qualificacao"] = _safe_div(qualif, leads) * 100
+    out["ticket_medio"] = _safe_div(montante, vendas)
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Visão Geral V2 — fonte única bi.vw_mkt_overview_daily_v2 (legado)
+# ---------------------------------------------------------------------------
+# Diferente da V1: não tem canal (grão = data_ref). Sem fallback condicional —
+# a view já consolida tudo. Métricas absolutas viram SUM; ratios (CPL/ROAS/Tx)
+# são recalculados sobre o agregado do período (não média de ratios diários).
+# Ainda exportado pra outras páginas; a Visão Geral Marketing migrou para
+# `visao_geral_kpis` acima.
+
+_OVERVIEW_V2_ZEROS = {
+    # Mídia
+    "investimento_midia": 0.0, "impressoes": 0, "alcance": 0,
+    "cliques": 0, "inline_link_clicks": 0,
+    # Atribuído
+    "leads_meta": 0, "pixel_lead": 0, "agendamentos_meta": 0,
+    "leads_reais": 0, "leads_qualificados": 0,
+    "leads_mais_12": 0, "leads_menos_12": 0, "leads_nao_atua": 0,
+    "deals_atribuidos": 0, "ganhos_atribuidos": 0,
+    "montante_atribuido": 0.0, "receita_atribuida": 0.0,
+    # Total geral comercial
+    "investimento_total_geral": 0.0,
+    "montante_total_geral": 0.0, "receita_total_geral": 0.0,
+    "vendas_novas_total_geral": 0, "vendas_total_geral": 0,
+    "oportunidades_total_geral": 0,
+    "perdidos_total_geral": 0, "cancelados_total_geral": 0,
+    # Ratios derivados (recalculados sobre SUMs)
+    "roas_montante_atribuido": 0.0, "roas_receita_atribuida": 0.0,
+    "roas_montante_total_geral": 0.0, "roas_receita_total_geral": 0.0,
+    "cpl_real": 0.0, "cpl_qualificado": 0.0, "cpl_mais_12": 0.0,
+    "taxa_qualif": 0.0,
+    "cobertura_montante": 0.0, "cobertura_receita": 0.0,
+    "dias_com_invest": 0, "investimento_dia": 0.0,
+}
+
+_OVERVIEW_V2_SUM_COLS = (
+    "investimento_midia", "impressoes", "alcance", "cliques", "inline_link_clicks",
+    "leads_meta", "pixel_lead", "agendamentos_meta",
+    "leads_reais", "leads_qualificados", "leads_mais_12", "leads_menos_12",
+    "leads_nao_atua",
+    "deals_atribuidos", "ganhos_atribuidos",
+    "montante_atribuido", "receita_atribuida",
+    "investimento_total_geral",
+    "montante_total_geral", "receita_total_geral",
+    "vendas_novas_total_geral", "vendas_total_geral", "oportunidades_total_geral",
+    "perdidos_total_geral", "cancelados_total_geral",
+)
+
+
+def overview_v2_kpis(df: pd.DataFrame) -> dict:
+    """KPIs consolidados da Visão Geral V2 para o período.
+
+    Fonte única: `bi.vw_mkt_overview_daily_v2` (grão data_ref, sem canal).
+    Métricas absolutas = SUM. Ratios (ROAS/CPL/Taxa/Cobertura) NÃO somam —
+    recalculados sobre os agregados:
+
+      cpl_real         = SUM(investimento_midia) / SUM(leads_reais)
+      cpl_qualificado  = SUM(investimento_midia) / SUM(leads_qualificados)
+      cpl_mais_12      = SUM(investimento_midia) / SUM(leads_mais_12)
+      taxa_qualif      = SUM(leads_qualificados) / SUM(leads_reais) * 100
+
+      roas_montante_atribuido    = SUM(montante_atribuido) / SUM(investimento_midia)
+      roas_receita_atribuida     = SUM(receita_atribuida)  / SUM(investimento_midia)
+      roas_montante_total_geral  = SUM(montante_total_geral) / SUM(investimento_total_geral)
+      roas_receita_total_geral   = SUM(receita_total_geral)  / SUM(investimento_total_geral)
+
+      cobertura_montante = SUM(montante_atribuido) / SUM(montante_total_geral) * 100
+      cobertura_receita  = SUM(receita_atribuida)  / SUM(receita_total_geral)  * 100
+    """
+    if df.empty:
+        return dict(_OVERVIEW_V2_ZEROS)
+
+    s = {c: float(df[c].sum()) for c in _OVERVIEW_V2_SUM_COLS if c in df.columns}
+
+    df_pos = df[df.get("investimento_midia", 0) > 0]
+    dias_invest = int(df_pos["data_ref"].nunique()) if not df_pos.empty else 0
+
+    out = dict(_OVERVIEW_V2_ZEROS)
+    out.update(s)
+    out["dias_com_invest"] = dias_invest
+    out["investimento_dia"] = _safe_div(s.get("investimento_midia", 0), dias_invest)
+
+    invest_midia = s.get("investimento_midia", 0)
+    invest_geral = s.get("investimento_total_geral", 0)
+
+    out["cpl_real"] = _safe_div(invest_midia, s.get("leads_reais", 0))
+    out["cpl_qualificado"] = _safe_div(invest_midia, s.get("leads_qualificados", 0))
+    out["cpl_mais_12"] = _safe_div(invest_midia, s.get("leads_mais_12", 0))
+    out["taxa_qualif"] = _safe_div(s.get("leads_qualificados", 0),
+                                   s.get("leads_reais", 0)) * 100
+
+    out["roas_montante_atribuido"] = _safe_div(s.get("montante_atribuido", 0), invest_midia)
+    out["roas_receita_atribuida"] = _safe_div(s.get("receita_atribuida", 0), invest_midia)
+    out["roas_montante_total_geral"] = _safe_div(s.get("montante_total_geral", 0), invest_geral)
+    out["roas_receita_total_geral"] = _safe_div(s.get("receita_total_geral", 0), invest_geral)
+
+    out["cobertura_montante"] = _safe_div(s.get("montante_atribuido", 0),
+                                          s.get("montante_total_geral", 0)) * 100
+    out["cobertura_receita"] = _safe_div(s.get("receita_atribuida", 0),
+                                         s.get("receita_total_geral", 0)) * 100
+
+    return out
+
+
+def overview_v2_diario(df: pd.DataFrame) -> pd.DataFrame:
+    """Série diária para o gráfico de tendência. Projeção direta — a fonte já
+    é 1 linha por data_ref. Garante presença das colunas consumidas pelo
+    gráfico e ordem cronológica."""
+    cols = ["data_ref", "investimento_midia", "leads_reais", "leads_qualificados"]
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    out = df.copy()
+    for c in cols[1:]:
+        if c not in out.columns:
+            out[c] = 0
+    return out[cols].sort_values("data_ref").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
 # Campanhas
 # ---------------------------------------------------------------------------
 
@@ -445,6 +728,89 @@ def campanhas_diario(df_camp: pd.DataFrame, df_funil: pd.DataFrame) -> pd.DataFr
     return out[cols].sort_values("data_ref").reset_index(drop=True)
 
 
+# ---------------------------------------------------------------------------
+# Campanhas — leads canal-aware via fonte oficial bi_mkt.vw_visao_geral_canal_base
+# ---------------------------------------------------------------------------
+# Substitui a regra antiga de leads (bi.vw_mkt_leads_classificacao + BOOL_OR
+# cross-day) pelos números da Visão Geral Marketing — que aplica canal_final
+# (last_row do e-mail) + classif_final canônica. As funções abaixo consomem
+# o DataFrame produzido por `mkt_campanhas_leads_canal_diario.sql`.
+
+_CAMPANHAS_LEADS_CANAL_ZEROS = {
+    "leads_totais": 0,
+    "leads_qualificados": 0,
+    "leads_mais_12": 0,
+    "leads_menos_12": 0,
+    "leads_nao_atua": 0,
+}
+
+
+def campanhas_leads_canal_kpis(df: pd.DataFrame,
+                               canais: list[str] | None = None) -> dict:
+    """Agrega o DF diário-por-canal para o período, filtrando os canais
+    selecionados pelo header da página. `canais=None` ou lista vazia agrega
+    todos os canais presentes no DF (Meta + Google + Pinterest no caso da
+    página Campanhas, já que o filtro de canais é restrito a esses).
+
+    Saída: dict com leads_totais, leads_qualificados, leads_mais_12,
+    leads_menos_12, leads_nao_atua (ints). Ratios (CPL/CPL qualif) são
+    recalculados pelo chamador, que tem o investimento."""
+    out = dict(_CAMPANHAS_LEADS_CANAL_ZEROS)
+    if df.empty:
+        return out
+
+    sub = df if not canais else df[df["canal"].isin(canais)]
+    if sub.empty:
+        return out
+
+    for c in _CAMPANHAS_LEADS_CANAL_ZEROS:
+        if c in sub.columns:
+            out[c] = int(sub[c].sum())
+    return out
+
+
+def campanhas_diario_v2(df_camp: pd.DataFrame,
+                        df_leads_canal_diario: pd.DataFrame,
+                        canais: list[str] | None = None) -> pd.DataFrame:
+    """Tendência diária — investimento (de bi.vw_mkt_campanhas) +
+    leads/qualif (de mkt_campanhas_leads_canal_diario.sql).
+
+    Substitui `campanhas_diario(df_camp, df_funil)` que usava bi.mv_mkt_funil
+    inflado. Aqui leads/qualif vêm da fonte oficial canal-aware, filtrada
+    pelos canais selecionados, agregada por data_ref. Outer join com
+    investimento diário; lacunas viram 0.
+
+    Retorna `[data_ref, investimento, leads, leads_qualificados]` —
+    schema compatível com o chart existente (basta atualizar a chamada)."""
+    cols = ["data_ref", "investimento", "leads", "leads_qualificados"]
+    if df_camp.empty and df_leads_canal_diario.empty:
+        return pd.DataFrame(columns=cols)
+
+    if df_camp.empty:
+        invest_diario = pd.DataFrame(columns=["data_ref", "investimento"])
+    else:
+        invest_diario = (df_camp.groupby("data_ref", as_index=False)
+                                .agg(investimento=("investimento", "sum")))
+
+    if df_leads_canal_diario.empty:
+        leads_diario = pd.DataFrame(columns=["data_ref", "leads",
+                                              "leads_qualificados"])
+    else:
+        sub = (df_leads_canal_diario if not canais
+               else df_leads_canal_diario[df_leads_canal_diario["canal"].isin(canais)])
+        leads_diario = (sub.groupby("data_ref", as_index=False)
+                           .agg(leads=("leads_totais", "sum"),
+                                leads_qualificados=("leads_qualificados", "sum")))
+
+    out = invest_diario.merge(leads_diario, on="data_ref", how="outer")
+    for c in ("investimento", "leads", "leads_qualificados"):
+        if c in out.columns:
+            out[c] = out[c].fillna(0)
+        else:
+            out[c] = 0
+    return out[cols].sort_values("data_ref").reset_index(drop=True)
+
+
 def campanhas_objetivo(df_camp: pd.DataFrame) -> pd.DataFrame:
     """Distribuição de investimento por objetivo. NULL/'' → 'Não informado'."""
     if df_camp.empty:
@@ -467,155 +833,157 @@ def campanhas_objetivo(df_camp: pd.DataFrame) -> pd.DataFrame:
 _ROAS_ZEROS = {
     "investimento": 0.0,
     "leads": 0.0, "leads_qualificados": 0.0,
-    "vendas": 0.0, "valor_venda": 0.0, "valor_receita": 0.0,
+    "vendas": 0.0, "vendas_novas": 0.0,
+    "valor_venda": 0.0, "montante": 0.0, "valor_receita": 0.0,
     "roas": 0.0, "cac": 0.0,
     "cpl": 0.0, "cpl_qualificado": 0.0,
     "ticket_medio": 0.0,
 }
 
 
-def roas_kpis(df: pd.DataFrame,
-              df_lp_funil: pd.DataFrame | None = None,
-              df_classif: pd.DataFrame | None = None) -> dict:
-    """KPIs consolidados a partir de `bi.mv_mkt_roas` (já filtrada por canal/período).
+def roas_kpis(df_kpc: pd.DataFrame,
+              df_leads_canal_diario: pd.DataFrame | None = None,
+              canais: list[str] | None = None,
+              todos_canais: bool = True) -> dict:
+    """KPIs ROAS/CAC alinhados com a Visão Geral oficial.
 
-    Fórmulas (recalculadas no agregado, não média de taxas diárias):
-      roas           = valor_receita / investimento
-      cac            = investimento / vendas
-      ticket_medio   = valor_receita / vendas
-      cpl            = investimento / leads
-      cpl_qualificado= investimento / leads_qualificados
+    Fonte unificada (mesma da Visão Geral / Growth):
+      - df_kpc: `mkt_visao_geral_kpis_canal.sql` — 1 linha por canal com
+        invest, vendas, vendas_novas, montante, receita atribuídos via
+        priority match `zoho_id > session_id > email`. Inclui 'Sem canal'
+        para deals não atribuídos.
+      - df_leads_canal_diario: `mkt_campanhas_leads_canal_diario.sql` —
+        leads/qualif por (data_ref, canal) via regra last_row + canal_final
+        (mesma fonte usada em Visão Geral / Campanhas).
 
-    Sobrescritas opcionais (mesmo padrão da Visão Geral, quando filtro = todos canais):
-    - `df_lp_funil` (de `bi.vw_funil_leads_diario`): sobrescreve `leads` pelo
-      SUM(leads_lp_unicos) — fonte validada para Leads totais.
-    - `df_classif` (de `bi.vw_mkt_leads_classificacao`): sobrescreve
-      `leads_qualificados` pelo `+12 + -12` deduplicado por janela.
-    CPL e CPL qualificado são recalculados com os denominadores corrigidos."""
-    if df.empty:
-        return dict(_ROAS_ZEROS)
+    Fórmulas (recalculadas no agregado, não média):
+      roas           = montante / invest
+      cac            = invest / vendas_novas       (caminho de aquisição)
+      cpl            = invest / leads
+      cpl_qualif     = invest / qualif
+      ticket_medio   = receita / vendas
 
-    invest = float(df["investimento"].sum())
-    leads = float(df["leads"].sum())
-    qualif = float(df["leads_qualificados"].sum())
-    vendas = float(df["vendas"].sum())
-    valor_v = float(df["valor_venda"].sum()) if "valor_venda" in df.columns else 0.0
-    valor_r = float(df["valor_receita"].sum())
+    `todos_canais=True` soma TODAS as rows (incluindo 'Sem canal') — bate
+    com o agregado da Visão Geral. Senão, soma apenas os canais
+    selecionados."""
+    out = dict(_ROAS_ZEROS)
+    if df_kpc is None or df_kpc.empty:
+        return out
 
-    out = {
-        "investimento": invest,
-        "leads": leads,
-        "leads_qualificados": qualif,
-        "vendas": vendas,
-        "valor_venda": valor_v,
-        "valor_receita": valor_r,
-        "roas": _safe_div(valor_r, invest),
-        "cac": _safe_div(invest, vendas),
-        "ticket_medio": _safe_div(valor_r, vendas),
-        "cpl": _safe_div(invest, leads),
-        "cpl_qualificado": _safe_div(invest, qualif),
-    }
+    sub_kpc = df_kpc if todos_canais else df_kpc[df_kpc["canal"].isin(canais or [])]
+    if not sub_kpc.empty:
+        invest = float(sub_kpc["investimento_total_geral"].sum())
+        vendas = float(sub_kpc["vendas_total_geral"].sum())
+        vendas_novas = float(sub_kpc["vendas_novas_total_geral"].sum())
+        montante = float(sub_kpc["montante_total_geral"].sum())
+        receita = float(sub_kpc["receita_total_geral"].sum())
 
-    # Override leads pela fonte validada (lp_form) quando disponível
-    if (df_lp_funil is not None
-            and not df_lp_funil.empty
-            and "leads_lp_unicos" in df_lp_funil.columns):
-        leads_validado = float(df_lp_funil["leads_lp_unicos"].sum())
-        out["leads"] = leads_validado
-        out["cpl"] = _safe_div(invest, leads_validado)
+        out["investimento"] = invest
+        out["vendas"] = vendas
+        out["vendas_novas"] = vendas_novas
+        out["valor_venda"] = montante
+        out["montante"] = montante
+        out["valor_receita"] = receita
+        out["roas"] = _safe_div(montante, invest)
+        out["cac"] = _safe_div(invest, vendas_novas)
+        out["ticket_medio"] = _safe_div(receita, vendas)
 
-    # Override qualif (+12+-12, ambíguos OUT) pela fonte deduplicada
-    if (df_classif is not None
-            and not df_classif.empty
-            and "lead_mais_12" in df_classif.columns
-            and "lead_menos_12" in df_classif.columns):
-        q_mais = float(df_classif["lead_mais_12"].sum())
-        q_menos = float(df_classif["lead_menos_12"].sum())
-        qualif_v = q_mais + q_menos
-        out["leads_qualificados"] = qualif_v
-        out["cpl_qualificado"] = _safe_div(invest, qualif_v)
+    # Leads/qualif vêm do canal-diario (regra last_row + canal_final).
+    # Se não passado, cai para os leads do próprio kpc (mesma fonte por canal,
+    # apenas sem grão diário) — mantém saída consistente.
+    if df_leads_canal_diario is not None and not df_leads_canal_diario.empty:
+        sub_l = (
+            df_leads_canal_diario if todos_canais
+            else df_leads_canal_diario[df_leads_canal_diario["canal"].isin(canais or [])]
+        )
+        if not sub_l.empty:
+            out["leads"] = float(sub_l["leads_totais"].sum())
+            out["leads_qualificados"] = float(sub_l["leads_qualificados"].sum())
+    elif not sub_kpc.empty:
+        out["leads"] = float(sub_kpc["leads_totais"].sum())
+        out["leads_qualificados"] = float(sub_kpc["leads_qualificados"].sum())
 
+    invest_d = out["investimento"]
+    out["cpl"] = _safe_div(invest_d, out["leads"])
+    out["cpl_qualificado"] = _safe_div(invest_d, out["leads_qualificados"])
     return out
 
 
-def roas_por_canal(
-    df: pd.DataFrame,
-    df_classif_canal: pd.DataFrame | None = None,
-) -> pd.DataFrame:
-    """Quebra por canal — uma linha por canal com KPIs consolidados.
+def roas_por_canal(df_kpc: pd.DataFrame,
+                   df_leads_canal_diario: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Quebra por canal — uma linha por canal alinhada com a Visão Geral.
 
-    Quando `df_classif_canal` é passado, sobrescreve `leads`, `leads_qualificados`,
-    `cpl` e `cpl_qualificado` pela fonte deduplicada validada
-    (`bi.vw_mkt_leads_classificacao` agregada por canal). Vendas/CAC/ROAS/Receita
-    continuam de `bi.mv_mkt_roas`.
-
-    Estrutura: OUTER JOIN — preserva canais que existem só num lado.
-    Mesma política de fallback V1 da Visão Geral: se `df_classif_canal` for
-    None/vazio, cai para os valores INFLADOS de `mv_mkt_roas` (originados em
-    `vw_mkt_overview`)."""
+    Invest / vendas / vendas_novas / montante / receita: `df_kpc`
+    (`mkt_visao_geral_kpis_canal.sql`).
+    Leads / qualificados: `df_leads_canal_diario`
+    (`mkt_campanhas_leads_canal_diario.sql`) somando todas as datas por
+    canal — mesma fonte usada em Visão Geral. Quando ausente, cai para os
+    leads do próprio `df_kpc` (mesma fonte sem grão diário).
+    """
     cols = ["canal", "investimento", "leads", "leads_qualificados",
-            "vendas", "valor_receita",
+            "vendas", "vendas_novas", "valor_venda", "valor_receita",
             "roas", "cac", "cpl", "cpl_qualificado"]
 
-    has_paid = not df.empty
-    has_dedup = (
-        df_classif_canal is not None
-        and not df_classif_canal.empty
-        and {"canal", "lead_mais_12", "lead_menos_12", "leads_unicos_canal"}
-            .issubset(df_classif_canal.columns)
-    )
-
-    if not has_paid and not has_dedup:
+    has_kpc = df_kpc is not None and not df_kpc.empty
+    has_leads = (df_leads_canal_diario is not None
+                 and not df_leads_canal_diario.empty)
+    if not has_kpc and not has_leads:
         return pd.DataFrame(columns=cols)
 
-    # Lado paid (mv_mkt_roas) — invest/leads_overview/qualif_overview/vendas/receita
-    if has_paid:
-        paid = df.groupby("canal", as_index=False).agg(
-            investimento=("investimento", "sum"),
-            leads_overview=("leads", "sum"),
-            leads_qualificados_overview=("leads_qualificados", "sum"),
-            vendas=("vendas", "sum"),
-            valor_receita=("valor_receita", "sum"),
-        )
+    if has_kpc:
+        kpc = df_kpc[["canal",
+                      "investimento_total_geral",
+                      "leads_totais",
+                      "leads_qualificados",
+                      "vendas_total_geral",
+                      "vendas_novas_total_geral",
+                      "montante_total_geral",
+                      "receita_total_geral"]].copy()
+        kpc = kpc.rename(columns={
+            "investimento_total_geral": "investimento",
+            "leads_totais": "leads_kpc",
+            "leads_qualificados": "leads_qualificados_kpc",
+            "vendas_total_geral": "vendas",
+            "vendas_novas_total_geral": "vendas_novas",
+            "montante_total_geral": "valor_venda",
+            "receita_total_geral": "valor_receita",
+        })
     else:
-        paid = pd.DataFrame(columns=["canal", "investimento", "leads_overview",
-                                       "leads_qualificados_overview",
-                                       "vendas", "valor_receita"])
+        kpc = pd.DataFrame(columns=["canal", "investimento", "leads_kpc",
+                                     "leads_qualificados_kpc", "vendas",
+                                     "vendas_novas", "valor_venda",
+                                     "valor_receita"])
 
-    # Lado dedup (vw_mkt_leads_classificacao com canal)
-    if has_dedup:
-        dedup = df_classif_canal[
-            ["canal", "leads_unicos_canal", "lead_mais_12", "lead_menos_12"]
-        ].copy()
+    if has_leads:
+        leads_canal = (df_leads_canal_diario.groupby("canal", as_index=False)
+                       .agg(leads=("leads_totais", "sum"),
+                            leads_qualificados=("leads_qualificados", "sum")))
     else:
-        dedup = pd.DataFrame(
-            columns=["canal", "leads_unicos_canal", "lead_mais_12", "lead_menos_12"]
-        )
+        leads_canal = pd.DataFrame(columns=["canal", "leads",
+                                             "leads_qualificados"])
 
-    # OUTER JOIN — preserva canais de qualquer lado
-    agg = paid.merge(dedup, on="canal", how="outer")
-    for c in ("investimento", "leads_overview", "leads_qualificados_overview",
-              "vendas", "valor_receita",
-              "leads_unicos_canal", "lead_mais_12", "lead_menos_12"):
-        if c in agg.columns:
-            agg[c] = agg[c].fillna(0)
+    agg = kpc.merge(leads_canal, on="canal", how="outer")
+    if "leads" not in agg.columns:
+        agg["leads"] = 0.0
+    if "leads_qualificados" not in agg.columns:
+        agg["leads_qualificados"] = 0.0
+    # Fallback para canais que existem em kpc mas não no daily (ou vice-versa)
+    agg["leads"] = agg["leads"].fillna(agg.get("leads_kpc", 0)).fillna(0)
+    agg["leads_qualificados"] = (
+        agg["leads_qualificados"].fillna(agg.get("leads_qualificados_kpc", 0))
+                                  .fillna(0)
+    )
+    for c in ("investimento", "vendas", "vendas_novas",
+              "valor_venda", "valor_receita"):
+        if c not in agg.columns:
+            agg[c] = 0.0
+        agg[c] = agg[c].fillna(0)
 
-    # Escolha de fonte de leads/qualif: dedup quando disponível
-    if has_dedup:
-        agg["leads"] = agg["leads_unicos_canal"]
-        # Qualif. = +12 + -12 (ambíguos OUT por construção do dedup)
-        agg["leads_qualificados"] = agg["lead_mais_12"] + agg["lead_menos_12"]
-    else:
-        # ⚠ FALLBACK V1: valores INFLADOS — voltar para Opção B na V2.
-        agg["leads"] = agg["leads_overview"]
-        agg["leads_qualificados"] = agg["leads_qualificados_overview"]
-
-    # Métricas derivadas — usam o leads/qualif escolhido acima
     agg["roas"] = agg.apply(
-        lambda r: _safe_div(r["valor_receita"], r["investimento"]), axis=1
+        lambda r: _safe_div(r["valor_venda"], r["investimento"]), axis=1
     )
     agg["cac"] = agg.apply(
-        lambda r: _safe_div(r["investimento"], r["vendas"]), axis=1
+        lambda r: _safe_div(r["investimento"], r["vendas_novas"]), axis=1
     )
     agg["cpl"] = agg.apply(
         lambda r: _safe_div(r["investimento"], r["leads"]), axis=1
@@ -624,31 +992,37 @@ def roas_por_canal(
         lambda r: _safe_div(r["investimento"], r["leads_qualificados"]), axis=1
     )
 
-    # Limpa helpers
-    helper_cols = ["leads_overview", "leads_qualificados_overview",
-                   "leads_unicos_canal", "lead_mais_12", "lead_menos_12"]
-    agg = agg.drop(columns=[c for c in helper_cols if c in agg.columns])
-
     return (agg[cols]
-            .sort_values("valor_receita", ascending=False)
+            .sort_values("investimento", ascending=False)
             .reset_index(drop=True))
 
 
-def roas_diario(df: pd.DataFrame) -> pd.DataFrame:
-    """Série diária consolidada (todos os canais filtrados somados): invest,
-    receita, vendas, ROAS por dia."""
+def roas_diario(df_vg: pd.DataFrame) -> pd.DataFrame:
+    """Série diária consolidada para a Tendência diária da página ROAS/CAC.
+
+    Fonte: `mkt_visao_geral_diario.sql` (mesma usada na Visão Geral) — já 1
+    linha por `data_ref` com investimento total geral e financeiro
+    (montante / receita) de zoho_deals. Como o grão é só por data, a série
+    é sempre **total geral** (não filtra por canal) — alinhado com a
+    política da Visão Geral. Filtros de canal afetam cards e tabela por
+    canal abaixo, não a tendência."""
     cols = ["data_ref", "investimento", "valor_receita", "vendas", "roas"]
-    if df.empty:
+    if df_vg is None or df_vg.empty:
         return pd.DataFrame(columns=cols)
-    agg = df.groupby("data_ref", as_index=False).agg(
-        investimento=("investimento", "sum"),
-        valor_receita=("valor_receita", "sum"),
-        vendas=("vendas", "sum"),
-    )
-    agg["roas"] = agg.apply(
+
+    out = df_vg.rename(columns={
+        "investimento_total_geral": "investimento",
+        "receita_total_geral": "valor_receita",
+        "vendas_total_geral": "vendas",
+    }).copy()
+    for c in ("investimento", "valor_receita", "vendas"):
+        if c not in out.columns:
+            out[c] = 0
+        out[c] = out[c].fillna(0)
+    out["roas"] = out.apply(
         lambda r: _safe_div(r["valor_receita"], r["investimento"]), axis=1
     )
-    return agg[cols].sort_values("data_ref").reset_index(drop=True)
+    return out[cols].sort_values("data_ref").reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +1265,247 @@ def funil_por_canal(df: pd.DataFrame,
 
     return (agg[cols]
             .sort_values("valor_receita", ascending=False)
+            .reset_index(drop=True))
+
+
+# ---------------------------------------------------------------------------
+# Funil Marketing — versão "oficial" alinhada com Visão Geral / Growth
+# ---------------------------------------------------------------------------
+# Substitui os transforms `funil_*` que dependiam de bi.mv_mkt_funil. Lê das
+# fontes oficiais já validadas:
+#   - mkt_visao_geral_kpis_canal.sql      (invest, leads, qualif, +12, -12,
+#                                          vendas total, vendas novas,
+#                                          montante, receita por canal)
+#   - mkt_campanhas_leads_canal_diario.sql(leads/+12/-12 diários por canal —
+#                                          opcional pra séries por canal-dia)
+#   - mkt_growth_atividades_canal.sql     (agendamentos / comparecimentos
+#                                          por canal — versão otimizada)
+#   - mkt_visao_geral_diario.sql          (série diária total geral pra
+#                                          tendência — mesma política da
+#                                          Visão Geral / ROAS-CAC)
+# Os transforms antigos (funil_kpis, funil_diario, etc.) continuam neste
+# arquivo porque `views/marketing_campaigns.py` ainda os consome; apenas a
+# página Funil deixa de usá-los.
+
+_FUNIL_OFICIAL_ZEROS = {
+    "investimento": 0.0,
+    "leads": 0, "leads_qualificados": 0,
+    "leads_mais_12": 0, "leads_menos_12": 0,
+    "agendamentos": 0, "comparecimentos": 0,
+    "vendas": 0,                  # = vendas_total_geral (Ganho/Fechado Ganho)
+    "vendas_novas": 0,            # = vendas_novas_total_geral (Novo cliente)
+    "montante": 0.0, "valor_receita": 0.0,
+    "tx_qualificacao": 0.0,
+    "tx_lead_agend": 0.0, "tx_agend_compar": 0.0,
+    "tx_compar_venda": 0.0, "tx_lead_venda": 0.0,
+    "cpl": 0.0, "cpl_qualificado": 0.0,
+    "ticket_medio": 0.0,
+}
+
+
+def funil_kpis_oficial(df_kpc: pd.DataFrame,
+                       df_atividades_canal: pd.DataFrame | None = None,
+                       canais: list[str] | None = None,
+                       todos_canais: bool = True) -> dict:
+    """KPIs do funil de marketing alinhados com a regra oficial.
+
+    Fontes (mesmas das outras páginas):
+      - df_kpc: `mkt_visao_geral_kpis_canal.sql` — invest + leads + financeiro
+        por canal (incluindo 'Sem canal' para deals não atribuídos).
+      - df_atividades_canal: `mkt_growth_atividades_canal.sql` — leads únicos
+        com activity Consulta/Indicação ligada via deal pareado.
+
+    Quando `todos_canais=True`, soma TODAS as rows (inclusive 'Sem canal') —
+    bate com o agregado da Visão Geral. Senão soma só os canais selecionados.
+
+    Taxas recalculadas no agregado, não média de taxas:
+      tx_qualificacao   = qualif / leads * 100
+      tx_lead_agend     = agend / leads * 100
+      tx_agend_compar   = compar / agend * 100
+      tx_compar_venda   = vendas_novas / compar * 100
+      tx_lead_venda     = vendas_novas / leads * 100
+      cpl               = invest / leads
+      cpl_qualificado   = invest / qualif
+      ticket_medio      = receita / vendas
+    """
+    out = dict(_FUNIL_OFICIAL_ZEROS)
+    if df_kpc is None or df_kpc.empty:
+        return out
+
+    sub_kpc = df_kpc if todos_canais else df_kpc[df_kpc["canal"].isin(canais or [])]
+    if not sub_kpc.empty:
+        out["investimento"]       = float(sub_kpc["investimento_total_geral"].sum())
+        out["leads"]              = int(sub_kpc["leads_totais"].sum())
+        out["leads_qualificados"] = int(sub_kpc["leads_qualificados"].sum())
+        out["leads_mais_12"]      = int(sub_kpc["leads_mais_12"].sum())
+        out["leads_menos_12"]     = int(sub_kpc["leads_menos_12"].sum())
+        out["vendas"]             = int(sub_kpc["vendas_total_geral"].sum())
+        out["vendas_novas"]       = int(sub_kpc["vendas_novas_total_geral"].sum())
+        out["montante"]           = float(sub_kpc["montante_total_geral"].sum())
+        out["valor_receita"]      = float(sub_kpc["receita_total_geral"].sum())
+
+    # Atividades — leads únicos por activity Consulta/Indicação
+    if df_atividades_canal is not None and not df_atividades_canal.empty:
+        sub_act = (df_atividades_canal if todos_canais
+                   else df_atividades_canal[df_atividades_canal["canal"].isin(canais or [])])
+        if not sub_act.empty:
+            out["agendamentos"] = int(sub_act["leads_com_agendamento"].sum())
+            out["comparecimentos"] = int(sub_act["leads_com_comparecimento"].sum())
+
+    invest, leads, qualif, agend, compar = (
+        out["investimento"], out["leads"], out["leads_qualificados"],
+        out["agendamentos"], out["comparecimentos"],
+    )
+    novas, vendas, receita = (
+        out["vendas_novas"], out["vendas"], out["valor_receita"]
+    )
+
+    out["tx_qualificacao"] = _safe_div(qualif, leads) * 100
+    out["tx_lead_agend"]   = _safe_div(agend, leads) * 100
+    out["tx_agend_compar"] = _safe_div(compar, agend) * 100
+    out["tx_compar_venda"] = _safe_div(novas, compar) * 100
+    out["tx_lead_venda"]   = _safe_div(novas, leads) * 100
+    out["cpl"]             = _safe_div(invest, leads)
+    out["cpl_qualificado"] = _safe_div(invest, qualif)
+    out["ticket_medio"]    = _safe_div(receita, vendas)
+    return out
+
+
+def funil_estagios_oficial(k: dict) -> tuple[list[str], list[float]]:
+    """6 etapas do funil de marketing oficial:
+        Investimento → Leads → Qualificados → Agendamentos →
+        Comparecimentos → Vendas novas
+
+    Investimento entra como R$ (escala diferente das contagens) — a UI
+    decide se renderiza como Plotly funnel separado ou como um valor de
+    contexto. Mesma estrutura de `funil_estagios` legado, apenas com etapas
+    alinhadas à regra oficial Visão Geral / Growth (Vendas = Novo cliente)."""
+    labels = ["Investimento", "Leads", "Qualificados",
+              "Agendamentos", "Comparecimentos", "Vendas novas"]
+    values = [
+        float(k.get("investimento", 0) or 0),
+        float(k.get("leads", 0) or 0),
+        float(k.get("leads_qualificados", 0) or 0),
+        float(k.get("agendamentos", 0) or 0),
+        float(k.get("comparecimentos", 0) or 0),
+        float(k.get("vendas_novas", 0) or 0),
+    ]
+    return labels, values
+
+
+def funil_diario_oficial(df_vg_diario: pd.DataFrame) -> pd.DataFrame:
+    """Série diária pra tendência do Funil Marketing.
+
+    Fonte: `mkt_visao_geral_diario.sql` — 1 linha por data_ref com invest,
+    leads, qualif, vendas (totais + novas), montante e receita do total
+    geral. Mesma política da Visão Geral / ROAS-CAC: tendência diária NÃO
+    filtra por canal (é total geral). Filtros de canal afetam cards e
+    tabela por canal."""
+    cols = ["data_ref", "investimento", "leads", "leads_qualificados",
+            "vendas", "vendas_novas", "valor_receita"]
+    if df_vg_diario is None or df_vg_diario.empty:
+        return pd.DataFrame(columns=cols)
+    out = df_vg_diario.rename(columns={
+        "investimento_total_geral": "investimento",
+        "leads_totais": "leads",
+        "vendas_total_geral": "vendas",
+        "vendas_novas_total_geral": "vendas_novas",
+        "receita_total_geral": "valor_receita",
+    }).copy()
+    for c in ("investimento", "leads", "leads_qualificados",
+              "vendas", "vendas_novas", "valor_receita"):
+        if c not in out.columns:
+            out[c] = 0
+        out[c] = out[c].fillna(0)
+    return out[cols].sort_values("data_ref").reset_index(drop=True)
+
+
+def funil_por_canal_oficial(
+    df_kpc: pd.DataFrame,
+    df_atividades_canal: pd.DataFrame | None = None,
+    canais_visiveis: list[str] | None = None,
+) -> pd.DataFrame:
+    """Tabela por canal — 1 linha por canal alinhada com Visão Geral.
+
+    Invest / leads / qualif / +12 / -12 / vendas / vendas_novas / montante /
+    receita: `df_kpc` (`mkt_visao_geral_kpis_canal.sql`).
+    Agendamentos / comparecimentos: `df_atividades_canal`
+    (`mkt_growth_atividades_canal.sql` otimizada).
+
+    `canais_visiveis` força reindex pra preservar canais sem dado (ex.:
+    Pinterest com invest mas sem vendas) — mesma política das outras
+    tabelas. Quando None, devolve só os canais com dados."""
+    cols = ["canal", "investimento", "leads", "leads_qualificados",
+            "leads_mais_12", "leads_menos_12",
+            "agendamentos", "comparecimentos",
+            "vendas", "vendas_novas",
+            "montante", "valor_receita",
+            "cpl", "tx_qualificacao", "tx_lead_venda"]
+
+    has_kpc = df_kpc is not None and not df_kpc.empty
+    has_act = (df_atividades_canal is not None
+               and not df_atividades_canal.empty)
+    if not has_kpc and not has_act:
+        return pd.DataFrame(columns=cols)
+
+    if has_kpc:
+        agg = df_kpc[["canal",
+                      "investimento_total_geral",
+                      "leads_totais", "leads_qualificados",
+                      "leads_mais_12", "leads_menos_12",
+                      "vendas_total_geral", "vendas_novas_total_geral",
+                      "montante_total_geral", "receita_total_geral"]].copy()
+        agg = agg.rename(columns={
+            "investimento_total_geral": "investimento",
+            "leads_totais": "leads",
+            "vendas_total_geral": "vendas",
+            "vendas_novas_total_geral": "vendas_novas",
+            "montante_total_geral": "montante",
+            "receita_total_geral": "valor_receita",
+        })
+    else:
+        agg = pd.DataFrame(columns=["canal", "investimento", "leads",
+                                     "leads_qualificados",
+                                     "leads_mais_12", "leads_menos_12",
+                                     "vendas", "vendas_novas",
+                                     "montante", "valor_receita"])
+
+    if has_act:
+        act = df_atividades_canal[["canal", "leads_com_agendamento",
+                                    "leads_com_comparecimento"]].copy()
+        act = act.rename(columns={
+            "leads_com_agendamento": "agendamentos",
+            "leads_com_comparecimento": "comparecimentos",
+        })
+        agg = agg.merge(act, on="canal", how="outer")
+    else:
+        agg["agendamentos"] = 0
+        agg["comparecimentos"] = 0
+
+    if canais_visiveis:
+        seed = pd.DataFrame({"canal": list(canais_visiveis)})
+        agg = seed.merge(agg, on="canal", how="left")
+
+    for c in ("investimento", "leads", "leads_qualificados",
+              "leads_mais_12", "leads_menos_12",
+              "agendamentos", "comparecimentos",
+              "vendas", "vendas_novas",
+              "montante", "valor_receita"):
+        if c in agg.columns:
+            agg[c] = agg[c].fillna(0)
+
+    agg["cpl"] = agg.apply(
+        lambda r: _safe_div(r["investimento"], r["leads"]), axis=1
+    )
+    agg["tx_qualificacao"] = agg.apply(
+        lambda r: _safe_div(r["leads_qualificados"], r["leads"]) * 100, axis=1
+    )
+    agg["tx_lead_venda"] = agg.apply(
+        lambda r: _safe_div(r["vendas_novas"], r["leads"]) * 100, axis=1
+    )
+
+    return (agg[cols]
+            .sort_values("investimento", ascending=False)
             .reset_index(drop=True))
 
 
@@ -1581,6 +2196,137 @@ def compara_criativos(kA: dict, kB: dict) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Funil POR CRIATIVO (Criativos · seção "Funil do criativo selecionado")
+# ---------------------------------------------------------------------------
+# Consome `mkt_criativo_funil.sql` — 1 linha por `ad_name_norm` com mídia +
+# leads + funil até venda nova. Match `ad_name = utm_content`; granularidade
+# `ad_name` consolida múltiplos `ad_id` do mesmo criativo. Caveats explicados
+# na caption obrigatória da página.
+
+_CRI_FUNIL_ZEROS = {
+    "ad_name_norm": "",
+    "ad_name": "",
+    "campaign_name": None, "adset_name": None,
+    "effective_status": None,
+    "quality_ranking": None, "engagement_ranking": None, "conversion_ranking": None,
+    "thumbnail_url": None, "image_url": None, "permalink_url": None,
+    "qtd_adids": 0,
+    "investimento": 0.0, "impressoes": 0, "cliques": 0,
+    "link_clicks": 0, "alcance": 0,
+    "ctr": 0.0, "cpc": 0.0,
+    "leads_totais": 0, "leads_qualificados": 0,
+    "leads_mais_12": 0, "leads_menos_12": 0, "leads_nao_atua": 0,
+    "agendamentos": 0, "comparecimentos": 0, "vendas_novas": 0,
+    "taxa_qualificacao": 0.0, "taxa_mais_12": 0.0,
+    "taxa_lead_agendamento": 0.0, "taxa_lead_comparecimento": 0.0,
+    "taxa_lead_venda_nova": 0.0,
+    "cpl": 0.0, "cpl_mais_12": 0.0, "cac": 0.0,
+}
+
+
+def lista_criativos_funil(df_funil: pd.DataFrame,
+                          sort_by: str = "investimento") -> pd.DataFrame:
+    """Opções para o selectbox da seção "Funil do criativo selecionado".
+
+    Retorna `(ad_name_norm, ad_name, label)` ordenado por `investimento`
+    desc (default) ou `leads_totais` desc. Label sugerido:
+        "ad_name · R$ invest · X leads"
+    Criativos com `investimento=0` E `leads_totais=0` ficam fora — sem nada
+    pra mostrar. Se o usuário quiser ver criativos zerados, expandir o
+    filtro futuramente."""
+    if df_funil is None or df_funil.empty:
+        return pd.DataFrame(columns=["ad_name_norm", "ad_name", "label"])
+
+    df = df_funil.copy()
+    # Mantém só criativos com algum sinal (mídia OU leads). Zero-zero seria
+    # ruído no dropdown.
+    mask = (df["investimento"].fillna(0) > 0) | (df["leads_totais"].fillna(0) > 0)
+    df = df[mask]
+    if df.empty:
+        return pd.DataFrame(columns=["ad_name_norm", "ad_name", "label"])
+
+    sort_col = sort_by if sort_by in df.columns else "investimento"
+    df = df.sort_values(
+        [sort_col, "leads_totais", "ad_name"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+
+    def _label(row) -> str:
+        nome = (row.get("ad_name") or row.get("ad_name_norm") or "(sem nome)")
+        nome_short = nome if len(nome) <= 56 else nome[:53] + "…"
+        invest = float(row.get("investimento") or 0)
+        leads = int(row.get("leads_totais") or 0)
+        # Format pt-BR: "R$ 16.967" (sem casas), milhar com ponto.
+        if invest >= 1:
+            inv_fmt = f"R$ {invest:,.0f}".replace(",", ".")
+        else:
+            inv_fmt = "R$ 0"
+        return f"{nome_short} · {inv_fmt} · {leads} lead{'s' if leads != 1 else ''}"
+
+    df["label"] = df.apply(_label, axis=1)
+    return df[["ad_name_norm", "ad_name", "label"]]
+
+
+def criativo_funil_kpis(df_funil: pd.DataFrame,
+                        ad_name_norm: str | None) -> dict:
+    """Projeção da row do criativo selecionado num dict pronto pra UI.
+
+    Retorna dict com TODAS as colunas do SQL (mídia + leads + funil +
+    derivadas), mais `tem_dados=True/False` indicando se a seleção bateu
+    em alguma row. Quando `ad_name_norm` é None ou não existe no df, devolve
+    o dict de zeros — UI escolhe se mostra placeholder ou esconde."""
+    out = dict(_CRI_FUNIL_ZEROS)
+    out["tem_dados"] = False
+    if df_funil is None or df_funil.empty or not ad_name_norm:
+        return out
+    sub = df_funil[df_funil["ad_name_norm"] == ad_name_norm]
+    if sub.empty:
+        return out
+
+    row = sub.iloc[0].to_dict()
+    out["tem_dados"] = True
+    # Casts (numpy → python) pra evitar surpresas no Streamlit/format.
+    int_cols = ("qtd_adids", "impressoes", "cliques", "link_clicks", "alcance",
+                "leads_totais", "leads_qualificados", "leads_mais_12",
+                "leads_menos_12", "leads_nao_atua",
+                "agendamentos", "comparecimentos", "vendas_novas")
+    float_cols = ("investimento", "ctr", "cpc",
+                  "taxa_qualificacao", "taxa_mais_12",
+                  "taxa_lead_agendamento", "taxa_lead_comparecimento",
+                  "taxa_lead_venda_nova",
+                  "cpl", "cpl_mais_12", "cac")
+    for c in row:
+        if c in int_cols:
+            out[c] = int(row[c]) if row[c] is not None else 0
+        elif c in float_cols:
+            out[c] = float(row[c]) if row[c] is not None else 0.0
+        else:
+            out[c] = row[c]
+    return out
+
+
+def criativo_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
+    """7 etapas do funil de um criativo: Impressões → Cliques → Leads →
+    Leads +12 → Agendamentos → Comparecimentos → Vendas novas.
+
+    Mesma forma de `growth_funil_etapas` (a UI reusa o renderer), mas a
+    última etapa é **Vendas novas** (`tipo_venda='Novo cliente'`) — caminho
+    de aquisição alinhado com Visão Geral / Growth."""
+    labels = ["Impressões", "Cliques", "Leads", "Leads +12",
+              "Agendamentos", "Comparecimentos", "Vendas novas"]
+    values = [
+        float(k.get("impressoes", 0) or 0),
+        float(k.get("cliques", 0) or 0),
+        float(k.get("leads_totais", 0) or 0),
+        float(k.get("leads_mais_12", 0) or 0),
+        float(k.get("agendamentos", 0) or 0),
+        float(k.get("comparecimentos", 0) or 0),
+        float(k.get("vendas_novas", 0) or 0),
+    ]
+    return labels, values
+
+
+# ---------------------------------------------------------------------------
 # Social (Instagram orgânico)
 # ---------------------------------------------------------------------------
 
@@ -1719,26 +2465,29 @@ _CAMPANHA_KPIS_ZEROS = {
 
 def campanha_kpis(df_camp: pd.DataFrame,
                   campaign_id: str | None,
-                  df_resultados: pd.DataFrame | None = None) -> dict:
+                  df_resultados: pd.DataFrame | None = None,
+                  df_leads_por_utm: pd.DataFrame | None = None) -> dict:
     """KPIs de UMA campanha específica.
 
     Plataforma vem de `df_camp` (vw_mkt_campanhas, fonte oficial de invest/
-    imp/cliques/alcance). Resultado atribuído vem de `df_resultados` (de
-    `odam.mart_ad_funnel_daily` agregado por campaign_id).
+    imp/cliques/alcance).
 
-    Quando a campanha não tem linha em `df_resultados`:
-    - `tem_resultados=False`
-    - métricas de resultado e derivadas ficam como `None` (formatador
-      mostra "—")
+    **Leads, Leads +12, Leads -12, CPL e CPL +12** vêm de `df_leads_por_utm`
+    (`mkt_campanhas_leads_por_utm.sql`) via match
+    `LOWER(BTRIM(campaign_name)) = campaign_norm`. Quando o nome da campanha
+    não casa com nenhum `utm_campaign`, esses 5 campos ficam como `None`
+    ("—" no formatador).
 
-    Quando tem linha mas denominador é zero (ex.: leads=0 → CPL):
-    - métrica de resultado mostra `0` (zero real, dado existe)
-    - derivada com denominador zero vira `None` (formatador "—" — não
-      faz sentido R$ 0,00 quando não há leads pra calcular CPL)
+    Demais métricas de resultado (Agendamentos, Comparecimentos, No-shows,
+    Deals, Deals ganhos, Vendas, Receita) e derivadas (CAC, ROAS) continuam
+    vindo de `df_resultados` (mart `odam.mart_ad_funnel_daily` agregada por
+    `campaign_id`). `tem_resultados` = True quando a mart tem linha pra
+    aquela campanha; controla o badge "✓ resultados atribuídos" /
+    "⚠ sem atribuição no mart" no app.
 
     Derivadas (CPL/CPL+12/CAC/ROAS) usam INVEST OFICIAL (df_camp) sobre
-    contagens da mart — NUNCA o `valor_venda` ou spend da mart como
-    investimento."""
+    contagens da fonte canônica de leads (UTM ou mart) — NUNCA o
+    `valor_venda` ou spend da mart como investimento."""
     out = dict(_CAMPANHA_KPIS_ZEROS)
 
     if df_camp.empty or not campaign_id:
@@ -1775,7 +2524,10 @@ def campanha_kpis(df_camp: pd.DataFrame,
         "cpc": _safe_div(invest, clk),
     })
 
-    # ---- Resultado (mart) — merge interno por campaign_id ---------------
+    # ---- Resultado (mart) — agendamentos/vendas/receita/CAC/ROAS --------
+    # Leads/+12/-12/CPL/CPL+12 são SOBRESCRITOS abaixo pelo source UTM
+    # quando houver match — a mart entra apenas como fallback pra leads
+    # quando o nome da campanha não casa com nenhum utm_campaign.
     has_results = (
         df_resultados is not None
         and not df_resultados.empty
@@ -1812,11 +2564,50 @@ def campanha_kpis(df_camp: pd.DataFrame,
             out["valor_venda"] = valor_v
             out["valor_receita"] = valor_r
 
-            # Derivadas — denominador zero vira None ("—" no formatador)
+            # Derivadas mart — denominador zero vira None ("—" no formatador)
             out["cpl"] = (invest / leads_total) if leads_total > 0 else None
             out["cpl_mais_12"] = (invest / leads_mais_12) if leads_mais_12 > 0 else None
             out["cac"] = (invest / vendas) if vendas > 0 else None
             out["roas"] = (valor_r / invest) if invest > 0 else None
+
+    # ---- Override de leads via UTM (fonte canônica alinhada com a tabela
+    # "Campanhas ativas" e com a Visão Geral). Acontece DEPOIS do bloco
+    # mart pra que substitua tanto valores existentes (mart presente)
+    # quanto preencha quando mart não tinha linha. Se UTM também não bate,
+    # leads/CPL ficam None (sem fallback pra mart aqui — coerente com o
+    # comportamento da tabela "Campanhas ativas").
+    has_utm_leads = (
+        df_leads_por_utm is not None
+        and not df_leads_por_utm.empty
+        and "campaign_norm" in df_leads_por_utm.columns
+    )
+    if has_utm_leads and isinstance(name, str) and name:
+        name_norm = name.strip().lower()
+        match_utm = df_leads_por_utm[df_leads_por_utm["campaign_norm"] == name_norm]
+        if not match_utm.empty:
+            r_utm = match_utm.iloc[0]
+            leads_total_utm   = float(r_utm.get("leads_totais", 0) or 0)
+            leads_mais_12_utm = float(r_utm.get("leads_mais_12", 0) or 0)
+            leads_menos_12_utm = float(r_utm.get("leads_menos_12", 0) or 0)
+
+            out["leads_total"]    = leads_total_utm
+            out["leads_mais_12"]  = leads_mais_12_utm
+            out["leads_menos_12"] = leads_menos_12_utm
+            out["cpl"] = (
+                invest / leads_total_utm if leads_total_utm > 0 else None
+            )
+            out["cpl_mais_12"] = (
+                invest / leads_mais_12_utm if leads_mais_12_utm > 0 else None
+            )
+        else:
+            # Nome não casou com nenhum utm_campaign — força "—" pra que o
+            # comparativo deixe explícito que UTM não atribuiu (em vez de
+            # mostrar resíduos da mart, que poderiam confundir).
+            out["leads_total"]    = None
+            out["leads_mais_12"]  = None
+            out["leads_menos_12"] = None
+            out["cpl"]            = None
+            out["cpl_mais_12"]    = None
 
     return out
 
@@ -1875,6 +2666,361 @@ def _venc_numerico(a, b, regra: str | None) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Comparar páginas / variantes (MVP — só leads, sem visitas/conversão real)
+# ---------------------------------------------------------------------------
+# Fonte: mkt_paginas_variantes.sql (email-level: 1 row por lead submission
+# com classif_final, page_url, utm_*, *_id já normalizados).
+# Filter (campanha, criativo) + aggregate por (page_pathname, lp_variante)
+# acontece em Python via `agregar_paginas_variantes()`. As funções
+# `lista_paginas_variantes`, `pagina_variante_kpis` e
+# `compara_paginas_variantes` consomem a tabela JÁ AGREGADA.
+# Sem visit-tracking ligável a leads no DB hoje — esse bloco mostra apenas
+# geração/qualidade/origem de leads, não conversão da página.
+
+# Separador na chave composta. Improvável em paths/variantes reais.
+_PV_SEP = "||"
+
+
+def _pv_chave(page_pathname: str | None, lp_variante: str | None) -> str:
+    p = page_pathname if (page_pathname and str(page_pathname).strip()) else "(sem path)"
+    v = lp_variante if (lp_variante and str(lp_variante).strip()) else "(sem variante)"
+    return f"{p}{_PV_SEP}{v}"
+
+
+def _uniq(g: pd.DataFrame, col: str) -> list:
+    """Lista distinta ordenada da coluna `col` em `g`. Vazia se col ausente."""
+    if col not in g.columns:
+        return []
+    return sorted(g[col].dropna().unique().tolist())
+
+
+def _principal(g: pd.DataFrame, col: str):
+    """Valor de `col` com mais e-mails distintos no grupo. None se ausente."""
+    if col not in g.columns:
+        return None
+    s = g.dropna(subset=[col]).groupby(col)["email_norm"].nunique()
+    return s.sort_values(ascending=False).index[0] if not s.empty else None
+
+
+def _pv_classif_flags(classif_series: pd.Series) -> dict:
+    """Conta distintos (já é distinto por construção quando vem de
+    drop_duplicates email_norm) por categoria de classificação.
+    Regras idênticas à Visão Geral / Campanhas."""
+    s = classif_series.fillna("")
+    is_mais = s.str.contains(r"\+12", regex=True, na=False)
+    is_menos = s.str.contains(r"-12", regex=True, na=False)
+    is_nao_atua = s.str.contains("não atua", case=False, regex=False, na=False)
+    return {
+        "leads_qualificados": int((is_mais | is_menos).sum()),
+        "leads_mais_12":      int(is_mais.sum()),
+        "leads_menos_12":     int(is_menos.sum()),
+        "leads_nao_atua":     int(is_nao_atua.sum()),
+    }
+
+
+def agregar_paginas_variantes(df_raw: pd.DataFrame,
+                              campanha: str | None = None,
+                              origem: str | None = None,
+                              midia: str | None = None,
+                              timezone: str | None = None,
+                              device_type: str | None = None,
+                              criativo: str | None = None,
+                              ) -> pd.DataFrame:
+    """Aplica filtros opcionais e agrega o DF email-level por
+    (page_pathname, lp_variante). Para cada kwarg, valor `None` ou
+    "Todas"/"Todos" desliga o filtro.
+
+    Filtros mapeiam pra colunas do DF:
+        campanha     → utm_campaign
+        origem       → utm_source
+        midia        → utm_medium
+        timezone     → timezone
+        device_type  → device_type
+        criativo     → utm_content (mantido p/ compat futura — UI atual
+                       não expõe mais; o detalhamento de criativos está
+                       só no expander)
+
+    Saída — 1 row por (path, variante) com:
+      leads_totais, leads_qualificados, leads_mais_12, leads_menos_12,
+      leads_nao_atua, taxa_qualificacao, taxa_mais_12,
+      page_url_exemplo,
+      canais / origens (list utm_source distintos — SEMPRE iguais),
+      campanhas, criativos, midias, fusos, dispositivos (listas distintas),
+      qtd_campanhas, qtd_criativos, qtd_midias, qtd_fusos, qtd_dispositivos,
+      campanha_principal, criativo_principal (mais e-mails distintos).
+
+    Period-distinct: contagens de e-mail usam `nunique()` após filtrar.
+    Classificações: cada e-mail entra com a classif_final (já canônica
+    no SQL — ÚLTIMA row do e-mail no período)."""
+    cols = ["page_pathname", "lp_variante",
+            "leads_totais", "leads_qualificados",
+            "leads_mais_12", "leads_menos_12", "leads_nao_atua",
+            "taxa_qualificacao", "taxa_mais_12",
+            # CRM / Zoho
+            "leads_no_crm", "leads_ganhos",
+            "cobertura_crm", "taxa_lead_ganho",
+            # Origem
+            "page_url_exemplo",
+            "canais", "campanhas", "criativos",
+            "midias", "fusos", "dispositivos",
+            "qtd_campanhas", "qtd_criativos",
+            "qtd_midias", "qtd_fusos", "qtd_dispositivos",
+            "campanha_principal", "criativo_principal"]
+    if df_raw.empty:
+        return pd.DataFrame(columns=cols)
+
+    sub = df_raw.copy()
+    sub["page_pathname"] = sub["page_pathname"].fillna("(sem path)")
+    sub["lp_variante"]   = sub["lp_variante"].fillna("(sem variante)")
+
+    # Filtros — None ou "Todas/Todos" são no-op. A coluna correspondente
+    # precisa existir no DF (proteção contra schema desatualizado).
+    _SENT = {None, "", "Todas", "Todos"}
+    pares = (
+        (campanha,    "utm_campaign"),
+        (origem,      "utm_source"),
+        (midia,       "utm_medium"),
+        (timezone,    "timezone"),
+        (device_type, "device_type"),
+        (criativo,    "utm_content"),
+    )
+    for valor, col in pares:
+        if valor not in _SENT and col in sub.columns:
+            sub = sub[sub[col] == valor]
+
+    if sub.empty:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for (path, variante), g in sub.groupby(["page_pathname", "lp_variante"],
+                                            dropna=False):
+        # E-mails distintos no grupo + sua classif_final canônica
+        emails_classif = g.drop_duplicates("email_norm")[["email_norm",
+                                                          "classif_final"]]
+        leads_totais = len(emails_classif)
+        flags = _pv_classif_flags(emails_classif["classif_final"])
+
+        # CRM/Zoho — flags são por lead submission no SQL; um e-mail é
+        # considerado "no CRM" se QUALQUER de suas submissões pareou com
+        # deal (any() sobre o flag por email).
+        if "flag_tem_deal" in g.columns and "flag_ganho" in g.columns:
+            email_flags = (
+                g.groupby("email_norm")[["flag_tem_deal", "flag_ganho"]]
+                 .any()
+            )
+            leads_no_crm = int(email_flags["flag_tem_deal"].sum())
+            leads_ganhos = int(email_flags["flag_ganho"].sum())
+        else:
+            leads_no_crm = 0
+            leads_ganhos = 0
+
+        # URL exemplo = mais recente do grupo
+        page_url_exemplo = (
+            g.sort_values("created_at", ascending=False).iloc[0].get("page_url")
+        )
+        if pd.isna(page_url_exemplo):
+            page_url_exemplo = None
+
+        canais       = _uniq(g, "utm_source")
+        campanhas    = _uniq(g, "utm_campaign")
+        criativos    = _uniq(g, "utm_content")
+        midias       = _uniq(g, "utm_medium")
+        fusos        = _uniq(g, "timezone")
+        dispositivos = _uniq(g, "device_type")
+
+        rows.append({
+            "page_pathname": path,
+            "lp_variante":   variante,
+            "leads_totais":  int(leads_totais),
+            **flags,
+            "taxa_qualificacao": _safe_div(flags["leads_qualificados"], leads_totais) * 100,
+            "taxa_mais_12":      _safe_div(flags["leads_mais_12"], leads_totais) * 100,
+            # CRM/Zoho
+            "leads_no_crm":   leads_no_crm,
+            "leads_ganhos":   leads_ganhos,
+            "cobertura_crm":     _safe_div(leads_no_crm, leads_totais) * 100,
+            "taxa_lead_ganho":   _safe_div(leads_ganhos, leads_totais) * 100,
+            "page_url_exemplo": page_url_exemplo,
+            "canais": canais,
+            "campanhas": campanhas,
+            "criativos": criativos,
+            "midias": midias,
+            "fusos": fusos,
+            "dispositivos": dispositivos,
+            "qtd_campanhas":     len(campanhas),
+            "qtd_criativos":     len(criativos),
+            "qtd_midias":        len(midias),
+            "qtd_fusos":         len(fusos),
+            "qtd_dispositivos":  len(dispositivos),
+            "campanha_principal": _principal(g, "utm_campaign"),
+            "criativo_principal": _principal(g, "utm_content"),
+        })
+
+    return (pd.DataFrame(rows, columns=cols)
+              .sort_values("leads_totais", ascending=False)
+              .reset_index(drop=True))
+
+
+def lista_paginas_variantes(df_agg: pd.DataFrame) -> pd.DataFrame:
+    """Lista única para popular os selectboxes Página A/B. Espera o DF
+    JÁ AGREGADO por `agregar_paginas_variantes()`.
+
+    Colunas: chave, page_pathname, lp_variante, label, leads_totais.
+    Label: "<path> · <variante> · <N> leads"."""
+    cols = ["chave", "page_pathname", "lp_variante", "label", "leads_totais"]
+    if df_agg.empty:
+        return pd.DataFrame(columns=cols)
+
+    out = df_agg.copy()
+    out["chave"] = out.apply(
+        lambda r: _pv_chave(r["page_pathname"], r["lp_variante"]), axis=1
+    )
+    out["label"] = (
+        out["page_pathname"].astype(str) + " · "
+        + out["lp_variante"].astype(str) + " · "
+        + out["leads_totais"].astype("int64").astype(str) + " leads"
+    )
+    return (out[cols]
+            .sort_values("leads_totais", ascending=False)
+            .reset_index(drop=True))
+
+
+_PAGINA_VARIANTE_ZEROS = {
+    "page_pathname": "—", "lp_variante": "—",
+    "leads_totais": 0,
+    "leads_qualificados": 0,
+    "leads_mais_12": 0,
+    "leads_menos_12": 0,
+    "leads_nao_atua": 0,
+    "taxa_qualificacao": 0.0,
+    "taxa_mais_12": 0.0,
+    # CRM / Zoho
+    "leads_no_crm": 0,
+    "leads_ganhos": 0,
+    "cobertura_crm": 0.0,
+    "taxa_lead_ganho": 0.0,
+    # Origem (preenchidos quando a chave é encontrada na DF agregada)
+    "qtd_campanhas": 0,
+    "qtd_criativos": 0,
+    "qtd_midias": 0,
+    "qtd_fusos": 0,
+    "qtd_dispositivos": 0,
+    "campanha_principal": None,
+    "criativo_principal": None,
+    "page_url_exemplo": None,
+    "canais": [],
+    "campanhas": [],
+    "criativos": [],
+    "midias": [],
+    "fusos": [],
+    "dispositivos": [],
+}
+
+
+def pagina_variante_kpis(df_agg: pd.DataFrame, chave: str | None) -> dict:
+    """KPIs de UMA (page_pathname, lp_variante) identificada pela chave
+    composta. Espera DF JÁ AGREGADO. Inclui campanha/criativo principal
+    e contagens de origem além das métricas de lead/classif."""
+    out = dict(_PAGINA_VARIANTE_ZEROS)
+    if df_agg.empty or not chave:
+        return out
+
+    sub = df_agg.copy()
+    sub["chave"] = sub.apply(
+        lambda r: _pv_chave(r["page_pathname"], r["lp_variante"]), axis=1
+    )
+    match = sub[sub["chave"] == chave]
+    if match.empty:
+        return out
+
+    r = match.iloc[0]
+    out.update({
+        "page_pathname": str(r["page_pathname"]),
+        "lp_variante":   str(r["lp_variante"]),
+        "leads_totais":       int(r["leads_totais"]),
+        "leads_qualificados": int(r["leads_qualificados"]),
+        "leads_mais_12":      int(r["leads_mais_12"]),
+        "leads_menos_12":     int(r["leads_menos_12"]),
+        "leads_nao_atua":     int(r["leads_nao_atua"]),
+        "taxa_qualificacao":  float(r["taxa_qualificacao"]),
+        "taxa_mais_12":       float(r["taxa_mais_12"]),
+        "leads_no_crm":       int(r.get("leads_no_crm", 0) or 0),
+        "leads_ganhos":       int(r.get("leads_ganhos", 0) or 0),
+        "cobertura_crm":      float(r.get("cobertura_crm", 0) or 0),
+        "taxa_lead_ganho":    float(r.get("taxa_lead_ganho", 0) or 0),
+        "qtd_campanhas":      int(r.get("qtd_campanhas", 0) or 0),
+        "qtd_criativos":      int(r.get("qtd_criativos", 0) or 0),
+        "qtd_midias":         int(r.get("qtd_midias", 0) or 0),
+        "qtd_fusos":          int(r.get("qtd_fusos", 0) or 0),
+        "qtd_dispositivos":   int(r.get("qtd_dispositivos", 0) or 0),
+        "campanha_principal": r.get("campanha_principal"),
+        "criativo_principal": r.get("criativo_principal"),
+        "page_url_exemplo":   r.get("page_url_exemplo"),
+        "canais":       list(r.get("canais") or []),
+        "campanhas":    list(r.get("campanhas") or []),
+        "criativos":    list(r.get("criativos") or []),
+        "midias":       list(r.get("midias") or []),
+        "fusos":        list(r.get("fusos") or []),
+        "dispositivos": list(r.get("dispositivos") or []),
+    })
+    return out
+
+
+# (label, key, regra de vencedor)
+# Maior é melhor: leads totais, qualificados, +12, taxas, qtd campanhas/criativos.
+# Sem vencedor para Leads -12, Não atua (interpretação ambígua) e para
+# Campanha/Criativo principal (categóricos).
+_COMPARA_PV_METRICAS = [
+    ("Leads totais",         "leads_totais",       "higher"),
+    ("Leads qualificados",   "leads_qualificados", "higher"),
+    ("Leads +12",            "leads_mais_12",      "higher"),
+    ("Leads -12",            "leads_menos_12",     None),
+    ("Não atua",             "leads_nao_atua",     None),
+    ("Taxa qualificação",    "taxa_qualificacao",  "higher"),
+    ("Taxa +12",             "taxa_mais_12",       "higher"),
+    # CRM / Zoho — conversão lead → funil comercial (NÃO conversão de página).
+    ("Leads no CRM",         "leads_no_crm",       "higher"),
+    ("Cobertura CRM",        "cobertura_crm",      "higher"),
+    ("Leads ganhos",         "leads_ganhos",       "higher"),
+    ("Taxa Lead → Ganho",    "taxa_lead_ganho",    "higher"),
+    # Origem
+    ("Qtd. campanhas",       "qtd_campanhas",      "higher"),
+    ("Qtd. criativos",       "qtd_criativos",      "higher"),
+    ("Campanha principal",   "campanha_principal", None),
+    ("Criativo principal",   "criativo_principal", None),
+    ("URL exemplo",          "page_url_exemplo",   None),
+]
+
+
+def compara_paginas_variantes(kA: dict, kB: dict) -> pd.DataFrame:
+    """Tabela comparativa A vs B no estilo `compara_campanhas`.
+
+    Colunas: metrica, valor_a, valor_b, delta_pct, vencedor.
+    Δ% = (B - A) / A × 100; None quando A=0, algum lado None, ou métrica
+    categórica (Campanha/Criativo principal). Vencedor segue
+    `_venc_numerico` (reusado de Comparar campanhas)."""
+    rows = []
+    for label, key, regra in _COMPARA_PV_METRICAS:
+        a = kA.get(key)
+        b = kB.get(key)
+        # Δ% só calcula entre valores numéricos
+        delta = None
+        if (a is not None and b is not None
+                and isinstance(a, (int, float))
+                and isinstance(b, (int, float))
+                and a != 0):
+            delta = (b - a) / a * 100
+        rows.append({
+            "metrica": label,
+            "valor_a": a,
+            "valor_b": b,
+            "delta_pct": delta,
+            "vencedor": _venc_numerico(a, b, regra),
+        })
+    return pd.DataFrame(rows)
+
+
 def compara_campanhas(kA: dict, kB: dict) -> pd.DataFrame:
     """Tabela comparativa entre 2 campanhas.
 
@@ -1910,6 +3056,326 @@ def compara_campanhas(kA: dict, kB: dict) -> pd.DataFrame:
             "bloco": bloco,
         })
 
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Comparar campanhas POR UTM — modelo herdado de "Comparar páginas / variantes"
+# ---------------------------------------------------------------------------
+# Substitui o comparativo antigo (campaign_id + odam.mart) por uma versão
+# baseada em utm_campaign + Zoho. Fonte primária: mkt_campanhas_leads_por_utm.sql
+# (já enriquecido com leads/CRM/vendas_novas via priority match). Plataforma
+# (invest/imp/cliques/alcance) vem de bi.vw_mkt_campanhas agregada por
+# campaign_name normalizado (LOWER+BTRIM) — mesmo match que enriquece
+# "Campanhas ativas".
+
+def agregar_campanhas_por_utm(df_pv_raw: pd.DataFrame,
+                              df_camp: pd.DataFrame,
+                              origem: str | None = None,
+                              midia: str | None = None,
+                              timezone: str | None = None,
+                              device_type: str | None = None) -> pd.DataFrame:
+    """Agrega o DF email-level (`mkt_paginas_variantes.sql`) por
+    `utm_campaign` e merge com plataforma de `df_camp`. Filtros opcionais
+    aplicam ANTES da agregação — afetam só esse bloco da página.
+
+    Saída — 1 row por utm_campaign (entre as que têm plataforma + leads):
+      campaign_norm, utm_campaign, canal,
+      investimento, impressoes, cliques, alcance, ctr, cpc,
+      leads_totais, leads_qualificados, leads_mais_12, leads_menos_12,
+      leads_nao_atua, taxa_qualificacao, taxa_mais_12,
+      leads_no_crm, leads_ganhos, vendas_novas, taxa_lead_venda_nova,
+      pagina_principal, variante_principal, criativo_principal,
+      page_url_exemplo,
+      paginas, variantes, criativos, origens, midias, fusos, dispositivos,
+      qtd_paginas, qtd_variantes, qtd_criativos.
+
+    Espelha `agregar_paginas_variantes` da Growth, mas com grão
+    utm_campaign + métricas de plataforma."""
+    cols = ["campaign_norm", "utm_campaign", "canal",
+            "investimento", "impressoes", "cliques", "alcance", "ctr", "cpc",
+            "leads_totais", "leads_qualificados",
+            "leads_mais_12", "leads_menos_12", "leads_nao_atua",
+            "taxa_qualificacao", "taxa_mais_12",
+            "leads_no_crm", "leads_ganhos", "vendas_novas",
+            "taxa_lead_venda_nova",
+            "pagina_principal", "variante_principal", "criativo_principal",
+            "page_url_exemplo",
+            "paginas", "variantes", "criativos",
+            "origens", "midias", "fusos", "dispositivos",
+            "qtd_paginas", "qtd_variantes", "qtd_criativos"]
+
+    if df_pv_raw is None or df_pv_raw.empty:
+        return pd.DataFrame(columns=cols)
+
+    sub = df_pv_raw.copy()
+    # Só leads com utm_campaign (caso contrário, "Sem utm" não faz sentido aqui)
+    sub = sub[sub["utm_campaign"].notna()
+              & (sub["utm_campaign"].astype(str).str.strip() != "")]
+    sub["campaign_norm"] = (
+        sub["utm_campaign"].astype(str).str.strip().str.lower()
+    )
+
+    # Filtros (None ou "Todas/Todos" são no-op).
+    _SENT = {None, "", "Todas", "Todos"}
+    pares = (
+        (origem,      "utm_source"),
+        (midia,       "utm_medium"),
+        (timezone,    "timezone"),
+        (device_type, "device_type"),
+    )
+    for valor, col in pares:
+        if valor not in _SENT and col in sub.columns:
+            sub = sub[sub[col] == valor]
+
+    if sub.empty:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for (cn, utm_disp), g in sub.groupby(
+            ["campaign_norm", "utm_campaign"], dropna=False):
+        # E-mails distintos no grupo + flags de classif/deal.
+        # Cada e-mail aparece com 1 deal (priority match) → drop_duplicates
+        # é seguro pra extrair flag_ganho/deal_tipo_venda únicos por e-mail.
+        emails = g.drop_duplicates("email_norm")[
+            ["email_norm", "classif_final",
+             "flag_tem_deal", "flag_ganho", "deal_tipo_venda"]
+        ]
+        leads_totais = len(emails)
+        flags = _pv_classif_flags(emails["classif_final"])
+
+        leads_no_crm = int(emails["flag_tem_deal"].fillna(False).sum())
+        leads_ganhos = int(emails["flag_ganho"].fillna(False).sum())
+        vendas_novas = int(
+            (emails["flag_ganho"].fillna(False)
+             & (emails["deal_tipo_venda"] == "Novo cliente")).sum()
+        )
+
+        # URL exemplo = mais recente do grupo
+        url_recente = (
+            g.sort_values("created_at", ascending=False).iloc[0].get("page_url")
+        )
+        if pd.isna(url_recente):
+            url_recente = None
+
+        paginas      = _uniq(g, "page_pathname")
+        variantes    = _uniq(g, "lp_variante")
+        criativos    = _uniq(g, "utm_content")
+        origens      = _uniq(g, "utm_source")
+        midias       = _uniq(g, "utm_medium")
+        fusos        = _uniq(g, "timezone")
+        dispositivos = _uniq(g, "device_type")
+
+        rows.append({
+            "campaign_norm": cn,
+            "utm_campaign":  utm_disp,
+            "leads_totais":      int(leads_totais),
+            **flags,
+            "taxa_qualificacao": _safe_div(flags["leads_qualificados"], leads_totais) * 100,
+            "taxa_mais_12":      _safe_div(flags["leads_mais_12"], leads_totais) * 100,
+            "leads_no_crm":      leads_no_crm,
+            "leads_ganhos":      leads_ganhos,
+            "vendas_novas":      vendas_novas,
+            "taxa_lead_venda_nova": _safe_div(vendas_novas, leads_totais) * 100,
+            "pagina_principal":  _principal(g, "page_pathname"),
+            "variante_principal": _principal(g, "lp_variante"),
+            "criativo_principal": _principal(g, "utm_content"),
+            "page_url_exemplo":  url_recente,
+            "paginas": paginas, "variantes": variantes, "criativos": criativos,
+            "origens": origens, "midias": midias, "fusos": fusos,
+            "dispositivos": dispositivos,
+            "qtd_paginas":    len(paginas),
+            "qtd_variantes":  len(variantes),
+            "qtd_criativos":  len(criativos),
+        })
+
+    df_agg = pd.DataFrame(rows)
+    if df_agg.empty:
+        return pd.DataFrame(columns=cols)
+
+    # Plataforma — só inclui campanhas que existem em df_camp (canal-filtered).
+    # Inner join descarta UTMs sem invest na plataforma (foco em paid).
+    if df_camp is None or df_camp.empty:
+        return pd.DataFrame(columns=cols)
+
+    camp = df_camp.copy()
+    camp["campaign_norm"] = (
+        camp["campaign_name"].fillna("").astype(str).str.strip().str.lower()
+    )
+    plat = camp.groupby("campaign_norm", as_index=False).agg(
+        investimento=("investimento", "sum"),
+        impressoes=("impressoes",   "sum"),
+        cliques=("cliques",         "sum"),
+        alcance=("alcance",         "sum"),
+    )
+    canal_per = (
+        camp.dropna(subset=["canal"])
+            .groupby("campaign_norm")["canal"]
+            .first()
+            .reset_index()
+    )
+    plat = plat.merge(canal_per, on="campaign_norm", how="left")
+    plat["ctr"] = plat.apply(
+        lambda r: _safe_div(r["cliques"], r["impressoes"]) * 100, axis=1
+    )
+    plat["cpc"] = plat.apply(
+        lambda r: _safe_div(r["investimento"], r["cliques"]), axis=1
+    )
+
+    df_agg = df_agg.merge(plat, on="campaign_norm", how="inner")
+    return (df_agg[cols]
+            .sort_values("leads_totais", ascending=False)
+            .reset_index(drop=True))
+
+
+def lista_campanhas_por_utm(df_agg: pd.DataFrame) -> pd.DataFrame:
+    """Lista de utm_campaign para popular selectboxes A/B.
+
+    Espera o DF agregado por `agregar_campanhas_por_utm`. Colunas:
+    campaign_norm, utm_campaign, label, leads_totais."""
+    cols = ["campaign_norm", "utm_campaign", "label", "leads_totais"]
+    if df_agg is None or df_agg.empty:
+        return pd.DataFrame(columns=cols)
+    out = df_agg.copy()
+    out["label"] = (
+        out["utm_campaign"].astype(str) + " · "
+        + out["leads_totais"].astype("int64").astype(str) + " leads"
+    )
+    return (out[cols]
+            .sort_values("leads_totais", ascending=False)
+            .reset_index(drop=True))
+
+
+_CAMPANHA_UTM_ZEROS = {
+    "campaign_norm": "—", "utm_campaign": "—", "canal": "—",
+    # Plataforma
+    "investimento": 0.0, "impressoes": 0.0, "cliques": 0.0,
+    "alcance": 0.0, "ctr": 0.0, "cpc": 0.0,
+    # Leads (regra Visão Geral)
+    "leads_totais": 0, "leads_qualificados": 0,
+    "leads_mais_12": 0, "leads_menos_12": 0, "leads_nao_atua": 0,
+    "taxa_qualificacao": 0.0, "taxa_mais_12": 0.0,
+    # CRM/Zoho
+    "leads_no_crm": 0, "leads_ganhos": 0,
+    "vendas_novas": 0, "taxa_lead_venda_nova": 0.0,
+    # Origem (página/variante/criativo + listas)
+    "pagina_principal": None, "variante_principal": None,
+    "criativo_principal": None, "page_url_exemplo": None,
+    "paginas": [], "variantes": [], "criativos": [],
+    "origens": [], "midias": [], "fusos": [], "dispositivos": [],
+    "qtd_paginas": 0, "qtd_variantes": 0, "qtd_criativos": 0,
+}
+
+
+def campanha_utm_kpis(df_agg: pd.DataFrame,
+                      campaign_norm: str | None) -> dict:
+    """KPIs de UMA utm_campaign do DF agregado por
+    `agregar_campanhas_por_utm`."""
+    out = dict(_CAMPANHA_UTM_ZEROS)
+    if df_agg is None or df_agg.empty or not campaign_norm:
+        return out
+    match = df_agg[df_agg["campaign_norm"] == campaign_norm]
+    if match.empty:
+        return out
+    r = match.iloc[0]
+    out.update({
+        "campaign_norm": str(r["campaign_norm"]),
+        "utm_campaign":  str(r["utm_campaign"]),
+        "canal":         str(r.get("canal") or "—"),
+        # Plataforma
+        "investimento":  float(r.get("investimento", 0) or 0),
+        "impressoes":    float(r.get("impressoes", 0) or 0),
+        "cliques":       float(r.get("cliques", 0) or 0),
+        "alcance":       float(r.get("alcance", 0) or 0),
+        "ctr":           float(r.get("ctr", 0) or 0),
+        "cpc":           float(r.get("cpc", 0) or 0),
+        # Leads
+        "leads_totais":       int(r["leads_totais"]),
+        "leads_qualificados": int(r["leads_qualificados"]),
+        "leads_mais_12":      int(r["leads_mais_12"]),
+        "leads_menos_12":     int(r["leads_menos_12"]),
+        "leads_nao_atua":     int(r["leads_nao_atua"]),
+        "taxa_qualificacao":  float(r["taxa_qualificacao"]),
+        "taxa_mais_12":       float(r["taxa_mais_12"]),
+        # CRM
+        "leads_no_crm":       int(r["leads_no_crm"]),
+        "leads_ganhos":       int(r["leads_ganhos"]),
+        "vendas_novas":       int(r["vendas_novas"]),
+        "taxa_lead_venda_nova": float(r["taxa_lead_venda_nova"]),
+        # Origem
+        "pagina_principal":   r.get("pagina_principal"),
+        "variante_principal": r.get("variante_principal"),
+        "criativo_principal": r.get("criativo_principal"),
+        "page_url_exemplo":   r.get("page_url_exemplo"),
+        "paginas":      list(r.get("paginas") or []),
+        "variantes":    list(r.get("variantes") or []),
+        "criativos":    list(r.get("criativos") or []),
+        "origens":      list(r.get("origens") or []),
+        "midias":       list(r.get("midias") or []),
+        "fusos":        list(r.get("fusos") or []),
+        "dispositivos": list(r.get("dispositivos") or []),
+        "qtd_paginas":   int(r.get("qtd_paginas", 0) or 0),
+        "qtd_variantes": int(r.get("qtd_variantes", 0) or 0),
+        "qtd_criativos": int(r.get("qtd_criativos", 0) or 0),
+    })
+    return out
+
+
+# (label, key, regra de vencedor) — espelha _COMPARA_PV_METRICAS, adaptada.
+_COMPARA_CAMP_UTM_METRICAS = [
+    # Identidade — categórico, sem vencedor
+    ("Canal",                "canal",              None),
+    # Plataforma
+    ("Investimento",         "investimento",       None),
+    ("Impressões",           "impressoes",         "higher"),
+    ("Cliques",              "cliques",            "higher"),
+    ("Alcance",              "alcance",            "higher"),
+    ("CTR",                  "ctr",                "higher"),
+    ("CPC",                  "cpc",                "lower"),
+    # Leads (regra Visão Geral)
+    ("Leads totais",         "leads_totais",       "higher"),
+    ("Leads qualificados",   "leads_qualificados", "higher"),
+    ("Leads +12",            "leads_mais_12",      "higher"),
+    ("Leads -12",            "leads_menos_12",     None),
+    ("Não atua",             "leads_nao_atua",     None),
+    ("Taxa qualificação",    "taxa_qualificacao",  "higher"),
+    ("Taxa +12",             "taxa_mais_12",       "higher"),
+    # CRM/Zoho
+    ("Vendas novas",         "vendas_novas",       "higher"),
+    ("Taxa Lead → Venda nova", "taxa_lead_venda_nova", "higher"),
+    # Origem (categóricos + qtd)
+    ("Página principal",     "pagina_principal",   None),
+    ("Variante principal",   "variante_principal", None),
+    ("Qtd. páginas",         "qtd_paginas",        "higher"),
+    ("Qtd. variantes",       "qtd_variantes",      "higher"),
+    ("URL exemplo",          "page_url_exemplo",   None),
+]
+
+
+def compara_campanhas_utm(kA: dict, kB: dict) -> pd.DataFrame:
+    """Tabela comparativa A vs B de utm_campaign — espelha
+    `compara_paginas_variantes` da Growth, mas com métricas adicionais
+    de plataforma (Invest/Imp/Cliques/Alcance/CTR/CPC).
+
+    Colunas: metrica, valor_a, valor_b, delta_pct, vencedor.
+    Δ% só calcula entre valores numéricos."""
+    rows = []
+    for label, key, regra in _COMPARA_CAMP_UTM_METRICAS:
+        a = kA.get(key)
+        b = kB.get(key)
+        delta = None
+        if (a is not None and b is not None
+                and isinstance(a, (int, float))
+                and isinstance(b, (int, float))
+                and a != 0):
+            delta = (b - a) / a * 100
+        rows.append({
+            "metrica": label,
+            "valor_a": a,
+            "valor_b": b,
+            "delta_pct": delta,
+            "vencedor": _venc_numerico(a, b, regra),
+        })
     return pd.DataFrame(rows)
 
 
@@ -1980,15 +3446,34 @@ def cobertura_atribuicao_kpis(df_cob: pd.DataFrame) -> dict:
     }
 
 
-def campanhas_tabela_ativas(df_camp: pd.DataFrame) -> pd.DataFrame:
+def campanhas_tabela_ativas(df_camp: pd.DataFrame,
+                            df_leads_por_utm: pd.DataFrame | None = None,
+                            ) -> pd.DataFrame:
     """Tabela de campanhas com `investimento > 0` no período, agregadas por
     `(campaign_id, campaign_name, canal, objetivo)` e ordenadas por invest desc.
+
+    Quando `df_leads_por_utm` for passado (vindo de
+    `mkt_campanhas_leads_por_utm.sql`), enriquece a tabela com leads /
+    qualificados / +12 / -12 / CPL / CPL +12 / Tx Qualif +12. O match é
+    `LOWER(BTRIM(campaign_name)) = campaign_norm` (norm já aplicado na SQL).
+    Campanhas sem correspondência de UTM ficam com leads = 0 (e ratios = 0).
     """
     cols = ["campaign_name", "canal", "objetivo",
             "investimento", "impressoes", "cliques",
             "ctr", "cpc", "alcance"]
+    cols_leads = ["leads", "leads_qualificados",
+                  "leads_mais_12", "leads_menos_12",
+                  "cpl", "cpl_mais_12", "tx_qualif_mais_12"]
+
+    has_leads = (
+        df_leads_por_utm is not None
+        and not df_leads_por_utm.empty
+        and "campaign_norm" in df_leads_por_utm.columns
+    )
+    out_cols = cols + cols_leads if has_leads else cols
+
     if df_camp.empty:
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=out_cols)
 
     df = df_camp.copy()
     df["objetivo"] = (df["objetivo"]
@@ -2003,7 +3488,7 @@ def campanhas_tabela_ativas(df_camp: pd.DataFrame) -> pd.DataFrame:
                   alcance=("alcance", "sum")))
     agg = agg[agg["investimento"] > 0].copy()
     if agg.empty:
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=out_cols)
 
     agg["ctr"] = agg.apply(
         lambda r: _safe_div(r["cliques"], r["impressoes"]) * 100, axis=1
@@ -2011,9 +3496,101 @@ def campanhas_tabela_ativas(df_camp: pd.DataFrame) -> pd.DataFrame:
     agg["cpc"] = agg.apply(
         lambda r: _safe_div(r["investimento"], r["cliques"]), axis=1
     )
-    return (agg[cols]
+
+    if has_leads:
+        # Match LOWER+BTRIM(campaign_name) ↔ campaign_norm (já normalizado na SQL)
+        agg["_campaign_norm"] = (
+            agg["campaign_name"].fillna("").astype(str).str.strip().str.lower()
+        )
+        leads_df = df_leads_por_utm[
+            ["campaign_norm", "leads_totais", "leads_qualificados",
+             "leads_mais_12", "leads_menos_12"]
+        ].rename(columns={"campaign_norm": "_campaign_norm",
+                          "leads_totais":  "leads"})
+        agg = agg.merge(leads_df, on="_campaign_norm", how="left")
+        for c in ("leads", "leads_qualificados",
+                  "leads_mais_12", "leads_menos_12"):
+            agg[c] = agg[c].fillna(0).astype("int64")
+
+        # Ratios — _safe_div retorna 0 quando denominador zero.
+        agg["cpl"] = agg.apply(
+            lambda r: _safe_div(r["investimento"], r["leads"]), axis=1
+        )
+        agg["cpl_mais_12"] = agg.apply(
+            lambda r: _safe_div(r["investimento"], r["leads_mais_12"]), axis=1
+        )
+        agg["tx_qualif_mais_12"] = agg.apply(
+            lambda r: _safe_div(r["leads_mais_12"], r["leads"]) * 100, axis=1
+        )
+        agg = agg.drop(columns=["_campaign_norm"])
+
+    return (agg[out_cols]
             .sort_values("investimento", ascending=False)
             .reset_index(drop=True))
+
+
+def campanhas_tabela_total_row(ativas: pd.DataFrame) -> pd.DataFrame:
+    """Constrói a row "Total" pra anexar ao final de `Campanhas ativas`.
+
+    Regras (recalculadas no agregado, NÃO média de taxas):
+      CTR             = SUM(cliques) / SUM(impressoes) * 100
+      CPC             = SUM(invest)  / SUM(cliques)
+      CPL             = SUM(invest)  / SUM(leads)
+      CPL +12         = SUM(invest)  / SUM(+12)
+      Tx Qualif +12   = SUM(+12)     / SUM(leads) * 100
+
+    Soma dedup por `campaign_name` para os campos de leads. Quando o mesmo
+    `campaign_name` aparece em mais de uma row (porque tem múltiplos
+    `campaign_id` na plataforma — caveat documentado na caption), a SQL
+    repete o total de leads em cada row. Se somasse direto, o total ficaria
+    inflado (dupla contagem). Investimento / impressões / cliques / alcance
+    são por `campaign_id`, então somam direto.
+
+    Retorna DataFrame com 1 linha e as MESMAS colunas de `ativas`. Quando
+    `ativas` está vazia, devolve 0 rows."""
+    if ativas is None or ativas.empty:
+        return ativas.iloc[0:0] if ativas is not None else pd.DataFrame()
+
+    out_cols = list(ativas.columns)
+
+    # Soma direta (campos por campaign_id — sem risco de duplicação)
+    invest = float(ativas["investimento"].sum()) if "investimento" in ativas else 0.0
+    imp    = float(ativas["impressoes"].sum())   if "impressoes"   in ativas else 0.0
+    clk    = float(ativas["cliques"].sum())      if "cliques"      in ativas else 0.0
+    alc    = float(ativas["alcance"].sum())      if "alcance"      in ativas else 0.0
+
+    # Dedup por campaign_name antes de somar leads (evita dupla contagem
+    # quando 1 campaign_name tem múltiplos campaign_id).
+    dedup = (ativas.drop_duplicates(subset=["campaign_name"])
+             if "campaign_name" in ativas.columns else ativas)
+
+    def _sum(col: str) -> float:
+        return float(dedup[col].sum()) if col in dedup.columns else 0.0
+
+    leads        = _sum("leads")
+    qualif       = _sum("leads_qualificados")
+    mais_12      = _sum("leads_mais_12")
+    menos_12     = _sum("leads_menos_12")
+
+    row = {c: None for c in out_cols}
+    if "campaign_name" in row: row["campaign_name"] = "Total"
+    if "canal"         in row: row["canal"]         = "—"
+    if "objetivo"      in row: row["objetivo"]      = "—"
+    if "investimento"  in row: row["investimento"]  = invest
+    if "impressoes"    in row: row["impressoes"]    = int(imp)
+    if "cliques"       in row: row["cliques"]       = int(clk)
+    if "alcance"       in row: row["alcance"]       = int(alc)
+    if "ctr"           in row: row["ctr"]           = _safe_div(clk, imp) * 100
+    if "cpc"           in row: row["cpc"]           = _safe_div(invest, clk)
+    if "leads"              in row: row["leads"]              = int(leads)
+    if "leads_qualificados" in row: row["leads_qualificados"] = int(qualif)
+    if "leads_mais_12"      in row: row["leads_mais_12"]      = int(mais_12)
+    if "leads_menos_12"     in row: row["leads_menos_12"]     = int(menos_12)
+    if "cpl"                in row: row["cpl"]                = _safe_div(invest, leads)
+    if "cpl_mais_12"        in row: row["cpl_mais_12"]        = _safe_div(invest, mais_12)
+    if "tx_qualif_mais_12"  in row: row["tx_qualif_mais_12"]  = _safe_div(mais_12, leads) * 100
+
+    return pd.DataFrame([row], columns=out_cols)
 
 
 # ---------------------------------------------------------------------------
@@ -2174,7 +3751,11 @@ def growth_scatter_leads_agend(df_overview: pd.DataFrame,
 
     leads_diario = (df_overview.groupby("data_ref", as_index=False)
                               .agg(leads=("leads", "sum")))
-    agend_diario = df_growth_mart[["data_ref", "agendamentos"]].copy()
+    # df_growth_mart pode vir do `mkt_growth_daily_by_canal.sql` com várias
+    # linhas por data_ref (uma por canal). Re-agrupa por data_ref antes
+    # do merge — robusto pra ambas as formas (com/sem canal).
+    agend_diario = (df_growth_mart.groupby("data_ref", as_index=False)
+                                  .agg(agendamentos=("agendamentos", "sum")))
 
     df_xy = (leads_diario.merge(agend_diario, on="data_ref", how="inner")
                          .sort_values("data_ref")
@@ -2185,3 +3766,110 @@ def growth_scatter_leads_agend(df_overview: pd.DataFrame,
 
     r = float(df_xy["leads"].corr(df_xy["agendamentos"]))
     return df_xy, r, n
+
+
+# ---------------------------------------------------------------------------
+# Filtro de canal na Growth — Opção A.
+# ---------------------------------------------------------------------------
+# `bi.vw_mkt_overview` e `bi.mv_mkt_roas` têm `canal` nativo, então ctx.refilter
+# resolve. A `odam.mart_ad_funnel_daily` NÃO tem canal direto: derivamos via
+# JOIN com `bi.vw_mkt_campanhas` por `campaign_id` (query
+# `mkt_growth_daily_by_canal.sql`). Linhas da mart com `campaign_id` NULL
+# vêm com `canal=NaN` e ficam fora do filtro, entrando apenas no agregado
+# "todos canais".
+#
+# IMPACTO REAL no período-base (abril/2026): das 206 agendamentos da mart,
+# só ~10% têm campaign_id rastreável. A caption da view exibe esse % em
+# tempo real para o usuário entender que filtrar canal ENCURTA o fundo do
+# funil dramaticamente.
+
+def growth_mart_filtrar(df_by_canal: pd.DataFrame,
+                        canais_selecionados: tuple[str, ...] | list[str] | None,
+                        todos_canais: bool) -> pd.DataFrame:
+    """Re-agrega `df_by_canal` (grão data_ref × canal) para 1 linha por
+    data_ref, aplicando filtro de canal:
+
+    - `todos_canais=True` → soma tudo (inclusive linhas com canal=NaN da
+      mart sem campaign_id).
+    - `todos_canais=False` → filtra `canal IN canais_selecionados`. Linhas
+      com canal=NaN ficam de fora.
+
+    Retorna DataFrame no MESMO esquema do `mkt_growth_daily.sql`
+    (data_ref + colunas de mart sem coluna `canal`)."""
+    cols_metric = ["leads_mais_12", "leads_menos_12", "leads_nao_atua",
+                   "agendamentos", "comparecimentos", "no_shows",
+                   "deals", "deals_ganhos", "vendas",
+                   "valor_venda", "valor_receita"]
+    out_cols = ["data_ref"] + cols_metric
+
+    if df_by_canal is None or df_by_canal.empty:
+        return pd.DataFrame(columns=out_cols)
+
+    if todos_canais:
+        df = df_by_canal
+    else:
+        if not canais_selecionados:
+            return pd.DataFrame(columns=out_cols)
+        df = df_by_canal[df_by_canal["canal"].isin(list(canais_selecionados))]
+        if df.empty:
+            return pd.DataFrame(columns=out_cols)
+
+    agg_kwargs = {c: (c, "sum") for c in cols_metric if c in df.columns}
+    return (df.groupby("data_ref", as_index=False)
+              .agg(**agg_kwargs)
+              [out_cols]
+              .sort_values("data_ref")
+              .reset_index(drop=True))
+
+
+def growth_cobertura_canal(df_by_canal: pd.DataFrame) -> dict:
+    """Diagnóstico da cobertura do filtro de canal: que fração dos
+    agendamentos/vendas/receita da mart no período tem `canal` rastreável
+    (campaign_id casa com vw_mkt_campanhas) vs `canal=NaN` (campaign_id
+    NULL ou não-encontrado).
+
+    Devolve dict com:
+      total_*  · com_canal_*  · sem_canal_*  · pct_com_canal_*
+    para cada uma de agend, vendas, receita.
+    """
+    zeros = {
+        "total_agend": 0, "agend_com_canal": 0, "agend_sem_canal": 0,
+        "pct_com_canal_agend": 0.0,
+        "total_vendas": 0, "vendas_com_canal": 0, "vendas_sem_canal": 0,
+        "pct_com_canal_vendas": 0.0,
+        "total_receita": 0.0, "receita_com_canal": 0.0,
+        "receita_sem_canal": 0.0, "pct_com_canal_receita": 0.0,
+    }
+    if df_by_canal is None or df_by_canal.empty:
+        return zeros
+
+    com = df_by_canal["canal"].notna()
+    sem = ~com
+
+    def _sum(mask, col):
+        if col not in df_by_canal.columns:
+            return 0
+        v = df_by_canal.loc[mask, col].sum()
+        return float(v) if v == v else 0.0
+
+    a_total = _sum(slice(None), "agendamentos")
+    a_com = _sum(com, "agendamentos")
+    v_total = _sum(slice(None), "vendas")
+    v_com = _sum(com, "vendas")
+    r_total = _sum(slice(None), "valor_receita")
+    r_com = _sum(com, "valor_receita")
+
+    return {
+        "total_agend": a_total,
+        "agend_com_canal": a_com,
+        "agend_sem_canal": a_total - a_com,
+        "pct_com_canal_agend": _safe_div(a_com, a_total) * 100,
+        "total_vendas": v_total,
+        "vendas_com_canal": v_com,
+        "vendas_sem_canal": v_total - v_com,
+        "pct_com_canal_vendas": _safe_div(v_com, v_total) * 100,
+        "total_receita": r_total,
+        "receita_com_canal": r_com,
+        "receita_sem_canal": r_total - r_com,
+        "pct_com_canal_receita": _safe_div(r_com, r_total) * 100,
+    }
