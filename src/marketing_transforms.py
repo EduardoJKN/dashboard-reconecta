@@ -3388,6 +3388,352 @@ def compara_campanhas_utm(kA: dict, kB: dict) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Comparar criativos — espelha o modelo de Campanhas, mas grão `utm_content`
+# (= `ad_name` na plataforma). Match: lower(btrim(ad_name)) =
+# lower(btrim(utm_content)). Mesma fonte de filtros (df_pv_raw =
+# mkt_paginas_variantes.sql) usada em "Comparar campanhas".
+# ---------------------------------------------------------------------------
+
+def agregar_criativos_por_utm_content(
+    df_pv_raw: pd.DataFrame,
+    df_criativos: pd.DataFrame,
+    origem: str | None = None,
+    midia: str | None = None,
+    timezone: str | None = None,
+    device_type: str | None = None,
+) -> pd.DataFrame:
+    """Agrega o DF email-level (`mkt_paginas_variantes.sql`) por
+    `utm_content` e cruza com a plataforma de criativos
+    (`bi.vw_mkt_criativos`) por `lower(btrim(ad_name)) =
+    lower(btrim(utm_content))`. Filtros opcionais aplicam ANTES da
+    agregação — afetam só esse bloco da página.
+
+    Saída — 1 row por ad_name_norm (entre os que têm plataforma + leads):
+      ad_name_norm, ad_name, ad_name_display, qtd_adids,
+      campanha_principal, adset_principal, status,
+      quality_ranking, engagement_ranking, conversion_ranking,
+      thumbnail_url, image_url, permalink_url, page_url_exemplo,
+      investimento, impressoes, cliques, link_clicks, alcance, ctr, cpc,
+      frequencia,
+      leads_totais, leads_qualificados, leads_mais_12, leads_menos_12,
+      leads_nao_atua, taxa_qualificacao, taxa_mais_12,
+      leads_no_crm, leads_ganhos, vendas_novas, taxa_lead_venda_nova,
+      cpl, cpl_mais_12, cac,
+      origens, midias, fusos, dispositivos.
+    """
+    cols = [
+        "ad_name_norm", "ad_name", "ad_name_display", "qtd_adids",
+        "campanha_principal", "adset_principal", "status",
+        "quality_ranking", "engagement_ranking", "conversion_ranking",
+        "thumbnail_url", "image_url", "permalink_url", "page_url_exemplo",
+        "investimento", "impressoes", "cliques", "link_clicks",
+        "alcance", "ctr", "cpc", "frequencia",
+        "leads_totais", "leads_qualificados",
+        "leads_mais_12", "leads_menos_12", "leads_nao_atua",
+        "taxa_qualificacao", "taxa_mais_12",
+        "leads_no_crm", "leads_ganhos", "vendas_novas",
+        "taxa_lead_venda_nova",
+        "cpl", "cpl_mais_12", "cac",
+        "origens", "midias", "fusos", "dispositivos",
+    ]
+
+    if df_pv_raw is None or df_pv_raw.empty:
+        return pd.DataFrame(columns=cols)
+
+    # 1) Email-level filtrado: só leads com utm_content válido +
+    #    filtros de origem/mídia/fuso/dispositivo aplicados.
+    sub = df_pv_raw.copy()
+    sub = sub[sub["utm_content"].notna()
+              & (sub["utm_content"].astype(str).str.strip() != "")]
+    sub["ad_name_norm"] = (
+        sub["utm_content"].astype(str).str.strip().str.lower()
+    )
+
+    _SENT = {None, "", "Todas", "Todos"}
+    pares = (
+        (origem,      "utm_source"),
+        (midia,       "utm_medium"),
+        (timezone,    "timezone"),
+        (device_type, "device_type"),
+    )
+    for valor, col in pares:
+        if valor not in _SENT and col in sub.columns:
+            sub = sub[sub[col] == valor]
+
+    if sub.empty:
+        return pd.DataFrame(columns=cols)
+
+    # 2) Agrega por ad_name_norm (= utm_content normalizado).
+    rows = []
+    for ad_norm, g in sub.groupby("ad_name_norm", dropna=False):
+        emails = g.drop_duplicates("email_norm")[
+            ["email_norm", "classif_final",
+             "flag_tem_deal", "flag_ganho", "deal_tipo_venda"]
+        ]
+        leads_totais = len(emails)
+        flags = _pv_classif_flags(emails["classif_final"])
+
+        leads_no_crm = int(emails["flag_tem_deal"].fillna(False).sum())
+        leads_ganhos = int(emails["flag_ganho"].fillna(False).sum())
+        vendas_novas = int(
+            (emails["flag_ganho"].fillna(False)
+             & (emails["deal_tipo_venda"] == "Novo cliente")).sum()
+        )
+
+        url_recente = (
+            g.sort_values("created_at", ascending=False).iloc[0].get("page_url")
+        )
+        if pd.isna(url_recente):
+            url_recente = None
+
+        # Forma original do utm_content (case preservado, mais legível
+        # nos selects e tabelas).
+        utm_display = g["utm_content"].dropna().astype(str).str.strip()
+        ad_name_display = utm_display.iloc[0] if not utm_display.empty else ad_norm
+
+        rows.append({
+            "ad_name_norm": ad_norm,
+            "ad_name_display": ad_name_display,
+            "leads_totais":      int(leads_totais),
+            **flags,
+            "taxa_qualificacao": _safe_div(flags["leads_qualificados"], leads_totais) * 100,
+            "taxa_mais_12":      _safe_div(flags["leads_mais_12"], leads_totais) * 100,
+            "leads_no_crm":      leads_no_crm,
+            "leads_ganhos":      leads_ganhos,
+            "vendas_novas":      vendas_novas,
+            "taxa_lead_venda_nova": _safe_div(vendas_novas, leads_totais) * 100,
+            "page_url_exemplo":  url_recente,
+            "origens":      _uniq(g, "utm_source"),
+            "midias":       _uniq(g, "utm_medium"),
+            "fusos":        _uniq(g, "timezone"),
+            "dispositivos": _uniq(g, "device_type"),
+        })
+
+    df_agg = pd.DataFrame(rows)
+    if df_agg.empty:
+        return pd.DataFrame(columns=cols)
+
+    # 3) Plataforma — agrega `bi.vw_mkt_criativos` por ad_name_norm
+    #    (mesma chave de match). Inner join descarta utm_content sem
+    #    nenhum ad_name correspondente na plataforma.
+    if df_criativos is None or df_criativos.empty:
+        return pd.DataFrame(columns=cols)
+
+    cri = df_criativos.copy()
+    cri["ad_name_norm"] = (
+        cri["ad_name"].fillna("").astype(str).str.strip().str.lower()
+    )
+
+    plat_agg = cri.groupby("ad_name_norm", as_index=False).agg(
+        ad_name=("ad_name", "first"),
+        qtd_adids=("ad_id", lambda s: s.nunique()),
+        investimento=("investimento", "sum"),
+        impressoes=("impressoes", "sum"),
+        cliques=("cliques", "sum"),
+        link_clicks=("link_clicks", "sum")
+            if "link_clicks" in cri.columns else ("cliques", "sum"),
+        alcance=("alcance", "sum"),
+    )
+    if "link_clicks" not in cri.columns:
+        plat_agg["link_clicks"] = 0
+
+    # "Principal" por ad_name_norm = row do ad_id com maior invest.
+    cri_sorted = cri.sort_values("investimento", ascending=False, na_position="last")
+    plat_principal = (
+        cri_sorted.drop_duplicates("ad_name_norm")
+            .set_index("ad_name_norm")[[
+                "campaign_name", "adset_name",
+                "quality_ranking", "engagement_ranking", "conversion_ranking",
+                "thumbnail_url", "image_url", "permalink_url",
+            ]]
+    )
+    if "status_label" in cri.columns:
+        plat_principal["status"] = (
+            cri_sorted.drop_duplicates("ad_name_norm")
+                .set_index("ad_name_norm")["status_label"]
+        )
+    elif "effective_status" in cri.columns:
+        plat_principal["status"] = (
+            cri_sorted.drop_duplicates("ad_name_norm")
+                .set_index("ad_name_norm")["effective_status"]
+        )
+    else:
+        plat_principal["status"] = None
+
+    plat_agg = plat_agg.merge(
+        plat_principal.reset_index(), on="ad_name_norm", how="left"
+    ).rename(columns={
+        "campaign_name": "campanha_principal",
+        "adset_name":    "adset_principal",
+    })
+    plat_agg["ctr"] = plat_agg.apply(
+        lambda r: _safe_div(r["cliques"], r["impressoes"]) * 100, axis=1
+    )
+    plat_agg["cpc"] = plat_agg.apply(
+        lambda r: _safe_div(r["investimento"], r["cliques"]), axis=1
+    )
+    plat_agg["frequencia"] = plat_agg.apply(
+        lambda r: _safe_div(r["impressoes"], r["alcance"]), axis=1
+    )
+
+    df_agg = df_agg.merge(plat_agg, on="ad_name_norm", how="inner")
+
+    # Derivadas finais (CPL/CPL+12/CAC).
+    df_agg["cpl"] = df_agg.apply(
+        lambda r: _safe_div(r["investimento"], r["leads_totais"]), axis=1
+    )
+    df_agg["cpl_mais_12"] = df_agg.apply(
+        lambda r: _safe_div(r["investimento"], r["leads_mais_12"]), axis=1
+    )
+    df_agg["cac"] = df_agg.apply(
+        lambda r: _safe_div(r["investimento"], r["vendas_novas"]), axis=1
+    )
+
+    return (df_agg[cols]
+            .sort_values("investimento", ascending=False)
+            .reset_index(drop=True))
+
+
+def lista_criativos_utm_content(df_agg: pd.DataFrame) -> pd.DataFrame:
+    """Lista de criativos (utm_content/ad_name) pra popular selects A/B.
+    Espera o DF agregado por `agregar_criativos_por_utm_content`."""
+    cols = ["ad_name_norm", "ad_name_display", "label", "investimento"]
+    if df_agg is None or df_agg.empty:
+        return pd.DataFrame(columns=cols)
+    out = df_agg.copy()
+    invest_int = out["investimento"].fillna(0).astype(float).round(0).astype(int)
+    out["label"] = (
+        out["ad_name_display"].astype(str)
+        + " · R$ " + invest_int.map(lambda v: f"{v:,}".replace(",", "."))
+        + " · " + out["leads_totais"].astype("int64").astype(str) + " leads"
+    )
+    return (out[cols]
+            .sort_values("investimento", ascending=False)
+            .reset_index(drop=True))
+
+
+_CRIATIVO_UTM_ZEROS = {
+    "ad_name_norm": "—", "ad_name_display": "—", "qtd_adids": 0,
+    "campanha_principal": None, "adset_principal": None, "status": None,
+    "quality_ranking": None, "engagement_ranking": None,
+    "conversion_ranking": None,
+    "thumbnail_url": None, "image_url": None, "permalink_url": None,
+    "page_url_exemplo": None,
+    "investimento": 0.0, "impressoes": 0.0, "cliques": 0.0,
+    "link_clicks": 0.0, "alcance": 0.0, "ctr": 0.0, "cpc": 0.0,
+    "frequencia": 0.0,
+    "leads_totais": 0, "leads_qualificados": 0,
+    "leads_mais_12": 0, "leads_menos_12": 0, "leads_nao_atua": 0,
+    "taxa_qualificacao": 0.0, "taxa_mais_12": 0.0,
+    "leads_no_crm": 0, "leads_ganhos": 0,
+    "vendas_novas": 0, "taxa_lead_venda_nova": 0.0,
+    "cpl": 0.0, "cpl_mais_12": 0.0, "cac": 0.0,
+    "origens": [], "midias": [], "fusos": [], "dispositivos": [],
+}
+
+
+def criativo_utm_content_kpis(df_agg: pd.DataFrame,
+                              ad_name_norm: str | None) -> dict:
+    """KPIs de UM criativo (ad_name_norm) do DF agregado por
+    `agregar_criativos_por_utm_content`."""
+    out = dict(_CRIATIVO_UTM_ZEROS)
+    if df_agg is None or df_agg.empty or not ad_name_norm:
+        return out
+    match = df_agg[df_agg["ad_name_norm"] == ad_name_norm]
+    if match.empty:
+        return out
+    r = match.iloc[0]
+    int_keys = ("qtd_adids", "leads_totais", "leads_qualificados",
+                "leads_mais_12", "leads_menos_12", "leads_nao_atua",
+                "leads_no_crm", "leads_ganhos", "vendas_novas")
+    float_keys = ("investimento", "impressoes", "cliques", "link_clicks",
+                  "alcance", "ctr", "cpc", "frequencia",
+                  "taxa_qualificacao", "taxa_mais_12",
+                  "taxa_lead_venda_nova", "cpl", "cpl_mais_12", "cac")
+    for k in int_keys:
+        out[k] = int(r[k]) if pd.notna(r.get(k)) else 0
+    for k in float_keys:
+        v = r.get(k)
+        out[k] = float(v) if pd.notna(v) else 0.0
+    for k in ("ad_name_norm", "ad_name_display",
+              "campanha_principal", "adset_principal", "status",
+              "quality_ranking", "engagement_ranking", "conversion_ranking",
+              "thumbnail_url", "image_url", "permalink_url",
+              "page_url_exemplo"):
+        v = r.get(k)
+        out[k] = v if (v is not None and not (isinstance(v, float) and pd.isna(v))) else None
+    for k in ("origens", "midias", "fusos", "dispositivos"):
+        out[k] = list(r.get(k) or [])
+    return out
+
+
+# (label, key, regra de vencedor) — espelha _COMPARA_CAMP_UTM_METRICAS,
+# adaptado para o grão criativo.
+_COMPARA_CRIATIVO_UTM_METRICAS = [
+    # Identidade — categórico, sem vencedor
+    ("Campanha principal",  "campanha_principal",  None),
+    ("Adset principal",     "adset_principal",     None),
+    ("Status",              "status",              None),
+    ("Quality ranking",     "quality_ranking",     None),
+    ("Engagement ranking",  "engagement_ranking",  None),
+    ("Conversion ranking",  "conversion_ranking",  None),
+    ("Qtd. ad_ids",         "qtd_adids",           None),
+    # Plataforma
+    ("Investimento",        "investimento",        None),
+    ("Impressões",          "impressoes",          "higher"),
+    ("Cliques",             "cliques",             "higher"),
+    ("Link clicks",         "link_clicks",         "higher"),
+    ("Alcance",             "alcance",             "higher"),
+    ("CTR",                 "ctr",                 "higher"),
+    ("CPC",                 "cpc",                 "lower"),
+    ("Frequência",          "frequencia",          "lower"),
+    # Leads (regra Visão Geral)
+    ("Leads totais",        "leads_totais",        "higher"),
+    ("Leads qualificados",  "leads_qualificados",  "higher"),
+    ("Leads +12",           "leads_mais_12",       "higher"),
+    ("Leads -12",           "leads_menos_12",      None),
+    ("Não atua",            "leads_nao_atua",      None),
+    ("Taxa qualificação",   "taxa_qualificacao",   "higher"),
+    ("Taxa +12",            "taxa_mais_12",        "higher"),
+    # CRM/Zoho
+    ("Leads no CRM",        "leads_no_crm",        "higher"),
+    ("Vendas novas",        "vendas_novas",        "higher"),
+    ("Taxa Lead → Venda nova", "taxa_lead_venda_nova", "higher"),
+    # Derivadas
+    ("CPL",                 "cpl",                 "lower"),
+    ("CPL +12",             "cpl_mais_12",         "lower"),
+    ("CAC",                 "cac",                 "lower"),
+    # URL exemplo
+    ("URL exemplo",         "page_url_exemplo",    None),
+]
+
+
+def compara_criativos_utm_content(kA: dict, kB: dict) -> pd.DataFrame:
+    """Tabela comparativa A vs B de criativo (ad_name) — mesmo shape de
+    `compara_campanhas_utm` (colunas metrica/valor_a/valor_b/delta_pct/
+    vencedor). Δ% só calcula entre numéricos. Vencedor segue a regra
+    declarada em `_COMPARA_CRIATIVO_UTM_METRICAS`."""
+    rows = []
+    for label, key, regra in _COMPARA_CRIATIVO_UTM_METRICAS:
+        a = kA.get(key)
+        b = kB.get(key)
+        delta = None
+        if (a is not None and b is not None
+                and isinstance(a, (int, float))
+                and isinstance(b, (int, float))
+                and a != 0):
+            delta = (b - a) / a * 100
+        rows.append({
+            "metrica": label,
+            "valor_a": a,
+            "valor_b": b,
+            "delta_pct": delta,
+            "vencedor": _venc_numerico(a, b, regra),
+        })
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
 # Cobertura da atribuição (diagnóstico do mart por presença de campaign_id)
 # ---------------------------------------------------------------------------
 

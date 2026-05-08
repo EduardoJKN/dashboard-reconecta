@@ -15,21 +15,23 @@ from src.marketing_queries import (
     get_mkt_criativos,
     get_mkt_criativos_cobertura,
     get_mkt_criativos_resultados,
+    get_mkt_paginas_variantes,
 )
 from src.marketing_safe import safe_run
 from src.marketing_transforms import (
+    agregar_criativos_por_utm_content,
     cobertura_criativos_kpis,
-    compara_criativos,
+    compara_criativos_utm_content,
     criativo_funil_etapas,
     criativo_funil_kpis,
-    criativo_kpis,
+    criativo_utm_content_kpis,
     criativos_kpis,
     criativos_por_quality,
     criativos_por_status,
     criativos_ranking,
     criativos_tabela,
-    lista_criativos,
     lista_criativos_funil,
+    lista_criativos_utm_content,
     normalize_status,
 )
 from src.transforms import delta_pct
@@ -728,24 +730,69 @@ else:
                 st.markdown(_creative_card_html(row), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Comparar criativos (V1 — plataforma + resultado atribuído via mart)
-# Plataforma: bi.vw_mkt_criativos (oficial) · Resultado: odam.mart_ad_funnel_daily
-# Derivadas: invest oficial / contagens da mart
-# Default: top 1 e top 2 do MESMO sort_by/ascending escolhido no Top 12 acima.
+# Comparar criativos (V2 — modelo herdado do "Comparar campanhas")
+# Match: lower(btrim(ad_name)) = lower(btrim(utm_content)). Mesma fonte de
+# leads/CRM da Comparar campanhas (df_pv_raw = mkt_paginas_variantes.sql);
+# plataforma vem de bi.vw_mkt_criativos. Filtros origem/mídia/fuso/
+# dispositivo afetam SOMENTE este bloco.
 # ---------------------------------------------------------------------------
 section_title("Comparar criativos",
-              "plataforma + resultado atribuído · lado a lado")
+              "plataforma + leads/CRM · grão utm_content (= ad_name)")
 
-cri_list = lista_criativos(
-    df, df_resultados_filtered,
-    sort_by=sort_field, ascending=ascending,
+# DF email-level — base pros filtros desta seção e pra agregação Python.
+df_pv_raw_cri = safe_run(
+    lambda: get_mkt_paginas_variantes(ctx.data_ini, ctx.data_fim),
+    view_label="ext_reconecta.leads (email-level pra Comparar criativos)",
 )
-if cri_list.empty:
-    st.caption("Sem criativos no período selecionado para comparar.")
-else:
-    options = cri_list["ad_id"].tolist()
-    labels_map = dict(zip(cri_list["ad_id"], cri_list["label"]))
 
+# Opções de filtro vêm do DF email-level no período.
+def _opts_cri(col: str, default: str = "Todas") -> list[str]:
+    if df_pv_raw_cri.empty or col not in df_pv_raw_cri.columns:
+        return [default]
+    vals = sorted(df_pv_raw_cri[col].dropna().astype(str).unique().tolist())
+    return [default] + vals
+
+# Filtros que afetam SOMENTE essa seção (não tocam cards/Top 12/Funil).
+_HELP_CRI = ("Filtra apenas a comparação de criativos — não afeta os cards "
+             "superiores, Top 12 nem Funil do criativo selecionado.")
+
+flt_cri_l1_a, flt_cri_l1_b = st.columns(2, gap="small")
+with flt_cri_l1_a:
+    sel_origem_cri = st.selectbox(
+        "Origem", options=_opts_cri("utm_source", "Todas"),
+        index=0, key="cmp_cri_origem", help=_HELP_CRI,
+    )
+with flt_cri_l1_b:
+    sel_midia_cri = st.selectbox(
+        "Mídia", options=_opts_cri("utm_medium", "Todas"),
+        index=0, key="cmp_cri_midia", help=_HELP_CRI,
+    )
+flt_cri_l2_a, flt_cri_l2_b = st.columns(2, gap="small")
+with flt_cri_l2_a:
+    sel_timezone_cri = st.selectbox(
+        "Fuso / região", options=_opts_cri("timezone", "Todos"),
+        index=0, key="cmp_cri_timezone", help=_HELP_CRI,
+    )
+with flt_cri_l2_b:
+    sel_device_cri = st.selectbox(
+        "Dispositivo", options=_opts_cri("device_type", "Todos"),
+        index=0, key="cmp_cri_device", help=_HELP_CRI,
+    )
+
+df_cri_utm_agg = agregar_criativos_por_utm_content(
+    df_pv_raw_cri, df,
+    origem=sel_origem_cri, midia=sel_midia_cri,
+    timezone=sel_timezone_cri, device_type=sel_device_cri,
+)
+cri_list = lista_criativos_utm_content(df_cri_utm_agg)
+
+if cri_list.empty:
+    st.caption("Sem criativos para os filtros selecionados.")
+else:
+    options = cri_list["ad_name_norm"].tolist()
+    labels_map = dict(zip(cri_list["ad_name_norm"], cri_list["label"]))
+
+    # Defaults: top 1 e top 2 por investimento (lista já vem ordenada)
     idx_default_b = 1 if len(options) > 1 else 0
 
     sel_col_a, sel_col_b = st.columns(2, gap="small")
@@ -753,7 +800,7 @@ else:
         sel_a = st.selectbox(
             "Criativo A",
             options=options,
-            format_func=lambda aid: labels_map.get(aid, "—"),
+            format_func=lambda c: labels_map.get(c, "—"),
             index=0,
             key="cmp_criativo_a",
         )
@@ -761,43 +808,43 @@ else:
         sel_b = st.selectbox(
             "Criativo B",
             options=options,
-            format_func=lambda aid: labels_map.get(aid, "—"),
+            format_func=lambda c: labels_map.get(c, "—"),
             index=idx_default_b,
             key="cmp_criativo_b",
         )
 
-    kA = criativo_kpis(df, sel_a, df_resultados_filtered)
-    kB = criativo_kpis(df, sel_b, df_resultados_filtered)
+    kA = criativo_utm_content_kpis(df_cri_utm_agg, sel_a)
+    kB = criativo_utm_content_kpis(df_cri_utm_agg, sel_b)
 
-    # Badge sutil sob cada selectbox indicando se o criativo tem resultado
-    # atribuído na mart. Ajuda o usuário a interpretar "—" nas linhas de
-    # resultado/derivadas.
+    # Badge sutil sob cada select indicando se o criativo tem leads
+    # atribuídos via UTM (i.e. tem cobertura no DF de leads).
+    def _tem_leads(k: dict) -> bool:
+        return bool(k.get("leads_totais") or 0)
+
     bdg_col_a, bdg_col_b = st.columns(2, gap="small")
     with bdg_col_a:
         st.caption(
-            "✓ resultados atribuídos" if kA["tem_resultados"]
-            else "⚠ sem atribuição no mart"
+            "✓ leads atribuídos via UTM" if _tem_leads(kA)
+            else "⚠ sem atribuição via UTM"
         )
     with bdg_col_b:
         st.caption(
-            "✓ resultados atribuídos" if kB["tem_resultados"]
-            else "⚠ sem atribuição no mart"
+            "✓ leads atribuídos via UTM" if _tem_leads(kB)
+            else "⚠ sem atribuição via UTM"
         )
 
-    cmp = compara_criativos(kA, kB)
+    cmp = compara_criativos_utm_content(kA, kB)
 
-    # ---- Formatadores -----------------------------------------------------
-    # None → "—" para qualquer métrica numérica (sem atribuição OU
-    # denominador zero em derivada).
-    _MONEY_METRICS_C = {"Investimento", "CPC", "CPL", "CPL +12", "CAC", "Receita"}
-    _PCT_METRICS_C = {"CTR"}
-    _ROAS_METRIC_C = {"ROAS"}
-    _FLOAT_METRICS_C = {"Frequência"}
-    _IDENT_METRICS_C = {"Campanha", "Status",
-                        "Quality ranking", "Engagement ranking",
-                        "Conversion ranking"}
+    # ---- Formatadores (mesmo padrão do Comparar campanhas) ---------------
+    _MONEY_METRICS = {"Investimento", "CPC", "CPL", "CPL +12", "CAC"}
+    _PCT_METRICS   = {"CTR", "Taxa qualificação", "Taxa +12",
+                       "Taxa Lead → Venda nova"}
+    _FLOAT_METRICS = {"Frequência"}
+    _STR_METRICS   = {"Campanha principal", "Adset principal", "Status",
+                       "Quality ranking", "Engagement ranking",
+                       "Conversion ranking", "URL exemplo"}
 
-    def _fmt_value_cri(metrica: str, val) -> str:
+    def _fmt_value(metrica: str, val) -> str:
         if val is None:
             return "—"
         try:
@@ -805,72 +852,101 @@ else:
                 return "—"
         except Exception:
             pass
-        if metrica in _IDENT_METRICS_C:
-            return str(val) if val else "—"
-        if metrica in _MONEY_METRICS_C:
+        if metrica in _STR_METRICS:
+            s = str(val).strip()
+            return s if s and s != "—" else "—"
+        if metrica in _MONEY_METRICS:
             return brl(float(val), casas=2)
-        if metrica in _PCT_METRICS_C:
+        if metrica in _PCT_METRICS:
             return pct(float(val), casas=2)
-        if metrica in _ROAS_METRIC_C:
-            return f"{float(val):.2f}x".replace(".", ",")
-        if metrica in _FLOAT_METRICS_C:
+        if metrica in _FLOAT_METRICS:
             return f"{float(val):.2f}".replace(".", ",")
-        # Inteiros (Impressões, Cliques, Link clicks, Alcance, Leads, +12,
-        # -12, Agendamentos, Comparecimentos, No-shows, Deals, Deals ganhos,
-        # Vendas)
+        # Inteiros (Impressões/Cliques/Link clicks/Alcance/Leads*/Vendas/
+        # Qtd. ad_ids)
         return int_br(float(val))
 
-    def _fmt_delta_cri(d) -> str:
+    def _fmt_delta(d) -> str:
         import pandas as _pd
         if d is None or _pd.isna(d):
             return "—"
         sign = "+" if d > 0 else ""
         return f"{sign}{d:.1f}%".replace(".", ",")
 
-    def _fmt_vencedor_cri(v: str) -> str:
+    def _fmt_vencedor(v: str) -> str:
         return f"✓ {v}" if v else ""
 
-    view_cri = cmp.assign(
+    view = cmp.assign(
         valor_a_fmt=cmp.apply(
-            lambda r: _fmt_value_cri(r["metrica"], r["valor_a"]), axis=1
+            lambda r: _fmt_value(r["metrica"], r["valor_a"]), axis=1
         ),
         valor_b_fmt=cmp.apply(
-            lambda r: _fmt_value_cri(r["metrica"], r["valor_b"]), axis=1
+            lambda r: _fmt_value(r["metrica"], r["valor_b"]), axis=1
         ),
-        delta_fmt=cmp["delta_pct"].apply(_fmt_delta_cri),
-        vencedor_fmt=cmp["vencedor"].apply(_fmt_vencedor_cri),
+        delta_fmt=cmp["delta_pct"].apply(_fmt_delta),
+        vencedor_fmt=cmp["vencedor"].apply(_fmt_vencedor),
     )[["metrica", "valor_a_fmt", "valor_b_fmt", "delta_fmt", "vencedor_fmt"]]
 
     st.dataframe(
-        view_cri, use_container_width=True, hide_index=True,
+        view, use_container_width=True, hide_index=True,
         column_config={
             "metrica": "Métrica",
             "valor_a_fmt": "Criativo A",
             "valor_b_fmt": "Criativo B",
             "delta_fmt": st.column_config.TextColumn(
-                "Δ%", help="(B − A) / A × 100. — quando A=0 ou algum lado "
-                          "sem dado."),
+                "Δ%", help="(B − A) / A × 100. — quando A=0, valor "
+                          "categórico, ou algum lado vazio."),
             "vencedor_fmt": st.column_config.TextColumn(
                 "Vencedor",
-                help="Maior em métricas de volume (Impressões, Cliques, "
-                     "Leads, Vendas, Receita, ROAS, CTR…); menor em "
-                     "CPC/CPL/CPL+12/CAC/No-shows. Sem vencedor em "
-                     "Investimento, Frequência, identidade (Campanha/"
-                     "Status/rankings) e quando algum lado é '—'."),
+                help="Maior em volume/qualidade (Impressões, Cliques, "
+                     "Link clicks, Alcance, CTR, Leads, +12, Vendas novas, "
+                     "Taxas). Menor em CPC/CPL/CPL+12/CAC/Frequência. "
+                     "Investimento, identidade (Campanha/Status/rankings), "
+                     "Leads -12 e Não atua não destacam vencedor."),
         },
     )
+
+    # Links clicáveis para abrir as URLs de exemplo em nova aba.
+    def _url_valido(u) -> str | None:
+        if u is None:
+            return None
+        if isinstance(u, float) and u != u:  # NaN
+            return None
+        s = str(u).strip()
+        if not s or s == "—":
+            return None
+        if not (s.startswith("http://") or s.startswith("https://")):
+            return None
+        return s
+
+    url_a = _url_valido(kA.get("page_url_exemplo"))
+    url_b = _url_valido(kB.get("page_url_exemplo"))
+    permalink_a = _url_valido(kA.get("permalink_url"))
+    permalink_b = _url_valido(kB.get("permalink_url"))
+    partes = []
+    if url_a:
+        partes.append(f"[Abrir URL da Página A]({url_a})")
+    if url_b:
+        partes.append(f"[Abrir URL da Página B]({url_b})")
+    if permalink_a:
+        partes.append(f"[Abrir Criativo A no Meta Ads]({permalink_a})")
+    if permalink_b:
+        partes.append(f"[Abrir Criativo B no Meta Ads]({permalink_b})")
+    if partes:
+        st.markdown(" · ".join(partes))
 
     st.caption(
         "Métricas de **plataforma** (Invest., Impressões, Cliques, Link clicks, "
         "Alcance, CTR, CPC, Frequência, Campanha, Status, Quality/Engagement/"
-        "Conversion ranking) vêm de **`bi.vw_mkt_criativos`** (fonte oficial). "
-        "Métricas de **resultado** (Leads, +12, -12, Agendamentos, "
-        "Comparecimentos, No-shows, Deals, Deals ganhos, Vendas, Receita) "
-        "são **atribuídas via `odam.mart_ad_funnel_daily`** por `ad_id`. "
-        "**Derivadas** (CPL, CPL +12, CAC, ROAS) usam **investimento oficial** "
-        "sobre numerador atribuído. "
-        "\"—\" indica ausência de atribuição na mart ou denominador zero "
-        "(ex.: CPL sem leads, ROAS sem invest)."
+        "Conversion ranking) vêm de **`bi.vw_mkt_criativos`** agregadas por "
+        "`ad_name` (consolida múltiplos `ad_id` do mesmo criativo). "
+        "**Leads / +12 / -12 / Vendas novas / CRM**: regra oficial via "
+        "`ext_reconecta.leads` filtrado por `utm_content`, com priority match "
+        "lead → deal `zoho_id > session_id > email`. **Match** plataforma ↔ "
+        "leads = `lower(btrim(ad_name)) = lower(btrim(utm_content))`. "
+        "**Derivadas** (CPL, CPL +12, CAC) usam invest da plataforma sobre "
+        "numerador atribuído via UTM. "
+        "\"—\" indica ausência de atribuição via UTM ou denominador zero. "
+        "**Filtros** (Origem/Mídia/Fuso/Dispositivo) afetam SOMENTE este bloco."
     )
 
 # ---------------------------------------------------------------------------
