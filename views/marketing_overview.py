@@ -277,7 +277,7 @@ with e3:
 # Tendência diária — Investimento × Leads totais × Leads qualificados
 # ---------------------------------------------------------------------------
 section_title("Tendência diária",
-              "investimento total geral × leads totais × leads qualificados")
+              "investimento × leads totais × leads qualificados × leads +12")
 
 diario = visao_geral_diario(df_vg_all)
 if diario.empty:
@@ -315,6 +315,21 @@ else:
         textfont=dict(color="#7C3AED", size=11, family="Inter"),
         yaxis="y2",
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} qualif<extra></extra>",
+    ))
+    # Leads +12 — soma diária bate com o card oficial "Leads +12"
+    # (regra `classif_final ILIKE '%+12%'` na última classificação do
+    # e-mail). Cor azul saturado (#1D4ED8) escolhida pra ficar distinta
+    # das outras 3 (dourado/vinho/roxo).
+    fig.add_trace(go.Scatter(
+        x=diario["data_ref"], y=diario["leads_mais_12"],
+        name="Leads +12",
+        line=dict(color="#1D4ED8", width=2.2, dash="dash"),
+        mode="lines+markers+text", marker=dict(size=6, color="#1D4ED8"),
+        text=last_point_text(diario["leads_mais_12"], int_br),
+        textposition="bottom center",
+        textfont=dict(color="#1D4ED8", size=11, family="Inter"),
+        yaxis="y2",
+        hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} leads +12<extra></extra>",
     ))
     fig.update_layout(
         height=380,

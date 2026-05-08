@@ -33,7 +33,7 @@ from .components import filter_label
 
 PERIOD_RANGE_KEY = "global_period_range"
 PERIOD_PRESET_KEY = "global_period_preset"
-_PERIOD_LAST_APPLIED = "_global_period_last_applied"
+_PERIOD_INITIALIZED = "_global_period_initialized"
 
 # IMPORTANTE: a primeira opção é o fallback que `st.selectbox` exibe quando
 # session_state[key] não está disponível NO MOMENTO em que o widget renderiza.
@@ -90,62 +90,101 @@ def resolve_preset(label: str, today: date | None = None) -> tuple[date, date] |
 
 
 def _ensure_period_state() -> tuple[date, date]:
-    """Seed inicial + validação + sincronização preset ↔ range.
+    """One-shot init do estado de período + auto-heal de keys ausentes.
 
-    Garante 4 invariantes em toda chamada:
-      1. PERIOD_PRESET_KEY existe e é uma opção válida em PRESETS_PT.
-      2. PERIOD_RANGE_KEY existe como tupla (data_ini, data_fim).
-      3. _PERIOD_LAST_APPLIED existe.
-      4. Quando PRESET != "Personalizado" e PRESET != _PERIOD_LAST_APPLIED,
-         o RANGE é re-resolvido a partir do PRESET (sincroniza label do
-         popover ↔ janela de dados, mesmo em páginas que não abrem o popover).
+    Regras:
+      - 1ª chamada (flag `_PERIOD_INITIALIZED` ausente):
+          - PRESET = "Mês atual"
+          - RANGE  = (1º dia do mês, último dia do mês)
+          - flag   = True
+      - Chamadas subsequentes: NÃO sobrescreve valores existentes do
+        usuário. Apenas restaura keys que tenham sido **removidas** pelo
+        Streamlit (containers lazy como `st.popover` podem limpar
+        `session_state[key]` de widgets ao desmontar entre reruns —
+        causa do KeyError reportado).
+
+    Aceita tupla de 1 elemento (`(d,)`) como `(d, d)` — Streamlit emite
+    1-tupla durante seleção parcial no `st.date_input` em modo range.
+    Antes essa situação resetava pro preset (bug "volta sozinho pro mês
+    inteiro").
+
+    Mudanças intencionais de PRESET/RANGE vêm dos callbacks
+    `_on_period_preset_change` e `_on_period_range_change`.
     """
     today = date.today()
 
-    # Seed + validação. Se algum widget legado escreveu um valor inválido
-    # em session_state[PERIOD_PRESET_KEY], reseta pro default.
-    if (PERIOD_PRESET_KEY not in st.session_state
-            or st.session_state[PERIOD_PRESET_KEY] not in PRESETS_PT):
+    # 1) Seed inicial UMA VEZ por sessão.
+    if not st.session_state.get(_PERIOD_INITIALIZED):
+        st.session_state[PERIOD_PRESET_KEY] = _DEFAULT_PRESET
+        rng = (resolve_preset(_DEFAULT_PRESET, today)
+               or (today - timedelta(days=30), today))
+        st.session_state[PERIOD_RANGE_KEY] = rng
+        st.session_state[_PERIOD_INITIALIZED] = True
+
+    # 2) Auto-heal: se algum dos valores foi removido pelo Streamlit
+    #    (widget cleanup em popover), restaura *só o ausente* — sem tocar
+    #    em valor existente do usuário. Não confunde com o bug antigo
+    #    (que sobrescrevia mesmo quando o user já tinha mexido).
+    if PERIOD_PRESET_KEY not in st.session_state:
+        st.session_state[PERIOD_PRESET_KEY] = _DEFAULT_PRESET
+    elif st.session_state[PERIOD_PRESET_KEY] not in PRESETS_PT:
+        # Valor inválido (algum widget legado escreveu lixo): corrige.
         st.session_state[PERIOD_PRESET_KEY] = _DEFAULT_PRESET
 
-    if (PERIOD_RANGE_KEY not in st.session_state
-            or not isinstance(st.session_state[PERIOD_RANGE_KEY], tuple)
-            or len(st.session_state[PERIOD_RANGE_KEY]) != 2):
-        rng = resolve_preset(
-            st.session_state[PERIOD_PRESET_KEY], today
-        ) or (today - timedelta(days=30), today)
-        st.session_state[PERIOD_RANGE_KEY] = rng
+    if PERIOD_RANGE_KEY not in st.session_state:
+        st.session_state[PERIOD_RANGE_KEY] = (
+            resolve_preset(
+                st.session_state[PERIOD_PRESET_KEY], today
+            ) or (today - timedelta(days=30), today)
+        )
 
-    if _PERIOD_LAST_APPLIED not in st.session_state:
-        st.session_state[_PERIOD_LAST_APPLIED] = st.session_state[PERIOD_PRESET_KEY]
-
-    # Sincroniza preset → range quando preset mudou desde a última aplicação.
-    preset = st.session_state[PERIOD_PRESET_KEY]
-    last_applied = st.session_state[_PERIOD_LAST_APPLIED]
-    if preset != "Personalizado" and preset != last_applied:
-        new_range = resolve_preset(preset, today)
-        if new_range:
-            st.session_state[PERIOD_RANGE_KEY] = new_range
-        st.session_state[_PERIOD_LAST_APPLIED] = preset
-
-    return st.session_state[PERIOD_RANGE_KEY]
+    # 3) Devolve a tupla normalizada SEM reescrever valores válidos.
+    rng = st.session_state[PERIOD_RANGE_KEY]
+    if isinstance(rng, tuple):
+        if len(rng) == 2:
+            return rng
+        if len(rng) == 1:
+            # User no meio de uma seleção (data_ini escolhida, data_fim
+            # ainda não). Trata como (d, d) — não reseta o range.
+            return rng[0], rng[0]
+    # Último fallback (corner case: tipo errado em session_state).
+    fallback = (resolve_preset(_DEFAULT_PRESET, today)
+                or (today - timedelta(days=30), today))
+    st.session_state[PERIOD_RANGE_KEY] = fallback
+    return fallback
 
 
 def _on_period_preset_change() -> None:
-    """Callback do selectbox de preset — roda DENTRO da mesma execução do
+    """Callback do selectbox de preset. Roda DENTRO do mesmo ciclo do
     Streamlit, antes de qualquer leitura subsequente do session_state.
     Re-resolve o RANGE para casar com o preset escolhido."""
     today = date.today()
     new_preset = st.session_state.get(PERIOD_PRESET_KEY)
     if new_preset not in PRESETS_PT:
-        # Defensivo: valor inesperado → volta pro default
         st.session_state[PERIOD_PRESET_KEY] = _DEFAULT_PRESET
         new_preset = _DEFAULT_PRESET
     if new_preset != "Personalizado":
         new_range = resolve_preset(new_preset, today)
         if new_range:
             st.session_state[PERIOD_RANGE_KEY] = new_range
-    st.session_state[_PERIOD_LAST_APPLIED] = new_preset
+
+
+def _on_period_range_change() -> None:
+    """Callback do date_input. Quando o user altera o range manualmente,
+    troca o preset para "Personalizado" se o range escolhido não casar
+    com nenhum preset conhecido. Mantém o label do botão coerente com a
+    janela exibida."""
+    today = date.today()
+    rng = st.session_state.get(PERIOD_RANGE_KEY)
+    if not (isinstance(rng, tuple) and len(rng) == 2):
+        # Tupla parcial (1 elemento) durante seleção: ainda não decide.
+        return
+    current_preset = st.session_state.get(PERIOD_PRESET_KEY)
+    # Se o preset atual já bate com o range escolhido, mantém como está.
+    if current_preset and current_preset != "Personalizado":
+        if resolve_preset(current_preset, today) == rng:
+            return
+    st.session_state[PERIOD_PRESET_KEY] = "Personalizado"
 
 
 # =============================================================================
@@ -263,10 +302,19 @@ def _period_button_label(rng: tuple[date, date], preset: str) -> str:
 
 def _render_period_popover(container) -> tuple[date, date]:
     today = date.today()
-    _ensure_period_state()
+    # `_ensure_period_state` faz auto-heal: se Streamlit limpou a key de
+    # algum widget (popover/expander unmount entre reruns), ela é
+    # restaurada aqui antes de qualquer leitura.
+    safe_rng = _ensure_period_state()
 
-    rng = st.session_state[PERIOD_RANGE_KEY]
-    preset = st.session_state[PERIOD_PRESET_KEY]
+    # Leitura DEFENSIVA com `.get(...)` — mesmo após o auto-heal, manter
+    # `.get` evita KeyError em qualquer corner case onde o Streamlit
+    # rodar o leitor antes do seed (ex.: re-import lazy do módulo).
+    rng = st.session_state.get(PERIOD_RANGE_KEY, safe_rng)
+    preset = st.session_state.get(PERIOD_PRESET_KEY, _DEFAULT_PRESET)
+    if preset not in PRESETS_PT:
+        preset = _DEFAULT_PRESET
+        st.session_state[PERIOD_PRESET_KEY] = preset
     btn_label = _period_button_label(rng, preset)
 
     with container:
@@ -287,6 +335,7 @@ def _render_period_popover(container) -> tuple[date, date]:
                 key=PERIOD_RANGE_KEY,
                 format="DD/MM/YYYY",
                 label_visibility="collapsed",
+                on_change=_on_period_range_change,
             )
 
         # Debug helper — exibe o estado interno do filtro quando a query
@@ -297,12 +346,13 @@ def _render_period_popover(container) -> tuple[date, date]:
                 st.write({
                     "PERIOD_PRESET_KEY (label)": st.session_state.get(PERIOD_PRESET_KEY),
                     "PERIOD_RANGE_KEY (range)":  st.session_state.get(PERIOD_RANGE_KEY),
-                    "_PERIOD_LAST_APPLIED":      st.session_state.get(_PERIOD_LAST_APPLIED),
+                    "_PERIOD_INITIALIZED":       st.session_state.get(_PERIOD_INITIALIZED),
                     "PRESETS_PT[0] (fallback)":  PRESETS_PT[0],
                     "_DEFAULT_PRESET":           _DEFAULT_PRESET,
                 })
 
-    rng = st.session_state[PERIOD_RANGE_KEY]
+    # Mesma proteção da leitura no topo da função: `.get` com fallback.
+    rng = st.session_state.get(PERIOD_RANGE_KEY, safe_rng)
     if isinstance(rng, tuple) and len(rng) == 2:
         return rng
     if isinstance(rng, tuple) and len(rng) == 1:

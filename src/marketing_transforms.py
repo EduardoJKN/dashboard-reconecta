@@ -383,9 +383,17 @@ def visao_geral_kpis(df: pd.DataFrame) -> dict:
 
 def visao_geral_diario(df: pd.DataFrame) -> pd.DataFrame:
     """Série diária para o gráfico de tendência da Visão Geral Marketing.
-    Projeção direta — a fonte já é 1 linha por data_ref."""
+    Projeção direta — a fonte já é 1 linha por data_ref.
+
+    Inclui `leads_mais_12` e `leads_menos_12` por dia para que a tendência
+    possa exibir a quebra +12 / -12 quando útil. A SQL fonte
+    (`mkt_visao_geral_diario.sql`) já calcula esses campos pela mesma
+    regra dos cards (`classif_final ILIKE '%+12%'` / `'%-12%'` na última
+    classificação do e-mail no período), então a soma diária bate com o
+    card oficial (validado em abr/2026: 259 +12, 442 -12)."""
     cols = ["data_ref", "investimento_total_geral",
-            "leads_totais", "leads_qualificados"]
+            "leads_totais", "leads_qualificados",
+            "leads_mais_12", "leads_menos_12"]
     if df.empty:
         return pd.DataFrame(columns=cols)
     out = df.copy()
