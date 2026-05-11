@@ -108,6 +108,54 @@ def get_media_movel_vendas() -> float:
     return float(val) if val is not None else 0.0
 
 
+# ---------------------------------------------------------------------------
+# Pré-vendas — fontes diretas em zoho_activities + zoho_deals + leads.
+# SDR primário: `zoho_activities.prevendas` (NULL → 'Sem SDR').
+# Closer (matriz SDR × Closer): `zoho_activities.owner` resolvido via
+# `zoho_users` (NULL → 'Sem Closer').
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (diário)…")
+def get_prevendas_overview_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
+    df = run_sql_file(
+        "prevendas_overview_diario.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty:
+        df["data_ref"] = pd.to_datetime(df["data_ref"])
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas por SDR…")
+def get_prevendas_por_sdr(data_ini: date, data_fim: date) -> pd.DataFrame:
+    return run_sql_file(
+        "prevendas_por_sdr.sql", _date_params(data_ini, data_fim)
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo matriz Pré-vendas SDR × Closer…")
+def get_prevendas_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
+    return run_sql_file(
+        "prevendas_sdr_closer.sql", _date_params(data_ini, data_fim)
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo classificação de comparecimentos…")
+def get_prevendas_comparecimentos_classif(data_ini: date,
+                                          data_fim: date) -> pd.DataFrame:
+    return run_sql_file(
+        "prevendas_comparecimentos_classif.sql",
+        _date_params(data_ini, data_fim),
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo SLA (amostra)…")
+def get_prevendas_sla(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """⚠ Cobertura PARCIAL: apenas ~39% dos leads têm `sla` preenchido em
+    abr/2026. Não usar como ranking individual nem como SLA contratual."""
+    return run_sql_file(
+        "prevendas_sla.sql", _date_params(data_ini, data_fim)
+    )
+
+
 VIEW_REGISTRY: dict[str, str] = {
     "Executivas (KPIs principais)": "bi.vw_dashboard_comercial_executivas_rw",
     "SDR × Closer": "bi.vw_compatibilidade_sdr_closer",

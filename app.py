@@ -37,16 +37,10 @@ with st.sidebar:
     )
 
 # -----------------------------------------------------------------------------
-# Navegação — agrupada por área (Vendas / Marketing)
+# Navegação — agrupada por área seguindo a lógica do funil:
+# Marketing → Pré-vendas → Vendas
 # -----------------------------------------------------------------------------
 pages = {
-    "Time de Vendas": [
-        st.Page("views/home.py",         title="Visão Geral",        default=True),
-        st.Page("views/executivas.py",   title="Executivas & Times"),
-        st.Page("views/sdr_closer.py",   title="SDR × Closer"),
-        st.Page("views/investimento.py", title="Investimento & ROAS"),
-        st.Page("views/inspecao.py",     title="Inspeção de Views"),
-    ],
     "Time de Marketing": [
         st.Page("views/marketing_overview.py",  title="Visão Geral Marketing"),
         st.Page("views/marketing_campaigns.py", title="Campanhas"),
@@ -55,6 +49,20 @@ pages = {
         st.Page("views/marketing_social.py",    title="Social"),
         st.Page("views/marketing_roas.py",      title="ROAS / CAC"),
         st.Page("views/marketing_growth.py",    title="Growth"),
+    ],
+    "Time de Pré-vendas": [
+        st.Page("views/prevendas_overview.py",        title="Visão Geral Pré-vendas"),
+        st.Page("views/prevendas_sdrs_times.py",      title="SDRs & Times"),
+        st.Page("views/prevendas_sdr_closer.py",      title="SDR × Closer"),
+        st.Page("views/prevendas_comparecimentos.py", title="Comparecimentos & Oportunidades"),
+        st.Page("views/prevendas_sla.py",             title="SLA & Tempo de Resposta"),
+    ],
+    "Time de Vendas": [
+        st.Page("views/home.py",         title="Visão Geral", default=True),
+        st.Page("views/executivas.py",   title="Executivas & Times"),
+        st.Page("views/sdr_closer.py",   title="SDR × Closer"),
+        st.Page("views/investimento.py", title="Investimento & ROAS"),
+        st.Page("views/inspecao.py",     title="Inspeção de Views"),
     ],
 }
 
