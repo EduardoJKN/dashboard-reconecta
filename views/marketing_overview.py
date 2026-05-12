@@ -1,7 +1,7 @@
 """Visão Geral Marketing — KPIs executivos validados em pgAdmin.
 
 Cards principais lêem `mkt_visao_geral_diario.sql` (regra oficial: investimento
-total geral + leads canônicos por e-mail + zoho_deals Ganho/Fechado Ganho).
+total geral + leads por e-mail único/dia + zoho_deals Ganho/Fechado Ganho).
 Tabela "Por canal" e detalhamento continuam usando `bi.vw_mkt_overview` /
 `bi.mv_mkt_roas` / `bi.vw_mkt_leads_classificacao`."""
 from datetime import timedelta
@@ -12,6 +12,7 @@ import streamlit as st
 from src.marketing_queries import (
     get_mkt_overview,
     get_mkt_visao_geral_diario,
+    get_mkt_visao_geral_periodo,
     get_mkt_visao_geral_kpis_canal,
 )
 from src.marketing_safe import safe_run
@@ -41,11 +42,15 @@ col_map = {"canal": "canal"}
 # ---------------------------------------------------------------------------
 # Carga (período atual)
 # ---------------------------------------------------------------------------
-# Fonte oficial dos cards principais — regra validada em pgAdmin.
-# Substitui mkt_overview_v2 (LATERAL JOIN pesado em zoho_deals).
+# Série diária oficial — usada na tendência.
 df_vg_all = safe_run(
     lambda: get_mkt_visao_geral_diario(ctx.data_ini, ctx.data_fim),
     view_label="mkt_visao_geral_diario",
+)
+# KPIs do período — usados nos cards sem filtro de canal.
+df_vg_period_all = safe_run(
+    lambda: get_mkt_visao_geral_periodo(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_visao_geral_periodo",
 )
 # KPIs completos por canal — invest + leads + financeiro atribuído.
 # Usado quando o usuário filtra canal específico: substitui k/kp e afeta
@@ -64,7 +69,7 @@ df_ov_all = safe_run(
 # dados no período. Filtros aplicados em seguida usam refilter() na fonte real.
 ctx.apply_filters(filtro_canais_padrao(CANAIS_VISIVEIS_OVERVIEW), col_map)
 
-if df_vg_all.empty and df_ov_all.empty:
+if df_vg_all.empty and df_vg_period_all.empty and df_ov_all.empty:
     st.warning("Sem dados para o período selecionado.")
     st.stop()
 
@@ -80,6 +85,10 @@ prev_ini = prev_fim - timedelta(days=dias - 1)
 df_vg_prev_all = safe_run(
     lambda: get_mkt_visao_geral_diario(prev_ini, prev_fim),
     view_label="mkt_visao_geral_diario",
+)
+df_vg_prev_period_all = safe_run(
+    lambda: get_mkt_visao_geral_periodo(prev_ini, prev_fim),
+    view_label="mkt_visao_geral_periodo",
 )
 df_kpc_prev_all = safe_run(
     lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
@@ -107,11 +116,8 @@ if filtro_canal_ativo:
     k = visao_geral_kpis_canal(df_kpc_all, canais_sel)
     kp = visao_geral_kpis_canal(df_kpc_prev_all, canais_sel)
 else:
-    k = visao_geral_kpis(df_vg_all)
-    kp = visao_geral_kpis(df_vg_prev_all)
-    # leads_nao_atua só existe no canal-grain — preenche pra evitar KeyError.
-    k["leads_nao_atua"] = 0
-    kp["leads_nao_atua"] = 0
+    k = visao_geral_kpis(df_vg_period_all)
+    kp = visao_geral_kpis(df_vg_prev_period_all)
 
 if filtro_canal_ativo:
     st.caption(
@@ -122,10 +128,10 @@ if filtro_canal_ativo:
     )
 else:
     st.caption(
-        "ℹ️ Os KPIs do topo seguem o total geral comercial. Selecione um "
-        "ou mais canais no filtro pra ver a parcela atribuída — afeta "
-        "Visão executiva, Geração de leads e Eficiência. A Tendência "
-        "diária continua total geral."
+        "ℹ️ Os KPIs do topo seguem o total geral comercial. Em Geração de "
+        "leads, os cards deduplicam o e-mail no período para classificados "
+        "(+12 / -12). A Tendência diária continua mostrando a classificação "
+        "da própria linha do dia."
     )
 
 # ---------------------------------------------------------------------------
@@ -209,10 +215,10 @@ hint_canal = (
 )
 section_title(
     "Geração de leads",
-    f"e-mail único por dia · última classificação do e-mail no período · {hint_canal}",
+    f"cards: e-mail deduplicado no período por bucket (+12/-12 podem sobrepor) · tendência: classificação da linha do dia · {hint_canal}",
 )
 
-g1, g2, g3, g4 = st.columns(4, gap="small")
+g1, g2, g3, g4, g5 = st.columns(5, gap="small")
 with g1:
     metric_card_v2(
         "Leads totais",
@@ -225,21 +231,28 @@ with g2:
         "Leads qualificados",
         int_br(k["leads_qualificados"]),
         delta_pct=delta_pct(k["leads_qualificados"], kp["leads_qualificados"]),
-        hint="+12 ou -12 · classificação final do e-mail",
+        hint="+12 ou -12 · e-mail único no período",
     )
 with g3:
     metric_card_v2(
         "Leads +12",
         int_br(k["leads_mais_12"]),
         delta_pct=delta_pct(k["leads_mais_12"], kp["leads_mais_12"]),
-        hint="classificado ILIKE '%+12%'",
+        hint="e-mail com pelo menos uma linha 'Atua +12' no período",
     )
 with g4:
     metric_card_v2(
         "Leads -12",
         int_br(k["leads_menos_12"]),
         delta_pct=delta_pct(k["leads_menos_12"], kp["leads_menos_12"]),
-        hint="classificado ILIKE '%-12%'",
+        hint="e-mail com pelo menos uma linha 'Atua -12' no período",
+    )
+with g5:
+    metric_card_v2(
+        "Leads Não atua",
+        int_br(k["leads_nao_atua"]),
+        delta_pct=delta_pct(k["leads_nao_atua"], kp["leads_nao_atua"]),
+        hint="e-mail com pelo menos uma linha 'Não atua' no período",
     )
 
 # ---------------------------------------------------------------------------
@@ -279,6 +292,13 @@ with e3:
 section_title("Tendência diária",
               "investimento × leads totais × leads qualificados × leads +12")
 
+st.caption(
+    "Na tendência diária, `Leads +12 / -12 / Não atua` usam a classificação "
+    "da própria linha do dia com e-mail único por dia. Nos cards do período, "
+    "os buckets `+12 / -12 / Não atua` são contados por e-mail único dentro "
+    "de cada classificação e podem se sobrepor."
+)
+
 diario = visao_geral_diario(df_vg_all)
 if diario.empty:
     st.info("Sem dados diários no período.")
@@ -317,8 +337,8 @@ else:
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>%{y:,.0f} qualif<extra></extra>",
     ))
     # Leads +12 — soma diária bate com o card oficial "Leads +12"
-    # (regra `classif_final ILIKE '%+12%'` na última classificação do
-    # e-mail). Cor azul saturado (#1D4ED8) escolhida pra ficar distinta
+    # (regra `classificado = 'Atua +12'` na própria linha do dia).
+    # Cor azul saturado (#1D4ED8) escolhida pra ficar distinta
     # das outras 3 (dourado/vinho/roxo).
     fig.add_trace(go.Scatter(
         x=diario["data_ref"], y=diario["leads_mais_12"],

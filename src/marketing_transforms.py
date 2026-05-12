@@ -328,6 +328,7 @@ _VISAO_GERAL_ZEROS = {
     "leads_qualificados": 0,
     "leads_mais_12": 0,
     "leads_menos_12": 0,
+    "leads_nao_atua": 0,
     "vendas_total_geral": 0,
     "vendas_novas_total_geral": 0,
     "montante_total_geral": 0.0,
@@ -343,6 +344,7 @@ _VISAO_GERAL_ZEROS = {
 _VISAO_GERAL_SUM_COLS = (
     "investimento_total_geral",
     "leads_totais", "leads_qualificados", "leads_mais_12", "leads_menos_12",
+    "leads_nao_atua",
     "vendas_total_geral", "vendas_novas_total_geral",
     "montante_total_geral", "receita_total_geral",
 )
@@ -387,10 +389,10 @@ def visao_geral_diario(df: pd.DataFrame) -> pd.DataFrame:
 
     Inclui `leads_mais_12` e `leads_menos_12` por dia para que a tendência
     possa exibir a quebra +12 / -12 quando útil. A SQL fonte
-    (`mkt_visao_geral_diario.sql`) já calcula esses campos pela mesma
-    regra dos cards (`classif_final ILIKE '%+12%'` / `'%-12%'` na última
-    classificação do e-mail no período), então a soma diária bate com o
-    card oficial (validado em abr/2026: 259 +12, 442 -12)."""
+    (`mkt_visao_geral_diario.sql`) calcula esses campos pela classificação
+    da própria linha do dia (`COUNT(DISTINCT email_norm)` por data). Isso
+    difere dos cards do período, que deduplicam os e-mails classificados no
+    período inteiro."""
     cols = ["data_ref", "investimento_total_geral",
             "leads_totais", "leads_qualificados",
             "leads_mais_12", "leads_menos_12"]
@@ -1723,6 +1725,7 @@ def criativos_ranking(df: pd.DataFrame,
                  "thumbnail_url", "image_url", "permalink_url",
                  "effective_status", "status_label"]
     cols_resultado = ["leads_total", "leads_mais_12", "leads_menos_12",
+                      "leads_nao_atua",
                       "agendamentos", "comparecimentos", "no_shows",
                       "deals", "deals_ganhos", "vendas", "valor_receita",
                       "cpl", "cpl_mais_12", "cac", "roas"]
@@ -1768,6 +1771,7 @@ def criativos_ranking(df: pd.DataFrame,
         res["ad_id"] = res["ad_id"].astype(str)
         agg = agg.merge(
             res[["ad_id", "leads_total", "leads_mais_12", "leads_menos_12",
+                 "leads_nao_atua",
                  "agendamentos", "comparecimentos", "no_shows",
                  "deals", "deals_ganhos", "vendas", "valor_receita"]],
             on="ad_id", how="left",

@@ -1,110 +1,152 @@
 -- =============================================================================
 -- Pré-vendas — série diária consolidada (Visão Geral Pré-vendas).
 -- =============================================================================
--- 1 linha por data_ref no período com:
---   leads        = leads únicos/dia (regra Visão Geral Marketing)
---   agendamentos = leads únicos com activity Consulta/Indicação no dia
---                  (start_datetime::date) — atribuídos via what_id → deal
---                  → priority match lead `zoho_id > session_id > email`.
---                  Quando a activity não casa com lead, ainda conta no
---                  `agendamentos_brutos` (atividades isoladas).
---   comparecimentos = subset com status_reuniao = 'Concluída'
---   vendas        = zoho_deals stage IN ('Ganho','Fechado Ganho') no
---                   data_hora_compra::date
---   vendas_novas  = subset tipo_venda = 'Novo cliente'
---   montante      = SUM(amount) das vendas
---   receita       = SUM(receita) das vendas
+-- Regra fiel do dashboard legado validada manualmente no pgAdmin:
+--   - base principal em `zoho_deals`
+--   - LEFT JOIN `ext_reconecta.leads` ON d.id::text = l.zoho_id::text
+--   - activities ligadas ao deal via `what_id` normalizado
+--   - considerar apenas activities com `status_reuniao IS NOT NULL`
 --
--- Observação: aqui o foco é Pré-vendas como SETOR — séries agregadas pra
--- alimentar a Tendência diária. Quebra por SDR vai em
--- prevendas_por_sdr.sql.
+-- Métricas diárias:
+--   - agendamentos_criados = `zoho_activities.created_time::date`
+--   - agendamentos         = `zoho_activities.start_datetime::date`
+--   - agendamentos_mais_12 = agendamentos com `classificado = 'Atua +12'`
+--   - comparecimentos      = status_reuniao IN ('Concluída', 'Concluído')
+--   - vendas               = `zoho_deals.data_hora_compra::date`
+--                            com `stage = 'Ganho'` e `tipo_venda = 'Novo cliente'`
+--   - montante / receita   = valores direto de `zoho_deals`
+--
+-- Compatibilidade com páginas ainda não migradas:
+--   - `novos_agendamentos` = alias de `agendamentos_criados`
+--   - `vendas_novas`       = alias de `vendas`
 -- =============================================================================
-WITH
--- Leads únicos/dia (mesma regra de mkt_visao_geral_diario.sql).
-leads_diario AS (
+WITH leads_diario AS (
     SELECT
         l.created_at::date AS data_ref,
         COUNT(DISTINCT lower(btrim(l.email)))::bigint AS leads
     FROM ext_reconecta.leads l
     WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
-      AND l.email IS NOT NULL AND btrim(l.email) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
       AND lower(l.email) NOT LIKE '%@teste%'
       AND lower(l.email) NOT LIKE 'teste@%'
       AND lower(l.email) NOT LIKE '%smarts%'
       AND lower(l.email) NOT LIKE '%reconecta%'
     GROUP BY 1
 ),
--- Atividades de pré-vendas (Consulta/Indicação) com possível match a deal.
+base_dados AS (
+    SELECT
+        d.id AS deal_id,
+        d.data_hora_compra::date AS data_venda_ref,
+        d.stage,
+        d.tipo_venda,
+        CASE
+            WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
+            ELSE REPLACE(
+                     REPLACE(
+                         REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
+                         '.', ''),
+                     ',', '.'
+                 )::numeric
+        END AS montante,
+        CASE
+            WHEN NULLIF(btrim(d.receita), '') IS NULL THEN 0::numeric
+            ELSE REPLACE(
+                     REPLACE(
+                         REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
+                         '.', ''),
+                     ',', '.'
+                 )::numeric
+        END AS receita,
+        l.classificado
+    FROM zoho_deals d
+    LEFT JOIN ext_reconecta.leads l ON d.id::text = l.zoho_id::text
+),
 acts AS (
     SELECT
-        a.start_datetime::date AS data_ref,
-        a.what_id,
+        bd.deal_id,
+        bd.classificado,
+        a.created_time::date AS data_criacao_ref,
+        a.start_datetime::date AS data_reuniao_ref,
         a.status_reuniao,
         a.id AS activity_id
-    FROM zoho_activities a
-    WHERE a.activity_type IN ('Consulta','Indicação')
-      AND a.start_datetime::date BETWEEN :data_ini AND :data_fim
+    FROM base_dados bd
+    JOIN zoho_activities a
+      ON regexp_replace(COALESCE(a.what_id::text, ''), '[^0-9A-Za-z]', '', 'g')
+       = regexp_replace(bd.deal_id::text, '[^0-9A-Za-z]', '', 'g')
+    WHERE a.activity_type IN ('Consulta', 'Indicação')
+      AND a.status_reuniao IS NOT NULL
+      AND (
+          a.created_time::date BETWEEN :data_ini AND :data_fim
+          OR a.start_datetime::date BETWEEN :data_ini AND :data_fim
+      )
 ),
--- Agregação diária de atividades (sem precisar passar pelo lead — a métrica
--- aqui é de atividades realizadas pela pré-vendas, conta cada activity 1×).
-acts_diario AS (
+agendamentos_criados_diario AS (
     SELECT
-        data_ref,
-        COUNT(*)::bigint AS agendamentos,
-        COUNT(*) FILTER (WHERE status_reuniao = 'Concluída')::bigint
-            AS comparecimentos
+        data_criacao_ref AS data_ref,
+        COUNT(*)::bigint AS agendamentos_criados
     FROM acts
-    GROUP BY data_ref
+    WHERE data_criacao_ref BETWEEN :data_ini AND :data_fim
+    GROUP BY 1
 ),
--- Vendas (zoho_deals) por dia, com regra oficial Vendas novas.
+agendamentos_diario AS (
+    SELECT
+        data_reuniao_ref AS data_ref,
+        COUNT(*)::bigint AS agendamentos,
+        COUNT(*) FILTER (
+            WHERE classificado = 'Atua +12'
+        )::bigint AS agendamentos_mais_12,
+        COUNT(*) FILTER (
+            WHERE status_reuniao IN ('Concluída', 'Concluído')
+        )::bigint AS comparecimentos,
+        COUNT(*) FILTER (
+            WHERE status_reuniao = 'Vencida'
+        )::bigint AS vencidas
+    FROM acts
+    WHERE data_reuniao_ref BETWEEN :data_ini AND :data_fim
+    GROUP BY 1
+),
 vendas_diario AS (
     SELECT
-        zd.data_hora_compra::date AS data_ref,
-        COUNT(DISTINCT zd.id)::bigint AS vendas,
-        COUNT(DISTINCT zd.id) FILTER (
-            WHERE zd.tipo_venda = 'Novo cliente'
-        )::bigint AS vendas_novas,
-        SUM(
-            CASE WHEN NULLIF(btrim(zd.amount), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(zd.amount), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
-            END
-        )::numeric AS montante,
-        SUM(
-            CASE WHEN NULLIF(btrim(zd.receita), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(zd.receita), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
-            END
-        )::numeric AS receita
-    FROM zoho_deals zd
-    WHERE zd.stage IN ('Ganho','Fechado Ganho')
-      AND zd.data_hora_compra::date BETWEEN :data_ini AND :data_fim
+        bd.data_venda_ref AS data_ref,
+        COUNT(DISTINCT bd.deal_id)::bigint AS vendas,
+        SUM(bd.montante)::numeric AS montante,
+        SUM(bd.receita)::numeric AS receita
+    FROM base_dados bd
+    WHERE bd.stage = 'Ganho'
+      AND bd.tipo_venda = 'Novo cliente'
+      AND bd.data_venda_ref BETWEEN :data_ini AND :data_fim
     GROUP BY 1
 ),
 keys AS (
     SELECT data_ref FROM leads_diario
-    UNION SELECT data_ref FROM acts_diario
-    UNION SELECT data_ref FROM vendas_diario
+    UNION
+    SELECT data_ref FROM agendamentos_criados_diario
+    UNION
+    SELECT data_ref FROM agendamentos_diario
+    UNION
+    SELECT data_ref FROM vendas_diario
 )
 SELECT
     k.data_ref,
-    COALESCE(l.leads, 0)::bigint           AS leads,
-    COALESCE(a.agendamentos, 0)::bigint    AS agendamentos,
+    COALESCE(l.leads, 0)::bigint AS leads,
+    COALESCE(c.agendamentos_criados, 0)::bigint AS agendamentos_criados,
+    COALESCE(c.agendamentos_criados, 0)::bigint AS novos_agendamentos,
+    COALESCE(a.agendamentos, 0)::bigint AS agendamentos,
+    COALESCE(a.agendamentos, 0)::bigint AS reunioes_marcadas,
+    COALESCE(a.agendamentos_mais_12, 0)::bigint AS agendamentos_mais_12,
     COALESCE(a.comparecimentos, 0)::bigint AS comparecimentos,
-    COALESCE(v.vendas, 0)::bigint          AS vendas,
-    COALESCE(v.vendas_novas, 0)::bigint    AS vendas_novas,
-    COALESCE(v.montante, 0)::numeric       AS montante,
-    COALESCE(v.receita, 0)::numeric        AS receita
+    COALESCE(a.comparecimentos, 0)::bigint AS concluidas,
+    0::bigint AS canceladas,
+    COALESCE(a.vencidas, 0)::bigint AS vencidas,
+    0::bigint AS agendadas_pendentes,
+    COALESCE(v.vendas, 0)::bigint AS vendas,
+    COALESCE(v.vendas, 0)::bigint AS vendas_novas,
+    COALESCE(v.montante, 0)::numeric AS montante,
+    COALESCE(v.receita, 0)::numeric AS receita
 FROM keys k
-LEFT JOIN leads_diario  l USING (data_ref)
-LEFT JOIN acts_diario   a USING (data_ref)
+LEFT JOIN leads_diario l USING (data_ref)
+LEFT JOIN agendamentos_criados_diario c USING (data_ref)
+LEFT JOIN agendamentos_diario a USING (data_ref)
 LEFT JOIN vendas_diario v USING (data_ref)
 ORDER BY k.data_ref;

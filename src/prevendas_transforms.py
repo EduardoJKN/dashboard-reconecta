@@ -10,6 +10,8 @@ usada nas páginas de Vendas e na regra do SDR × Closer.
 """
 from __future__ import annotations
 
+import unicodedata
+
 import pandas as pd
 
 from .team_classification import (
@@ -23,10 +25,25 @@ from .transforms import _safe_div
 # Visão Geral Pré-vendas
 # ---------------------------------------------------------------------------
 _OVERVIEW_ZEROS = {
-    "leads": 0, "agendamentos": 0, "comparecimentos": 0,
+    "leads": 0,
+    "agendamentos_criados": 0,
+    "agendamentos_exibidos": 0,
+    "agendamentos_mais_12": 0,
+    "novos_agendamentos": 0,
+    "reunioes_marcadas": 0,
+    "concluidas": 0,
+    "canceladas": 0,
+    "vencidas": 0,
+    "agendadas_pendentes": 0,
+    # Aliases legados mantidos para compatibilidade com páginas ainda não migradas.
+    "agendamentos": 0,
+    "comparecimentos": 0,
     "vendas": 0, "vendas_novas": 0,
     "montante": 0.0, "receita": 0.0,
-    "ticket_medio": 0.0, "taxa_comparecimento": 0.0,
+    "ticket_medio": 0.0,
+    "taxa_comparecimento": 0.0,
+    "taxa_comparecimento_real": 0.0,
+    "taxa_comparecimento_bruta": 0.0,
     "taxa_lead_venda_nova": 0.0,
     "media_movel_21d": 0.0,
 }
@@ -36,9 +53,9 @@ def prevendas_overview_kpis(df_diario: pd.DataFrame) -> dict:
     """KPIs consolidados a partir do `prevendas_overview_diario.sql`.
 
     Taxas recalculadas no agregado, NÃO média de taxas diárias:
-      taxa_comparecimento  = SUM(comparec) / SUM(agendamentos) * 100
-      taxa_lead_venda_nova = SUM(vendas_novas) / SUM(leads) * 100
-      ticket_medio         = SUM(montante) / SUM(vendas_novas)
+      taxa_comparecimento = SUM(comparecimentos) / SUM(agendamentos) * 100
+      taxa_lead_venda_nova = SUM(vendas) / SUM(leads) * 100
+      ticket_medio         = SUM(montante) / SUM(vendas)
     A `media_movel_21d` precisa ser calculada com base em uma janela
     independente do filtro (usar `get_media_movel_vendas` quando
     fizer sentido — aqui devolve média do próprio período como fallback)."""
@@ -46,38 +63,49 @@ def prevendas_overview_kpis(df_diario: pd.DataFrame) -> dict:
     if df_diario is None or df_diario.empty:
         return out
 
-    out["leads"]           = int(df_diario["leads"].sum())
-    out["agendamentos"]    = int(df_diario["agendamentos"].sum())
-    out["comparecimentos"] = int(df_diario["comparecimentos"].sum())
-    out["vendas"]          = int(df_diario["vendas"].sum())
-    out["vendas_novas"]    = int(df_diario["vendas_novas"].sum())
-    out["montante"]        = float(df_diario["montante"].sum())
-    out["receita"]         = float(df_diario["receita"].sum())
+    out["leads"] = int(df_diario["leads"].sum()) if "leads" in df_diario.columns else 0
+    out["agendamentos_criados"] = int(df_diario["agendamentos_criados"].sum()) if "agendamentos_criados" in df_diario.columns else int(df_diario["novos_agendamentos"].sum())
+    out["agendamentos_mais_12"] = int(df_diario["agendamentos_mais_12"].sum()) if "agendamentos_mais_12" in df_diario.columns else 0
+    out["novos_agendamentos"] = out["agendamentos_criados"]
+    out["reunioes_marcadas"] = int(df_diario["reunioes_marcadas"].sum()) if "reunioes_marcadas" in df_diario.columns else int(df_diario["agendamentos"].sum())
+    out["concluidas"] = int(df_diario["concluidas"].sum()) if "concluidas" in df_diario.columns else int(df_diario["comparecimentos"].sum())
+    out["canceladas"] = int(df_diario["canceladas"].sum()) if "canceladas" in df_diario.columns else 0
+    out["vencidas"] = int(df_diario["vencidas"].sum()) if "vencidas" in df_diario.columns else 0
+    out["agendadas_pendentes"] = int(df_diario["agendadas_pendentes"].sum()) if "agendadas_pendentes" in df_diario.columns else 0
+    out["agendamentos"] = out["reunioes_marcadas"]
+    out["agendamentos_exibidos"] = max(out["agendamentos"] - out["vencidas"], 0)
+    out["comparecimentos"] = out["concluidas"]
+    out["vendas"] = int(df_diario["vendas"].sum())
+    out["vendas_novas"] = int(df_diario["vendas_novas"].sum()) if "vendas_novas" in df_diario.columns else out["vendas"]
+    out["montante"] = float(df_diario["montante"].sum())
+    out["receita"] = float(df_diario["receita"].sum())
 
-    out["ticket_medio"]    = _safe_div(out["montante"], out["vendas_novas"])
+    out["ticket_medio"] = _safe_div(out["montante"], out["vendas"])
     out["taxa_comparecimento"] = _safe_div(
-        out["comparecimentos"], out["agendamentos"]
+        out["comparecimentos"], out["agendamentos_exibidos"]
     ) * 100
+    out["taxa_comparecimento_real"] = out["taxa_comparecimento"]
+    out["taxa_comparecimento_bruta"] = out["taxa_comparecimento"]
     out["taxa_lead_venda_nova"] = _safe_div(
-        out["vendas_novas"], out["leads"]
+        out["vendas"], out["leads"]
     ) * 100
 
     # Média móvel do PRÓPRIO período (vendas_novas/dia). A "média móvel
     # 21d" canônica vem de get_media_movel_vendas() — aqui é só fallback
     # informativo do próprio recorte.
     n_dias = max(int(df_diario["data_ref"].nunique() or 1), 1)
-    out["media_movel_21d"] = _safe_div(out["vendas_novas"], n_dias)
+    out["media_movel_21d"] = _safe_div(out["vendas"], n_dias)
     return out
 
 
 def prevendas_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
-    """4 etapas: Leads → Agendamentos → Comparecimentos → Vendas novas."""
-    labels = ["Leads", "Agendamentos", "Comparecimentos", "Vendas novas"]
+    """4 etapas do legado: Agend. criados → Agendamentos → Comparecimentos → Vendas."""
+    labels = ["Agend. criados", "Agendamentos", "Comparecimentos", "Vendas"]
     values = [
-        float(k.get("leads", 0) or 0),
+        float(k.get("agendamentos_criados", k.get("novos_agendamentos", 0)) or 0),
         float(k.get("agendamentos", 0) or 0),
         float(k.get("comparecimentos", 0) or 0),
-        float(k.get("vendas_novas", 0) or 0),
+        float(k.get("vendas", 0) or 0),
     ]
     return labels, values
 
@@ -104,8 +132,10 @@ def _consolidar_por_sdr(df_sdr: pd.DataFrame) -> pd.DataFrame:
     if df_sdr is None or df_sdr.empty:
         return df_sdr
 
-    sum_cols = [c for c in ("agendamentos", "comparecimentos",
-                            "cancelamentos", "vendas", "vendas_novas",
+    sum_cols = [c for c in ("agendamentos_criados", "agendamentos",
+                            "agendamentos_mais_12", "agendamentos_menos_12",
+                            "comparecimentos", "cancelamentos", "cancelados",
+                            "vencidos", "vendas", "vendas_novas",
                             "montante", "receita") if c in df_sdr.columns]
     if "fonte_sdr" in df_sdr.columns:
         agg = df_sdr.groupby("sdr", as_index=False, dropna=False).agg(
@@ -131,6 +161,44 @@ def _consolidar_por_sdr(df_sdr: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
+def _normalize_name(name) -> str:
+    if not isinstance(name, str):
+        return ""
+    s = unicodedata.normalize("NFD", name)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return s.lower().strip()
+
+
+def _matches_official_name(official_name: str, raw_name: str) -> bool:
+    official = _normalize_name(official_name)
+    raw = _normalize_name(raw_name)
+    if not official or not raw:
+        return False
+    if " " in official or " " in raw:
+        return official in raw or raw in official
+    first_name = raw.split()[0] if raw else ""
+    return first_name == official
+
+
+def _canonical_official_name(name, official_names: list[str]) -> str:
+    matches = [
+        official_name
+        for official_name in official_names
+        if _matches_official_name(official_name, name)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    normalized_name = _normalize_name(name)
+    exact_matches = [
+        official_name
+        for official_name in matches
+        if _normalize_name(official_name) == normalized_name
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    return ""
+
+
 def prevendas_ranking_sdr(df_sdr: pd.DataFrame) -> pd.DataFrame:
     """Ranking ordenado por agendamentos desc com derivadas:
       taxa_comparecimento = comparec / agend * 100
@@ -145,7 +213,9 @@ def prevendas_ranking_sdr(df_sdr: pd.DataFrame) -> pd.DataFrame:
     fonte, exibe como ex.: `activity.prevendas, deal.sdr_ss`.
     """
     cols = ["sdr", "tipo_sdr", "fonte_sdr",
-            "agendamentos", "comparecimentos", "cancelamentos",
+            "agendamentos_criados", "agendamentos",
+            "agendamentos_mais_12", "agendamentos_menos_12",
+            "comparecimentos", "cancelamentos", "cancelados", "vencidos",
             "vendas", "vendas_novas", "montante", "receita",
             "taxa_comparecimento", "taxa_lead_venda", "ticket_medio"]
     if df_sdr is None or df_sdr.empty:
@@ -169,6 +239,73 @@ def prevendas_ranking_sdr(df_sdr: pd.DataFrame) -> pd.DataFrame:
         if c not in out.columns:
             out[c] = 0 if c not in ("sdr", "tipo_sdr", "fonte_sdr") else ""
     return (out[cols]
+            .sort_values(["agendamentos", "vendas_novas"], ascending=False)
+            .reset_index(drop=True))
+
+
+def prevendas_ranking_sdr_oficiais(df_sdr: pd.DataFrame,
+                                   df_sdrs_oficiais: pd.DataFrame) -> pd.DataFrame:
+    """Ranking restrito aos nomes presentes no cadastro oficial da FDW.
+
+    O ranking bruto continua vindo de `get_prevendas_por_sdr()`. Aqui:
+    1. remove `Sem SDR`
+    2. mantém apenas SDRs que casam com `fdw_reconecta.executivas_pre_vendas`
+    3. padroniza o nome exibido com a coluna oficial `nome`
+    """
+    cols = ["sdr", "tipo_sdr", "fonte_sdr",
+            "agendamentos_criados", "agendamentos",
+            "agendamentos_mais_12", "agendamentos_menos_12",
+            "comparecimentos", "cancelamentos", "cancelados", "vencidos",
+            "vendas", "vendas_novas", "montante", "receita",
+            "taxa_comparecimento", "taxa_lead_venda", "ticket_medio"]
+    ranking = prevendas_ranking_sdr(df_sdr)
+    if (ranking is None or ranking.empty or df_sdrs_oficiais is None
+            or df_sdrs_oficiais.empty or "nome" not in df_sdrs_oficiais.columns):
+        return pd.DataFrame(columns=cols)
+
+    official_names = [
+        str(nome).strip()
+        for nome in df_sdrs_oficiais["nome"].dropna().tolist()
+        if str(nome).strip()
+    ]
+    base = ranking.copy()
+    base = base[base["sdr"] != SEM_SDR_LABEL].copy()
+    base["sdr_oficial"] = base["sdr"].apply(
+        lambda nome: _canonical_official_name(nome, official_names)
+    )
+    base = base[base["sdr_oficial"] != ""].copy()
+    if base.empty:
+        return pd.DataFrame(columns=cols)
+
+    sum_cols = [c for c in ("agendamentos_criados", "agendamentos",
+                            "agendamentos_mais_12", "agendamentos_menos_12",
+                            "comparecimentos", "cancelamentos", "cancelados",
+                            "vencidos", "vendas", "vendas_novas",
+                            "montante", "receita")
+                if c in base.columns]
+    agg = base.groupby("sdr_oficial", as_index=False, dropna=False).agg(
+        **{c: (c, "sum") for c in sum_cols},
+        fontes=("fonte_sdr",
+                lambda s: ", ".join(sorted({v for v in s.dropna() if str(v).strip()}))),
+    )
+    agg = agg.rename(columns={"sdr_oficial": "sdr", "fontes": "fonte_sdr"})
+    agg["tipo_sdr"] = "Pré-vendas"
+    agg["taxa_comparecimento"] = agg.apply(
+        lambda r: _safe_div(r["comparecimentos"], r["agendamentos"]) * 100,
+        axis=1,
+    )
+    agg["taxa_lead_venda"] = agg.apply(
+        lambda r: _safe_div(r["vendas_novas"], r["agendamentos"]) * 100,
+        axis=1,
+    )
+    agg["ticket_medio"] = agg.apply(
+        lambda r: _safe_div(r["montante"], r["vendas_novas"]),
+        axis=1,
+    )
+    for c in cols:
+        if c not in agg.columns:
+            agg[c] = 0 if c not in ("sdr", "tipo_sdr", "fonte_sdr") else ""
+    return (agg[cols]
             .sort_values(["agendamentos", "vendas_novas"], ascending=False)
             .reset_index(drop=True))
 

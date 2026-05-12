@@ -36,13 +36,25 @@ def get_mkt_visao_geral_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Visão Geral Marketing — fonte oficial validada (regra pgAdmin).
 
     Retorna 1 linha por `data_ref` com investimento total geral, leads
-    canônicos por e-mail/dia, classificação canônica do e-mail no período
-    (+12 / -12) e financeiro direto de zoho_deals (stages Ganho / Fechado
+    por e-mail único/dia, classificação da própria linha do dia
+    (+12 / -12 / Não atua) e financeiro direto de zoho_deals (stages Ganho / Fechado
     Ganho). Substitui mkt_overview_v2 nos cards principais.
     """
     return _to_datetime(
         run_sql_file("mkt_visao_geral_diario.sql", _params(data_ini, data_fim))
     )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo KPIs do período Marketing…")
+def get_mkt_visao_geral_periodo(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Visão Geral Marketing — KPIs do período para os cards do topo.
+
+    Usa deduplicação por e-mail no período DENTRO de cada bucket de
+    classificação (`+12`, `-12`, `Não atua`). Os buckets podem se sobrepor:
+    o mesmo e-mail pode contar em mais de uma classificação no período.
+    Continua separado da série diária usada no gráfico de tendência.
+    """
+    return run_sql_file("mkt_visao_geral_periodo.sql", _params(data_ini, data_fim))
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Visão Geral Marketing por canal…")

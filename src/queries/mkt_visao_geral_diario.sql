@@ -5,12 +5,14 @@
 -- página. Não usa LATERAL JOIN com zoho_deals (que estava pesado) — agrega
 -- direto cada fonte.
 --
--- Regras (abril/2026 esperado):
+-- Regras:
 --   investimento_total_geral = 102.199,89   ← bi.vw_investimento_diario
---   leads_totais             = 854          ← ext_reconecta.leads (e-mails únicos/dia)
---   leads_qualificados       = 701          ← +12 ou -12, classificação canônica do e-mail no período
---   leads_mais_12            = 259
---   leads_menos_12           = 442
+--   leads_totais             = e-mails únicos/dia via ext_reconecta.leads
+--   leads_qualificados       = e-mails únicos/dia com classificado do PRÓPRIO dia
+--                               em ('Atua +12','Atua -12')
+--   leads_mais_12            = e-mails únicos/dia com classificado = 'Atua +12'
+--   leads_menos_12           = e-mails únicos/dia com classificado = 'Atua -12'
+--   leads_nao_atua           = e-mails únicos/dia com classificado = 'Não atua'
 --   vendas_total_geral       = 57           ← zoho_deals (Ganho/Fechado Ganho)
 --   vendas_novas_total_geral = 50           ← tipo_venda = 'Novo cliente'
 --   montante_total_geral     = 1.216.572    ← SUM(amount::numeric)
@@ -19,14 +21,15 @@
 WITH
 -- -----------------------------------------------------------------------------
 -- Leads — base limpa: filtra janela e exclui e-mails de teste/internos.
--- created_at::date é o eixo canônico (mesma regra usada em pgAdmin).
+-- created_at::date é o eixo canônico (mesma regra usada em pgAdmin / Looker).
+-- A classificação usada nos buckets (+12 / -12 / Não atua) é a da PRÓPRIA
+-- linha do dia. Não há classificação canônica no período nem `rn_email = 1`.
 -- -----------------------------------------------------------------------------
 leads_clean AS (
     SELECT
         l.created_at::date                AS data_ref,
         lower(btrim(l.email))             AS email_norm,
-        l.created_at,
-        l.classificado
+        lower(btrim(coalesce(l.classificado, ''))) AS classif_norm
     FROM ext_reconecta.leads l
     WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
       AND l.email IS NOT NULL
@@ -36,52 +39,26 @@ leads_clean AS (
       AND lower(l.email) NOT LIKE '%smarts%'
       AND lower(l.email) NOT LIKE '%reconecta%'
 ),
--- Última classificação POR E-MAIL dentro do período (created_at DESC).
--- Cada e-mail tem 1 classificação canônica no período inteiro — vale tanto
--- pra +12 quanto pra -12.
-last_classif AS (
-    SELECT DISTINCT ON (email_norm)
-        email_norm,
-        classificado AS classif_final
-    FROM leads_clean
-    ORDER BY email_norm, created_at DESC
-),
--- 1 linha por (data_ref, e-mail). rn_email = 1 marca a PRIMEIRA aparição do
--- e-mail no período — usado pra que o lead qualificado conte 1× só (no
--- período inteiro), enquanto leads_totais continua somando aparições diárias.
--- É essa assimetria que casa o validation:
---   leads_totais (soma diária)             = 854
---   leads_qualificados (distinct no período) = 701
---   leads_mais_12 (distinct no período)      = 259
---   leads_menos_12 (distinct no período)     = 442
-leads_dia_email AS (
-    SELECT
-        lde.data_ref,
-        lde.email_norm,
-        cf.classif_final,
-        ROW_NUMBER() OVER (
-            PARTITION BY lde.email_norm
-            ORDER BY lde.data_ref ASC
-        ) AS rn_email
-    FROM (
-        SELECT DISTINCT data_ref, email_norm
-        FROM leads_clean
-    ) lde
-    LEFT JOIN last_classif cf USING (email_norm)
-),
 leads_daily AS (
     SELECT
         data_ref,
-        COUNT(*)                                                   AS leads_totais,
+        COUNT(DISTINCT email_norm)                                 AS leads_totais,
         COUNT(*) FILTER (
-            WHERE rn_email = 1
-              AND (classif_final ILIKE '%+12%' OR classif_final ILIKE '%-12%')
+            WHERE classif_norm IN ('atua +12', 'atua -12')
+        )                                                          AS linhas_qualificadas,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE classif_norm IN ('atua +12', 'atua -12')
         )                                                          AS leads_qualificados,
-        COUNT(*) FILTER (WHERE rn_email = 1 AND classif_final ILIKE '%+12%')
-                                                                   AS leads_mais_12,
-        COUNT(*) FILTER (WHERE rn_email = 1 AND classif_final ILIKE '%-12%')
-                                                                   AS leads_menos_12
-    FROM leads_dia_email
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE classif_norm = 'atua +12'
+        )                                                          AS leads_mais_12,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE classif_norm = 'atua -12'
+        )                                                          AS leads_menos_12,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE classif_norm IN ('não atua', 'nao atua')
+        )                                                          AS leads_nao_atua
+    FROM leads_clean
     GROUP BY data_ref
 ),
 -- -----------------------------------------------------------------------------
@@ -124,6 +101,7 @@ SELECT
     COALESCE(l.leads_qualificados, 0)::bigint           AS leads_qualificados,
     COALESCE(l.leads_mais_12, 0)::bigint                AS leads_mais_12,
     COALESCE(l.leads_menos_12, 0)::bigint               AS leads_menos_12,
+    COALESCE(l.leads_nao_atua, 0)::bigint               AS leads_nao_atua,
     COALESCE(d.vendas_total_geral, 0)::bigint           AS vendas_total_geral,
     COALESCE(d.vendas_novas_total_geral, 0)::bigint     AS vendas_novas_total_geral,
     COALESCE(d.montante_total_geral, 0)::numeric        AS montante_total_geral,

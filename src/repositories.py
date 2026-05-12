@@ -124,6 +124,37 @@ def get_prevendas_overview_diario(data_ini: date, data_fim: date) -> pd.DataFram
     return df
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (detalhe diário)…")
+def get_prevendas_leads_detalhe_diario(data_ini: date,
+                                       data_fim: date) -> pd.DataFrame:
+    df = run_sql_file(
+        "prevendas_leads_detalhe_diario.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty:
+        for col in ("data_agendamento", "data_criacao", "data_venda"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col])
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pré-vendas…")
+def get_prevendas_sdrs_oficiais() -> pd.DataFrame:
+    return run_sql_file("prevendas_sdrs_oficiais.sql")
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (diário por SDR)…")
+def get_prevendas_overview_diario_por_sdr(data_ini: date,
+                                          data_fim: date) -> pd.DataFrame:
+    df = run_sql_file(
+        "prevendas_overview_diario_por_sdr.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty:
+        df["data_ref"] = pd.to_datetime(df["data_ref"])
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas por SDR…")
 def get_prevendas_por_sdr(data_ini: date, data_fim: date) -> pd.DataFrame:
     return run_sql_file(

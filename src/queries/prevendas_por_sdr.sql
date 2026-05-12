@@ -17,12 +17,23 @@
 -- fontes, aparecem 2 linhas. O Python consolida quando precisar exibir
 -- 1 linha por SDR.
 --
--- Para vendas: NÃO uso priority match lead → deal aqui. A regra é
--- "deal está atrelado à activity (what_id)" → o SDR daquela activity
--- é creditado pela venda. DISTINCT ON deal_id garante que cada deal
--- conte 1× (creditado à activity mais recente).
+-- Para vendas: usar a MESMA regra do card da Visão Geral:
+--   - zoho_deals
+--   - data_hora_compra::date
+--   - stage = 'Ganho'
+--   - tipo_venda = 'Novo cliente'
+--   - SDR atribuído por zoho_deals.sdr_ss -> zoho_users
 -- =============================================================================
-WITH acts AS (
+WITH deal_classif AS (
+    SELECT DISTINCT ON (d.id)
+        d.id AS deal_id,
+        l.classificado
+    FROM zoho_deals d
+    LEFT JOIN ext_reconecta.leads l
+           ON d.id::text = l.zoho_id::text
+    ORDER BY d.id, l.created_at DESC NULLS LAST
+),
+acts_agendamento AS (
     SELECT
         a.id                                          AS activity_id,
         a.what_id                                     AS deal_id,
@@ -44,77 +55,132 @@ WITH acts AS (
     LEFT JOIN zoho_deals d ON d.id        = a.what_id
     LEFT JOIN zoho_users u ON u.id::text  = d.sdr_ss::text
     WHERE a.activity_type IN ('Consulta','Indicação')
+      AND a.status_reuniao IS NOT NULL
       AND a.start_datetime::date BETWEEN :data_ini AND :data_fim
 ),
--- Deals associados às activities do período (via what_id), filtrados por
--- ganho na mesma janela. DISTINCT ON deal_id pra que cada deal seja
--- creditado a UM SDR (o da activity mais recente). O par (sdr, fonte_sdr)
--- segue o que foi escolhido na activity vencedora.
-deals_acts AS (
-    SELECT DISTINCT ON (zd.id)
-        zd.id          AS deal_id,
-        a.sdr,
-        a.fonte_sdr,
-        zd.tipo_venda,
-        CASE WHEN NULLIF(btrim(zd.amount), '') IS NULL THEN 0::numeric
+acts_criacao AS (
+    SELECT
+        a.id                                          AS activity_id,
+        a.what_id                                     AS deal_id,
+        a.created_time::date                          AS data_ref,
+        COALESCE(
+            NULLIF(btrim(a.prevendas), ''),
+            TRIM(u.first_name || ' ' || u.last_name),
+            'Sem SDR'
+        )                                             AS sdr,
+        CASE
+            WHEN NULLIF(btrim(a.prevendas), '') IS NOT NULL
+                THEN 'activity.prevendas'
+            WHEN TRIM(u.first_name || ' ' || u.last_name) IS NOT NULL
+                THEN 'deal.sdr_ss'
+            ELSE 'Sem SDR'
+        END                                           AS fonte_sdr
+    FROM zoho_activities a
+    LEFT JOIN zoho_deals d ON d.id        = a.what_id
+    LEFT JOIN zoho_users u ON u.id::text  = d.sdr_ss::text
+    WHERE a.activity_type IN ('Consulta','Indicação')
+      AND a.status_reuniao IS NOT NULL
+      AND a.created_time::date BETWEEN :data_ini AND :data_fim
+),
+deals_direct AS (
+    SELECT
+        d.id AS deal_id,
+        COALESCE(
+            NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+            'Sem SDR'
+        ) AS sdr,
+        CASE
+            WHEN NULLIF(TRIM(u.first_name || ' ' || u.last_name), '') IS NOT NULL
+                THEN 'deal.sdr_ss'
+            ELSE 'Sem SDR'
+        END AS fonte_sdr,
+        CASE WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
         ELSE REPLACE(
                  REPLACE(
-                     REGEXP_REPLACE(TRIM(zd.amount), '[^0-9,.-]', '', 'g'),
+                    REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
                      '.', ''),
                  ',', '.'
              )::numeric
         END AS montante,
-        CASE WHEN NULLIF(btrim(zd.receita), '') IS NULL THEN 0::numeric
+        CASE WHEN NULLIF(btrim(d.receita), '') IS NULL THEN 0::numeric
         ELSE REPLACE(
                  REPLACE(
-                     REGEXP_REPLACE(TRIM(zd.receita), '[^0-9,.-]', '', 'g'),
+                    REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
                      '.', ''),
                  ',', '.'
              )::numeric
         END AS receita
-    FROM acts a
-    JOIN zoho_deals zd ON zd.id = a.deal_id
-    WHERE zd.stage IN ('Ganho','Fechado Ganho')
-      AND zd.data_hora_compra::date BETWEEN :data_ini AND :data_fim
-    ORDER BY zd.id, a.data_ref DESC
+    FROM zoho_deals d
+    LEFT JOIN zoho_users u ON u.id::text = d.sdr_ss::text
+    WHERE d.stage = 'Ganho'
+      AND d.tipo_venda = 'Novo cliente'
+      AND d.data_hora_compra::date BETWEEN :data_ini AND :data_fim
+),
+acts_created_agg AS (
+    SELECT
+        sdr, fonte_sdr,
+        COUNT(*)::bigint                                         AS agendamentos_criados
+    FROM acts_criacao
+    GROUP BY sdr, fonte_sdr
 ),
 acts_agg AS (
     SELECT
-        sdr, fonte_sdr,
+        a.sdr,
+        a.fonte_sdr,
         COUNT(*)::bigint                                         AS agendamentos,
-        COUNT(*) FILTER (WHERE status_reuniao = 'Concluída')::bigint
+        COUNT(*) FILTER (
+            WHERE dc.classificado = 'Atua +12'
+        )::bigint                                                AS agendamentos_mais_12,
+        COUNT(*) FILTER (
+            WHERE dc.classificado = 'Atua -12'
+        )::bigint                                                AS agendamentos_menos_12,
+        COUNT(*) FILTER (
+            WHERE a.status_reuniao IN ('Concluída', 'Concluído')
+        )::bigint
                                                                   AS comparecimentos,
-        COUNT(*) FILTER (WHERE status_reuniao = 'Cancelada')::bigint
-                                                                  AS cancelamentos
-    FROM acts
-    GROUP BY sdr, fonte_sdr
+        COUNT(*) FILTER (
+            WHERE a.status_reuniao IN ('Cancelada', 'Cancelado')
+        )::bigint                                                AS cancelamentos,
+        COUNT(*) FILTER (
+            WHERE a.status_reuniao = 'Vencida'
+        )::bigint                                                AS vencidos
+    FROM acts_agendamento a
+    LEFT JOIN deal_classif dc ON dc.deal_id = a.deal_id
+    GROUP BY a.sdr, a.fonte_sdr
 ),
 deals_agg AS (
     SELECT
         sdr, fonte_sdr,
         COUNT(*)::bigint                                         AS vendas,
-        COUNT(*) FILTER (WHERE tipo_venda = 'Novo cliente')::bigint
-                                                                  AS vendas_novas,
+        COUNT(*)::bigint                                         AS vendas_novas,
         SUM(montante)::numeric                                    AS montante,
         SUM(receita)::numeric                                     AS receita
-    FROM deals_acts
+    FROM deals_direct
     GROUP BY sdr, fonte_sdr
 ),
 pares AS (
+    SELECT sdr, fonte_sdr FROM acts_created_agg
+    UNION
     SELECT sdr, fonte_sdr FROM acts_agg
     UNION SELECT sdr, fonte_sdr FROM deals_agg
 )
 SELECT
     p.sdr,
     p.fonte_sdr,
+    COALESCE(c.agendamentos_criados, 0)::bigint AS agendamentos_criados,
     COALESCE(a.agendamentos, 0)::bigint     AS agendamentos,
+    COALESCE(a.agendamentos_mais_12, 0)::bigint AS agendamentos_mais_12,
+    COALESCE(a.agendamentos_menos_12, 0)::bigint AS agendamentos_menos_12,
     COALESCE(a.comparecimentos, 0)::bigint  AS comparecimentos,
     COALESCE(a.cancelamentos, 0)::bigint    AS cancelamentos,
+    COALESCE(a.cancelamentos, 0)::bigint    AS cancelados,
+    COALESCE(a.vencidos, 0)::bigint         AS vencidos,
     COALESCE(d.vendas, 0)::bigint           AS vendas,
     COALESCE(d.vendas_novas, 0)::bigint     AS vendas_novas,
     COALESCE(d.montante, 0)::numeric        AS montante,
     COALESCE(d.receita, 0)::numeric         AS receita
 FROM pares p
+LEFT JOIN acts_created_agg c USING (sdr, fonte_sdr)
 LEFT JOIN acts_agg  a USING (sdr, fonte_sdr)
 LEFT JOIN deals_agg d USING (sdr, fonte_sdr)
 ORDER BY agendamentos DESC, vendas DESC;

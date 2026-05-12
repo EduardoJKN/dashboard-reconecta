@@ -189,8 +189,8 @@ else:
 
     kf = criativo_funil_kpis(df_cri_funil, sel_funil)
 
-    # ---- Resumo (5 cards: Invest, Leads, +12, Agend, Vendas novas) -------
-    rs1, rs2, rs3, rs4, rs5 = st.columns(5, gap="small")
+    # ---- Resumo (6 cards: Invest, Leads, +12, Não atua, Agend, Vendas) ---
+    rs1, rs2, rs3, rs4, rs5, rs6 = st.columns(6, gap="small")
     with rs1:
         metric_card_v2(
             "Investimento",
@@ -214,11 +214,17 @@ else:
         )
     with rs4:
         metric_card_v2(
+            "Não atua",
+            int_br(int(kf.get("leads_nao_atua") or 0)),
+            hint="leads classificados como não atua",
+        )
+    with rs5:
+        metric_card_v2(
             "Agendamentos",
             int_br(kf["agendamentos"]),
             hint=f"taxa {pct(kf['taxa_lead_agendamento'], casas=1)}",
         )
-    with rs5:
+    with rs6:
         metric_card_v2(
             "Vendas novas",
             int_br(kf["vendas_novas"]),
@@ -414,8 +420,8 @@ def _delta_or_none(curr, prev):
     return delta_pct(curr, prev)
 
 
-# Linha 2: Leads, +12, Agendamentos, Comparecimentos
-r2c1, r2c2, r2c3, r2c4 = st.columns(4, gap="small")
+# Linha 2: Leads, +12, Não atua, Agendamentos, Comparecimentos
+r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns(5, gap="small")
 with r2c1:
     metric_card_v2(
         "Leads",
@@ -432,12 +438,19 @@ with r2c2:
     )
 with r2c3:
     metric_card_v2(
+        "Leads Não atua",
+        int_br(int(k.get("leads_nao_atua") or 0)),
+        delta_pct=_delta_or_none(k.get("leads_nao_atua"), kp.get("leads_nao_atua")),
+        hint="ATUA não atua · mart",
+    )
+with r2c4:
+    metric_card_v2(
         "Agendamentos",
         _val_or_dash(k["agendamentos"], int_br),
         delta_pct=_delta_or_none(k["agendamentos"], kp["agendamentos"]),
         hint="zoho_activities · mart",
     )
-with r2c4:
+with r2c5:
     metric_card_v2(
         "Comparecimentos",
         _val_or_dash(k["comparecimentos"], int_br),
@@ -648,8 +661,8 @@ def _creative_card_html(row) -> str:
         brl(invest, casas=0) if invest == int(invest) else brl(invest, casas=2)
     )
 
-    # Linha 2 — Leads · +12 · CPL (mart). NaN ⇒ "—" (sem atribuição); 0 real
-    # da mart ⇒ "0"; CPL com leads=0 já vem como NaN (denominador zero) e
+    # Linha 2 — Leads · +12 · Não atua · CPL (mart). NaN ⇒ "—" (sem
+    # atribuição); Não atua cai em 0 quando ausente/nulo; CPL com leads=0
     # cai em "—" — coerente com a regra "não inventar zero".
     def _missing(v) -> bool:
         if v is None:
@@ -661,9 +674,11 @@ def _creative_card_html(row) -> str:
 
     leads_raw = row.get("leads_total")
     mais12_raw = row.get("leads_mais_12")
+    nao_atua_raw = row.get("leads_nao_atua")
     cpl_raw = row.get("cpl")
     leads_fmt = "—" if _missing(leads_raw) else int_br(int(leads_raw))
     mais12_fmt = "—" if _missing(mais12_raw) else int_br(int(mais12_raw))
+    nao_atua_fmt = int_br(0 if _missing(nao_atua_raw) else int(nao_atua_raw))
     cpl_fmt = "—" if _missing(cpl_raw) else brl(float(cpl_raw), casas=2)
 
     metric_label_css = (
@@ -704,13 +719,15 @@ def _creative_card_html(row) -> str:
         f'<div><div style="{metric_label_css}">CPC</div>'
         f'<div style="{metric_value_css}">{html_lib.escape(cpc_fmt)}</div></div>'
         f'</div>'
-        # Linha 2 — resultado/derivada da mart (Leads · +12 · CPL)
+        # Linha 2 — resultado/derivada da mart (Leads · +12 · Não atua · CPL)
         f'<div style="display:flex;gap:12px;margin-top:8px;'
         f'padding-top:8px;border-top:1px solid {PALETTE["border"]};">'
         f'<div><div style="{metric_label_css}">Leads</div>'
         f'<div style="{metric_value_mart_css}">{html_lib.escape(leads_fmt)}</div></div>'
         f'<div><div style="{metric_label_css}">+12</div>'
         f'<div style="{metric_value_mart_css}">{html_lib.escape(mais12_fmt)}</div></div>'
+        f'<div><div style="{metric_label_css}">Não atua</div>'
+        f'<div style="{metric_value_mart_css}">{html_lib.escape(nao_atua_fmt)}</div></div>'
         f'<div><div style="{metric_label_css}">CPL</div>'
         f'<div style="{metric_value_mart_css}">{html_lib.escape(cpl_fmt)}</div></div>'
         f'</div>'
