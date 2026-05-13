@@ -1809,6 +1809,206 @@ def criativos_ranking(df: pd.DataFrame,
               .reset_index(drop=True))
 
 
+def _ad_name_norm_series(s: pd.Series) -> pd.Series:
+    return s.fillna("").astype(str).str.strip().str.lower()
+
+
+def criativos_top_por_nome_ranking(
+    df: pd.DataFrame,
+    df_top_nome: pd.DataFrame,
+    df_resultados: pd.DataFrame | None,
+    sort_by: str = "investimento",
+    ascending: bool = False,
+    top_n: int = 12,
+) -> pd.DataFrame:
+    """Top N criativos por nome normalizado (utm_content = ad_name).
+
+    **Base obrigatória:** `df_top_nome` (`mkt_top_criativos_por_nome.sql`).
+    Não exige `bi.vw_mkt_criativos` nem mart para listar criativos.
+
+    `df` (view filtrada) e `df_resultados` são só enriquecimento e filtro
+    opcional de campanha/status: merge sempre **à esquerda** a partir da base
+    fdw+lp_form; se não houver match, o card segue sem thumb/status."""
+    cols_base = ["ad_id", "ad_name", "campaign_name",
+                 "investimento", "impressoes", "cliques", "alcance",
+                 "ctr", "cpc",
+                 "thumbnail_url", "image_url", "permalink_url",
+                 "effective_status", "status_label"]
+    cols_extra = ["qtd_ad_ids", "qtd_campaigns", "qtd_adsets", "leads_meta", "cpl_meta"]
+    cols_resultado = ["leads_total", "leads_mais_12", "leads_menos_12",
+                      "leads_nao_atua",
+                      "agendamentos", "comparecimentos", "no_shows",
+                      "deals", "deals_ganhos", "vendas", "valor_receita",
+                      "cpl", "cpl_mais_12", "cac", "roas"]
+    cols = cols_base + cols_extra + cols_resultado
+
+    empty = pd.DataFrame(columns=cols)
+    if df_top_nome is None or df_top_nome.empty:
+        return empty
+    if "ad_name_norm" not in df_top_nome.columns:
+        return empty
+
+    base = df_top_nome.copy()
+    base["ad_name_norm"] = base["ad_name_norm"].astype(str)
+
+    base["investimento"] = pd.to_numeric(
+        base.get("investimento"), errors="coerce"
+    ).fillna(0)
+    if "leads_reais" in base.columns:
+        base["leads_total"] = pd.to_numeric(
+            base["leads_reais"], errors="coerce"
+        ).fillna(0)
+    else:
+        base["leads_total"] = 0.0
+
+    for lc in ("leads_mais_12", "leads_menos_12", "leads_nao_atua"):
+        if lc in base.columns:
+            base[lc] = pd.to_numeric(base[lc], errors="coerce").fillna(0)
+        else:
+            base[lc] = 0.0
+
+    if "cpl_real" in base.columns:
+        base["cpl"] = pd.to_numeric(base["cpl_real"], errors="coerce")
+    else:
+        lt = base["leads_total"]
+        base["cpl"] = base["investimento"] / lt.where(lt > 0)
+
+    if "cpl_mais_12" in base.columns:
+        base["cpl_mais_12"] = pd.to_numeric(base["cpl_mais_12"], errors="coerce")
+    else:
+        lm = base["leads_mais_12"]
+        base["cpl_mais_12"] = base["investimento"] / lm.where(lm > 0)
+
+    for c in ("ctr", "cpc", "impressoes", "cliques", "alcance", "leads_meta"):
+        if c in base.columns:
+            base[c] = pd.to_numeric(base[c], errors="coerce")
+
+    base = base.loc[base["investimento"] > 0].copy()
+    if base.empty:
+        return empty
+
+    # Filtro opcional por campanha/status (via vw): só restringe se houver
+    # interseção não vazia — nunca esvazia o Top 12 por falta de match na BI.
+    df_work: pd.DataFrame | None = None
+    if (
+        df is not None
+        and not df.empty
+        and "ad_name" in df.columns
+        and "ad_id" in df.columns
+    ):
+        df_work = df.copy()
+        df_work["ad_name_norm"] = _ad_name_norm_series(df_work["ad_name"])
+        inv_vw = (
+            df_work.groupby("ad_name_norm", as_index=False)["investimento"]
+            .sum()
+        )
+        allowed_vw = set(
+            inv_vw.loc[inv_vw["investimento"] > 0, "ad_name_norm"].astype(str)
+        )
+        if allowed_vw:
+            cand = base[base["ad_name_norm"].isin(allowed_vw)].copy()
+            if not cand.empty:
+                base = cand
+
+    rep_cols = [
+        "ad_name_norm", "ad_id", "thumbnail_url", "image_url", "permalink_url",
+        "effective_status", "status_label",
+    ]
+    rep_rows: list[dict] = []
+    if df_work is not None:
+        for norm, sub in df_work.groupby("ad_name_norm"):
+            nstr = str(norm)
+            by_ad = (
+                sub.groupby("ad_id", as_index=False)["investimento"]
+                .sum()
+                .sort_values("investimento", ascending=False)
+            )
+            if by_ad.empty:
+                continue
+            top_ad_id = by_ad.iloc[0]["ad_id"]
+            one = sub[sub["ad_id"].astype(str) == str(top_ad_id)]
+            if one.empty:
+                continue
+            r = one.iloc[0]
+            eff = r.get("effective_status")
+            rep_rows.append({
+                "ad_name_norm": nstr,
+                "ad_id": str(top_ad_id),
+                "thumbnail_url": r.get("thumbnail_url"),
+                "image_url": r.get("image_url"),
+                "permalink_url": r.get("permalink_url"),
+                "effective_status": eff,
+                "status_label": normalize_status(eff),
+            })
+
+    rep_df = (
+        pd.DataFrame(rep_rows, columns=rep_cols)
+        if rep_rows else pd.DataFrame(columns=rep_cols)
+    )
+
+    out = base.merge(rep_df, on="ad_name_norm", how="left")
+    out["ad_id"] = out["ad_id"].fillna("").astype(str)
+
+    mask_sl = out["status_label"].isna() | (out["status_label"].astype(str).str.strip() == "")
+    if mask_sl.any():
+        out.loc[mask_sl, "status_label"] = (
+            out.loc[mask_sl, "effective_status"].map(normalize_status)
+        )
+
+    mart_cols = [
+        "agendamentos", "comparecimentos", "no_shows",
+        "deals", "deals_ganhos", "vendas", "valor_receita",
+    ]
+    if (
+        df_work is not None
+        and df_resultados is not None
+        and not df_resultados.empty
+        and "ad_id" in df_resultados.columns
+    ):
+        m = df_work[["ad_id", "ad_name_norm"]].drop_duplicates()
+        m["ad_id"] = m["ad_id"].astype(str)
+        res = df_resultados.copy()
+        res["ad_id"] = res["ad_id"].astype(str)
+        avail = [c for c in mart_cols if c in res.columns]
+        if avail:
+            mr = m.merge(res[["ad_id", *avail]], on="ad_id", how="left")
+            mart_norm = mr.groupby("ad_name_norm", as_index=False)[avail].sum()
+            out = out.merge(mart_norm, on="ad_name_norm", how="left")
+
+    for c in mart_cols:
+        if c not in out.columns:
+            out[c] = float("nan")
+
+    inv = pd.to_numeric(out["investimento"], errors="coerce")
+    v_vendas = pd.to_numeric(out["vendas"], errors="coerce")
+    v_rec = pd.to_numeric(out["valor_receita"], errors="coerce")
+    out["cac"] = inv / v_vendas.where(v_vendas > 0)
+    out["roas"] = v_rec / inv.where(inv > 0)
+
+    for c in cols:
+        if c not in out.columns:
+            out[c] = float("nan")
+
+    sort_col = sort_by
+    if sort_col not in out.columns:
+        sort_col = "leads_total" if "leads_total" in out.columns else "investimento"
+    else:
+        mart_only = {
+            "agendamentos", "comparecimentos", "no_shows", "deals", "deals_ganhos",
+            "vendas", "valor_receita", "cac", "roas",
+        }
+        if sort_col in mart_only and out[sort_col].notna().sum() == 0:
+            sort_col = (
+                "leads_total"
+                if bool((out["leads_total"] > 0).any())
+                else "investimento"
+            )
+
+    return (out.sort_values(sort_col, ascending=ascending, na_position="last")
+              .head(top_n)[cols]
+              .reset_index(drop=True))
+
+
 # ---------------------------------------------------------------------------
 # Cobertura da atribuição POR ad_id (diagnóstico para Criativos)
 # ---------------------------------------------------------------------------

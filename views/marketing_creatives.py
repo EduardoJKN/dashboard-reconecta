@@ -8,6 +8,7 @@ from __future__ import annotations
 import html as html_lib
 from datetime import timedelta
 
+import pandas as pd
 import streamlit as st
 
 from src.marketing_queries import (
@@ -16,6 +17,7 @@ from src.marketing_queries import (
     get_mkt_criativos_cobertura,
     get_mkt_criativos_resultados,
     get_mkt_paginas_variantes,
+    get_mkt_top_criativos_por_nome,
 )
 from src.marketing_safe import safe_run
 from src.marketing_transforms import (
@@ -29,6 +31,7 @@ from src.marketing_transforms import (
     criativos_por_quality,
     criativos_por_status,
     criativos_ranking,
+    criativos_top_por_nome_ranking,
     criativos_tabela,
     lista_criativos_funil,
     lista_criativos_utm_content,
@@ -105,6 +108,12 @@ def _restrict_resultados_aos_ads(df_resultados, df_view):
 
 df_resultados_filtered = _restrict_resultados_aos_ads(df_resultados, df)
 df_resultados_prev_filtered = _restrict_resultados_aos_ads(df_resultados_prev, df_prev)
+
+df_top_nome = safe_run(
+    lambda: get_mkt_top_criativos_por_nome(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_top_criativos_por_nome.sql (fdw anuncios + ext_reconecta.leads)",
+    log_sql_error=True,
+)
 
 k = criativos_kpis(df, df_resultados_filtered)
 kp = criativos_kpis(df_prev, df_resultados_prev_filtered)
@@ -389,145 +398,6 @@ else:
         )
 
 # ---------------------------------------------------------------------------
-# Resultado atribuído (mart) + derivadas
-# ---------------------------------------------------------------------------
-section_title(
-    "Resultado atribuído",
-    "via odam.mart_ad_funnel_daily — restrito aos ad_ids visíveis nos filtros",
-)
-
-
-def _val_or_dash(v, formatter, *args, **kwargs):
-    """Aplica formatter em v se numérico; '—' se None ou NaN."""
-    if v is None:
-        return "—"
-    try:
-        if isinstance(v, float) and v != v:  # NaN
-            return "—"
-    except Exception:
-        pass
-    return formatter(v, *args, **kwargs) if (args or kwargs) else formatter(v)
-
-
-def _delta_or_none(curr, prev):
-    """delta_pct seguro com None — retorna None pra não sinalizar variação fake."""
-    if curr is None or prev is None:
-        return None
-    if isinstance(curr, float) and curr != curr:
-        return None
-    if isinstance(prev, float) and prev != prev:
-        return None
-    return delta_pct(curr, prev)
-
-
-# Linha 2: Leads, +12, Não atua, Agendamentos, Comparecimentos
-r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns(5, gap="small")
-with r2c1:
-    metric_card_v2(
-        "Leads",
-        _val_or_dash(k["leads_total"], int_br),
-        delta_pct=_delta_or_none(k["leads_total"], kp["leads_total"]),
-        hint="leads atribuídos · mart",
-    )
-with r2c2:
-    metric_card_v2(
-        "Leads +12",
-        _val_or_dash(k["leads_mais_12"], int_br),
-        delta_pct=_delta_or_none(k["leads_mais_12"], kp["leads_mais_12"]),
-        hint="ATUA +12 · mart",
-    )
-with r2c3:
-    metric_card_v2(
-        "Leads Não atua",
-        int_br(int(k.get("leads_nao_atua") or 0)),
-        delta_pct=_delta_or_none(k.get("leads_nao_atua"), kp.get("leads_nao_atua")),
-        hint="ATUA não atua · mart",
-    )
-with r2c4:
-    metric_card_v2(
-        "Agendamentos",
-        _val_or_dash(k["agendamentos"], int_br),
-        delta_pct=_delta_or_none(k["agendamentos"], kp["agendamentos"]),
-        hint="zoho_activities · mart",
-    )
-with r2c5:
-    metric_card_v2(
-        "Comparecimentos",
-        _val_or_dash(k["comparecimentos"], int_br),
-        delta_pct=_delta_or_none(k["comparecimentos"], kp["comparecimentos"]),
-        hint="status_reuniao = 'Concluída' · mart",
-    )
-
-# Linha 3: Vendas, Receita, ROAS, CAC
-r3c1, r3c2, r3c3, r3c4 = st.columns(4, gap="small")
-with r3c1:
-    metric_card_v2(
-        "Vendas",
-        _val_or_dash(k["vendas"], int_br),
-        delta_pct=_delta_or_none(k["vendas"], kp["vendas"]),
-        hint="stage='Ganho' c/ data_compra · mart",
-    )
-with r3c2:
-    metric_card_v2(
-        "Receita",
-        _val_or_dash(k["valor_receita"], brl, casas=2),
-        delta_pct=_delta_or_none(k["valor_receita"], kp["valor_receita"]),
-        hint="receita atribuída · mart",
-    )
-with r3c3:
-    if k["roas"] is None:
-        metric_card_v2(
-            "ROAS", "—",
-            hint="sem receita atribuída ou invest=0",
-        )
-    else:
-        metric_card_v2(
-            "ROAS",
-            f"{k['roas']:.2f}x".replace(".", ","),
-            delta_pct=_delta_or_none(k["roas"], kp["roas"]),
-            hint="receita mart ÷ invest oficial",
-            accent=True,
-        )
-with r3c4:
-    metric_card_v2(
-        "CAC",
-        _val_or_dash(k["cac"], brl, casas=2),
-        delta_pct=_delta_or_none(k["cac"], kp["cac"]),
-        hint="invest oficial ÷ vendas mart",
-    )
-
-# Linha 4: CPL, CPL +12, Leads -12, No-shows
-r4c1, r4c2, r4c3, r4c4 = st.columns(4, gap="small")
-with r4c1:
-    metric_card_v2(
-        "CPL",
-        _val_or_dash(k["cpl"], brl, casas=2),
-        delta_pct=_delta_or_none(k["cpl"], kp["cpl"]),
-        hint="invest oficial ÷ leads mart",
-    )
-with r4c2:
-    metric_card_v2(
-        "CPL +12",
-        _val_or_dash(k["cpl_mais_12"], brl, casas=2),
-        delta_pct=_delta_or_none(k["cpl_mais_12"], kp["cpl_mais_12"]),
-        hint="invest oficial ÷ leads +12 mart",
-    )
-with r4c3:
-    metric_card_v2(
-        "Leads -12",
-        _val_or_dash(k["leads_menos_12"], int_br),
-        delta_pct=_delta_or_none(k["leads_menos_12"], kp["leads_menos_12"]),
-        hint="ATUA -12 · mart",
-    )
-with r4c4:
-    metric_card_v2(
-        "No-shows",
-        _val_or_dash(k["no_shows"], int_br),
-        delta_pct=_delta_or_none(k["no_shows"], kp["no_shows"]),
-        hint="agendou mas não compareceu · mart",
-    )
-
-# ---------------------------------------------------------------------------
 # Distribuições — Status × Quality Ranking
 # ---------------------------------------------------------------------------
 col_st, col_q = st.columns(2, gap="large")
@@ -579,10 +449,177 @@ SORT_OPTIONS = {
     "CPL +12 (menor)":          ("cpl_mais_12",    True),
 }
 
+
+def _render_resultado_atribuido_top12(top: pd.DataFrame) -> None:
+    """Resumo consolidado das linhas do `top` — só métricas presentes no ranking."""
+    st.markdown(
+        '<div style="height:2rem" aria-hidden="true"></div>',
+        unsafe_allow_html=True,
+    )
+    section_title(
+        "Resultado atribuído",
+        "soma dos criativos exibidos no Top 12 atual",
+    )
+
+    resultado_base = top.copy()
+
+    def _usable_series(df: pd.DataFrame, col: str) -> pd.Series | None:
+        if col not in df.columns:
+            return None
+        ser = pd.to_numeric(df[col], errors="coerce")
+        if not ser.notna().any():
+            return None
+        return ser
+
+    def _sum_series(ser: pd.Series | None) -> float | None:
+        if ser is None:
+            return None
+        return float(ser.fillna(0).sum())
+
+    def _emit_row(items: list[tuple[str, str, str | None]]) -> None:
+        if not items:
+            return
+        cols = st.columns(len(items), gap="small")
+        for col, (label, value, hint) in zip(cols, items):
+            with col:
+                metric_card_v2(label, value, hint=hint)
+
+    invest_s = _usable_series(resultado_base, "investimento")
+    invest_t = _sum_series(invest_s)
+
+    leads_reais_s = _usable_series(resultado_base, "leads_reais")
+    if leads_reais_s is None:
+        leads_reais_s = _usable_series(resultado_base, "leads_total")
+    leads_reais_t = _sum_series(leads_reais_s)
+
+    leads_meta_s = _usable_series(resultado_base, "leads_meta")
+    leads_meta_t = _sum_series(leads_meta_s)
+
+    lm12_s = _usable_series(resultado_base, "leads_mais_12")
+    lm12_t = _sum_series(lm12_s)
+
+    lmen12_s = _usable_series(resultado_base, "leads_menos_12")
+    lmen12_t = _sum_series(lmen12_s)
+
+    lnao_s = _usable_series(resultado_base, "leads_nao_atua")
+    lnao_t = _sum_series(lnao_s)
+
+    imp_s = _usable_series(resultado_base, "impressoes")
+    imp_t = _sum_series(imp_s)
+
+    cli_s = _usable_series(resultado_base, "cliques")
+    cli_t = _sum_series(cli_s) if cli_s is not None else None
+    if imp_s is not None and cli_s is None:
+        cli_t = 0.0
+
+    row1: list[tuple[str, str, str | None]] = []
+    if invest_t is not None and invest_t > 0:
+        inv_fmt = (
+            brl(invest_t, casas=0)
+            if invest_t == int(invest_t)
+            else brl(invest_t, casas=2)
+        )
+        row1.append((
+            "Investimento total",
+            inv_fmt,
+            "Σ investimento dos criativos visíveis no ranking",
+        ))
+    if leads_reais_t is not None:
+        row1.append((
+            "Leads reais",
+            int_br(int(round(leads_reais_t))),
+            "Σ leads reais (ou leads_total) dos cards",
+        ))
+    if leads_meta_t is not None:
+        row1.append((
+            "Leads Meta",
+            int_br(int(round(leads_meta_t))),
+            "Σ leads_meta dos cards",
+        ))
+    if lm12_t is not None:
+        row1.append((
+            "Leads +12",
+            int_br(int(round(lm12_t))),
+            "Σ classificado Atua +12",
+        ))
+    if lmen12_t is not None:
+        row1.append((
+            "Leads -12",
+            int_br(int(round(lmen12_t))),
+            "Σ classificado Atua -12",
+        ))
+    if lnao_t is not None:
+        row1.append((
+            "Não atua",
+            int_br(int(round(lnao_t))),
+            "Σ classificado Não atua",
+        ))
+
+    _emit_row(row1)
+
+    row2: list[tuple[str, str, str | None]] = []
+    if (
+        invest_t is not None
+        and invest_t > 0
+        and leads_reais_t is not None
+        and leads_reais_t > 0
+    ):
+        row2.append((
+            "CPL real",
+            brl(invest_t / leads_reais_t, casas=2),
+            "Σ invest ÷ Σ leads reais",
+        ))
+    if invest_t is not None and invest_t > 0 and lm12_t is not None and lm12_t > 0:
+        row2.append((
+            "CPL +12",
+            brl(invest_t / lm12_t, casas=2),
+            "Σ invest ÷ Σ leads +12",
+        ))
+    if invest_t is not None and invest_t > 0 and leads_meta_t is not None and leads_meta_t > 0:
+        row2.append((
+            "CPL Meta",
+            brl(invest_t / leads_meta_t, casas=2),
+            "Σ invest ÷ Σ leads Meta",
+        ))
+    if imp_t is not None and imp_t > 0 and cli_t is not None:
+        ctr_pct = (cli_t / imp_t) * 100.0
+        row2.append((
+            "CTR",
+            pct(ctr_pct, casas=2),
+            "Σ cliques ÷ Σ impressões (totais no ranking)",
+        ))
+    if invest_t is not None and invest_t > 0 and cli_t is not None and cli_t > 0:
+        row2.append((
+            "CPC",
+            brl(invest_t / cli_t, casas=2),
+            "Σ invest ÷ Σ cliques",
+        ))
+
+    ci_parts: list[str] = []
+    ci_hints: list[str] = []
+    if cli_s is not None and cli_t is not None:
+        ci_parts.append(int_br(int(round(cli_t))))
+        ci_hints.append("Cliques")
+    if imp_s is not None and imp_t is not None:
+        ci_parts.append(int_br(int(round(imp_t))))
+        ci_hints.append("Impressões")
+    if ci_parts:
+        row2.append((
+            "Cliques / Impressões",
+            " · ".join(ci_parts),
+            " · ".join(ci_hints) + " (totais no ranking)",
+        ))
+
+    _emit_row(row2)
+
+
 head_l, head_r = st.columns([3, 1.2], vertical_alignment="bottom")
 with head_l:
-    section_title("Top 12 criativos",
-                  "ranking dos anúncios com investimento no período")
+    section_title(
+        "Top 12 criativos",
+        "por nome (utm_content = ad_name) · mídia fdw + leads ext_reconecta · "
+        "investimento no período",
+    )
 with head_r:
     sort_choice = st.selectbox(
         "Ordenar por",
@@ -592,10 +629,34 @@ with head_r:
     )
 
 sort_field, ascending = SORT_OPTIONS[sort_choice]
-top = criativos_ranking(
-    df, sort_by=sort_field, ascending=ascending, top_n=12,
-    df_resultados=df_resultados_filtered,
+if not df_top_nome.empty:
+    top = criativos_top_por_nome_ranking(
+        df,
+        df_top_nome,
+        df_resultados_filtered,
+        sort_by=sort_field,
+        ascending=ascending,
+        top_n=12,
+    )
+    _top12_modo = "por_nome_sql"
+else:
+    top = criativos_ranking(
+        df,
+        sort_by=sort_field,
+        ascending=ascending,
+        top_n=12,
+        df_resultados=df_resultados_filtered,
+    )
+    _top12_modo = "legacy_vw_mart"
+
+print(
+    f"[Top12] modo={_top12_modo} df_top_nome.shape={getattr(df_top_nome, 'shape', None)} "
+    f"df_resultados_filtered.shape={getattr(df_resultados_filtered, 'shape', None)} "
+    f"top.shape={getattr(top, 'shape', None)}",
 )
+if not df_top_nome.empty:
+    print("[Top12] df_top_nome.head(3)\n", df_top_nome.head(3))
+print("[Top12] top.head(3)\n", top.head(3) if not top.empty else top)
 
 
 def _creative_card_html(row) -> str:
@@ -661,7 +722,7 @@ def _creative_card_html(row) -> str:
         brl(invest, casas=0) if invest == int(invest) else brl(invest, casas=2)
     )
 
-    # Linha 2 — Leads · +12 · Não atua · CPL (mart). NaN ⇒ "—" (sem
+    # Linha 2 — Leads · +12 · Não atua · CPL (lp_form + fdw). NaN ⇒ "—" (sem
     # atribuição); Não atua cai em 0 quando ausente/nulo; CPL com leads=0
     # cai em "—" — coerente com a regra "não inventar zero".
     def _missing(v) -> bool:
@@ -694,8 +755,26 @@ def _creative_card_html(row) -> str:
         f'font-weight:600;color:{PALETTE["text_subtle"]};font-size:0.95em;'
     )
 
+    tip_chunks: list[str] = []
+    if (
+        not _missing(row.get("qtd_ad_ids"))
+        and not _missing(row.get("qtd_campaigns"))
+        and not _missing(row.get("qtd_adsets"))
+    ):
+        tip_chunks.append(
+            f'{int(row["qtd_ad_ids"])} anúncios · '
+            f'{int(row["qtd_campaigns"])} campanhas · '
+            f'{int(row["qtd_adsets"])} conjuntos'
+        )
+    if not _missing(row.get("leads_meta")):
+        tip_chunks.append(f'Leads Meta: {int(row["leads_meta"])}')
+    if not _missing(row.get("cpl_meta")):
+        tip_chunks.append(f'CPL Meta: {brl(float(row["cpl_meta"]), casas=2)}')
+    tip_chunks.append("CPL = invest fdw ÷ leads reais (e-mail único/dia)")
+    card_tip_esc = html_lib.escape(" · ".join(tip_chunks)[:300])
+
     return (
-        f'<div style="background:{PALETTE["card"]};'
+        f'<div title="{card_tip_esc}" style="background:{PALETTE["card"]};'
         f'border:1px solid {PALETTE["border"]};border-radius:8px;'
         f'overflow:hidden;margin-bottom:14px;font-family:Inter,sans-serif;">'
         f'{media}'
@@ -745,6 +824,7 @@ else:
         for col, row in zip(cols_grid, rows[i:i + 4]):
             with col:
                 st.markdown(_creative_card_html(row), unsafe_allow_html=True)
+    _render_resultado_atribuido_top12(top)
 
 # ---------------------------------------------------------------------------
 # Comparar criativos (V2 — modelo herdado do "Comparar campanhas")

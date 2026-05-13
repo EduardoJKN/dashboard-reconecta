@@ -189,10 +189,21 @@ def get_mkt_campanha_cobertura(data_ini: date, data_fim: date) -> pd.DataFrame:
 def get_mkt_criativos_resultados(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Resultados atribuídos por anúncio — agrega `odam.mart_ad_funnel_daily`
     por `ad_id` no período. Usado pela página Criativos (cards gerais,
-    Top 12 enriched, ranking dinâmico). Mesma regra do mart de campanhas:
+    ordenações por mart, diagnósticos). O bloco Top 12 usa fonte própria
+    (`mkt_top_criativos_por_nome.sql`). Mesma regra do mart de campanhas:
     invest/spend daqui NÃO é oficial — usar invest da `bi.vw_mkt_criativos`."""
     return run_sql_file(
         "mkt_criativos_resultados.sql", _params(data_ini, data_fim)
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Top criativos por nome…")
+def get_mkt_top_criativos_por_nome(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Top Criativos — mídia em `fdw_reconecta.anuncios` + leads em
+    `ext_reconecta.leads`, agregados por nome normalizado. Arquivo
+    `mkt_top_criativos_por_nome.sql` (não é view materializada)."""
+    return run_sql_file(
+        "mkt_top_criativos_por_nome.sql", _params(data_ini, data_fim)
     )
 
 

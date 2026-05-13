@@ -6,6 +6,7 @@ DataFrame vazio. Isso permite publicar a infraestrutura gradualmente, view
 por view, sem derrubar todo o app."""
 from __future__ import annotations
 
+import traceback
 from typing import Callable
 
 import pandas as pd
@@ -32,17 +33,25 @@ def safe_run(
     fn: Callable[[], pd.DataFrame],
     *,
     view_label: str,
+    log_sql_error: bool = False,
 ) -> pd.DataFrame:
     """Executa `fn()` (deve retornar DataFrame). Em caso de view ausente,
     mostra `st.warning` e devolve DataFrame vazio. Erros que NÃO sejam de
-    relação ausente são re-lançados — bug de query não pode ser silenciado."""
+    relação ausente são re-lançados — bug de query não pode ser silenciado.
+
+    Se `log_sql_error=True`, imprime exceção + traceback no terminal (útil
+    para diagnosticar falhas em `run_sql_file`)."""
     try:
         return fn()
     except (ProgrammingError, OperationalError) as e:
+        if log_sql_error or "mkt_top_criativos_por_nome" in view_label:
+            print(f"[ERRO safe_run:{view_label}]", repr(e))
+            print(traceback.format_exc())
         if looks_like_missing_relation(e):
             st.warning(
-                f"View `{view_label}` ainda indisponível no banco. "
-                f"Crie-a a partir de `sql/bi/marketing/` e recarregue a página."
+                f"Fonte/consulta `{view_label}` ainda indisponível no banco "
+                f"(view ausente, schema ou permissão). Detalhes no terminal do "
+                f"Streamlit. Ajuste a query/objeto e recarregue a página."
             )
             return pd.DataFrame()
         raise
