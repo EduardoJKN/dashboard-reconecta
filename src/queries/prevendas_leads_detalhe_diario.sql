@@ -47,6 +47,7 @@ WITH base_dados AS (
         l.created_at AS lead_created_at,
         l.email AS lead_email,
         l.classificado,
+        d.lead_classification AS classificacao_crm,
         COALESCE(
             NULLIF(btrim(d.origem), ''),
             NULLIF(btrim(d.fonte_de_lead), ''),
@@ -55,6 +56,16 @@ WITH base_dados AS (
     FROM zoho_deals d
     LEFT JOIN ext_reconecta.leads l
            ON d.id::text = l.zoho_id::text
+          AND (
+              l.email IS NULL
+              OR (
+                  btrim(l.email) <> ''
+                  AND lower(l.email) NOT LIKE '%@teste%'
+                  AND lower(l.email) NOT LIKE 'teste@%'
+                  AND lower(l.email) NOT LIKE '%smarts%'
+                  AND lower(l.email) NOT LIKE '%reconecta%'
+              )
+          )
 ),
 acts AS (
     SELECT
@@ -89,6 +100,7 @@ activity_rows AS (
         b.lead_email AS email_lead,
         b.deal_ref AS nome_deal,
         b.classificado AS classificacao,
+        b.classificacao_crm AS classificacao_crm,
         a.status_reuniao,
         b.origem_fonte,
         COALESCE(
@@ -119,6 +131,7 @@ sales_base AS (
         b.lead_email AS email_lead,
         b.deal_ref AS nome_deal,
         b.classificado AS classificacao,
+        b.classificacao_crm AS classificacao_crm,
         b.origem_fonte,
         COALESCE(
             NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
@@ -152,6 +165,7 @@ sales_rows AS (
         sb.email_lead,
         sb.nome_deal,
         sb.classificacao,
+        sb.classificacao_crm,
         NULL::text AS status_reuniao,
         sb.origem_fonte,
         sb.sdr,
@@ -172,6 +186,7 @@ final_rows AS (
         email_lead,
         nome_deal,
         classificacao,
+        classificacao_crm,
         status_reuniao,
         origem_fonte,
         sdr,
@@ -193,6 +208,7 @@ final_rows AS (
         email_lead,
         nome_deal,
         classificacao,
+        classificacao_crm,
         status_reuniao,
         origem_fonte,
         sdr,
@@ -212,6 +228,7 @@ SELECT
     email_lead,
     nome_deal,
     classificacao,
+    classificacao_crm,
     status_reuniao,
     origem_fonte,
     sdr,

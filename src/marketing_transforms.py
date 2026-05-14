@@ -1710,7 +1710,7 @@ def criativos_ranking(df: pd.DataFrame,
     `sort_by` aceita:
       - Plataforma: investimento, impressoes, cliques, alcance, ctr, cpc
       - Resultado (se df_resultados disponível): leads_total, leads_mais_12,
-        agendamentos, vendas, valor_receita
+        leads_menos_12, leads_nao_atua, agendamentos, vendas, valor_receita
       - Derivadas: cpl, cpl_mais_12, cac, roas
 
     Para CPC/CPL/CPL+12/CAC, passe `ascending=True` (menor é melhor).
@@ -2001,6 +2001,16 @@ def criativos_top_por_nome_ranking(
             sort_col = (
                 "leads_total"
                 if bool((out["leads_total"] > 0).any())
+                else "investimento"
+            )
+        elif (
+            sort_col == "leads_nao_atua"
+            and out["leads_nao_atua"].notna().sum() == 0
+        ):
+            sort_col = (
+                "leads_total"
+                if "leads_total" in out.columns
+                and out["leads_total"].notna().sum() > 0
                 else "investimento"
             )
 

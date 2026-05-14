@@ -23,15 +23,64 @@
 --   - stage = 'Ganho'
 --   - tipo_venda = 'Novo cliente'
 --   - SDR atribuído por zoho_deals.sdr_ss -> zoho_users
+--
+-- ⚠ Alinhamento com cards (prevendas_overview_diario.sql):
+--   - Todas as contagens de activity usam COUNT(DISTINCT activity_id).
+--   - Vendas usa COUNT(DISTINCT deal_id).
+--   - +12 / -12 usam regra COMBINADA de 4 fontes (lead_classification,
+--     qualificacao, classificado_cal, ext.classificado) — espelha 1:1
+--     a regra dos cards (prevendas_overview_diario.sql).
+-- Diferenças residuais possíveis entre soma do ranking e o card:
+--   - Filtro `prevendas_ranking_sdr_oficiais` (Python) restringe ao
+--     cadastro oficial; SDRs como "Letícia Garcia", "Bruna Braga", etc.
+--     ficam de fora do ranking, mas suas activities entram no card.
+--   - "Sem SDR" também é filtrada antes de gerar o ranking.
+--   - Match com zoho_deals: aqui é `d.id = a.what_id` direto; o card
+--     usa `regexp_replace(...)` em ambos os lados. Pode divergir
+--     quando o `what_id` tem chaves/JSON.
 -- =============================================================================
 WITH deal_classif AS (
-    SELECT DISTINCT ON (d.id)
-        d.id AS deal_id,
-        l.classificado
+    -- Classificação por deal — REGRA COMBINADA das 4 fontes (espelha
+    -- prevendas_overview_diario.sql:147-157):
+    --   1. zoho_deals.lead_classification  (CRM, principal)
+    --   2. zoho_deals.qualificacao         (CRM, manual da gestoria)
+    --   3. zoho_deals.classificado_cal     (CRM)
+    --   4. ext_reconecta.leads.classificado (ext)
+    -- bool_or agrega sobre TODAS as linhas-lead pareadas: basta UMA das
+    -- fontes ter a classificação pra a flag valer. Antes a query só
+    -- olhava lead_classification + classificado, deixando +12/-12 da
+    -- gestoria fora dos rankings — corrigido.
+    -- Filtro de e-mails internos/testes adicionado no JOIN com ext.leads
+    -- pra alinhar com a regra canônica (e evitar lead-teste contaminar
+    -- a classificação combinada).
+    SELECT
+        d.id                                              AS deal_id,
+        bool_or(
+            d.lead_classification = 'Atua +12'
+            OR d.qualificacao     = 'Atua +12'
+            OR d.classificado_cal = 'Atua +12'
+            OR l.classificado     = 'Atua +12'
+        )                                                 AS tem_mais_12,
+        bool_or(
+            d.lead_classification = 'Atua -12'
+            OR d.qualificacao     = 'Atua -12'
+            OR d.classificado_cal = 'Atua -12'
+            OR l.classificado     = 'Atua -12'
+        )                                                 AS tem_menos_12
     FROM zoho_deals d
     LEFT JOIN ext_reconecta.leads l
            ON d.id::text = l.zoho_id::text
-    ORDER BY d.id, l.created_at DESC NULLS LAST
+          AND (
+              l.email IS NULL
+              OR (
+                  btrim(l.email) <> ''
+                  AND lower(l.email) NOT LIKE '%@teste%'
+                  AND lower(l.email) NOT LIKE 'teste@%'
+                  AND lower(l.email) NOT LIKE '%smarts%'
+                  AND lower(l.email) NOT LIKE '%reconecta%'
+              )
+          )
+    GROUP BY d.id
 ),
 acts_agendamento AS (
     SELECT
@@ -117,31 +166,38 @@ deals_direct AS (
       AND d.data_hora_compra::date BETWEEN :data_ini AND :data_fim
 ),
 acts_created_agg AS (
+    -- COUNT(DISTINCT activity_id) defensivo: aqui não há fan-out (cada
+    -- activity gera 1 row em acts_criacao), mas a regra fica alinhada
+    -- com a CTE equivalente da query dos cards e protege futuros
+    -- joins que possam introduzir multiplicação.
     SELECT
         sdr, fonte_sdr,
-        COUNT(*)::bigint                                         AS agendamentos_criados
+        COUNT(DISTINCT activity_id)::bigint                      AS agendamentos_criados
     FROM acts_criacao
     GROUP BY sdr, fonte_sdr
 ),
 acts_agg AS (
+    -- COUNT(DISTINCT activity_id) idem. Regra +12 / -12 = COMBINADA de 4
+    -- fontes (lead_classification + qualificacao + classificado_cal +
+    -- ext.classificado), agregada por deal via bool_or no deal_classif.
+    -- Espelha 1:1 prevendas_overview_diario.sql.
     SELECT
         a.sdr,
         a.fonte_sdr,
-        COUNT(*)::bigint                                         AS agendamentos,
-        COUNT(*) FILTER (
-            WHERE dc.classificado = 'Atua +12'
+        COUNT(DISTINCT a.activity_id)::bigint                    AS agendamentos,
+        COUNT(DISTINCT a.activity_id) FILTER (
+            WHERE COALESCE(dc.tem_mais_12, FALSE)
         )::bigint                                                AS agendamentos_mais_12,
-        COUNT(*) FILTER (
-            WHERE dc.classificado = 'Atua -12'
+        COUNT(DISTINCT a.activity_id) FILTER (
+            WHERE COALESCE(dc.tem_menos_12, FALSE)
         )::bigint                                                AS agendamentos_menos_12,
-        COUNT(*) FILTER (
+        COUNT(DISTINCT a.activity_id) FILTER (
             WHERE a.status_reuniao IN ('Concluída', 'Concluído')
-        )::bigint
-                                                                  AS comparecimentos,
-        COUNT(*) FILTER (
+        )::bigint                                                AS comparecimentos,
+        COUNT(DISTINCT a.activity_id) FILTER (
             WHERE a.status_reuniao IN ('Cancelada', 'Cancelado')
         )::bigint                                                AS cancelamentos,
-        COUNT(*) FILTER (
+        COUNT(DISTINCT a.activity_id) FILTER (
             WHERE a.status_reuniao = 'Vencida'
         )::bigint                                                AS vencidos
     FROM acts_agendamento a
@@ -149,10 +205,13 @@ acts_agg AS (
     GROUP BY a.sdr, a.fonte_sdr
 ),
 deals_agg AS (
+    -- COUNT(DISTINCT deal_id) idem ao card de Vendas (regra dedup por
+    -- negócio único). Aqui não havia fan-out — cada deal gera 1 row em
+    -- deals_direct — mas a troca trava a regra.
     SELECT
         sdr, fonte_sdr,
-        COUNT(*)::bigint                                         AS vendas,
-        COUNT(*)::bigint                                         AS vendas_novas,
+        COUNT(DISTINCT deal_id)::bigint                          AS vendas,
+        COUNT(DISTINCT deal_id)::bigint                          AS vendas_novas,
         SUM(montante)::numeric                                    AS montante,
         SUM(receita)::numeric                                     AS receita
     FROM deals_direct

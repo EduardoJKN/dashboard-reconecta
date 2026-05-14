@@ -11,7 +11,10 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from sqlalchemy.exc import OperationalError, ProgrammingError
+
 from .db import run_sql_file
+from .marketing_safe import looks_like_missing_relation
 
 _TTL = 600
 
@@ -205,6 +208,55 @@ def get_mkt_top_criativos_por_nome(data_ini: date, data_fim: date) -> pd.DataFra
     return run_sql_file(
         "mkt_top_criativos_por_nome.sql", _params(data_ini, data_fim)
     )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo fdw_reconecta.anuncios…")
+def get_mkt_criativos_anuncios_fdw(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Linhas brutas de `fdw_reconecta.anuncios` no período (auditoria)."""
+    df = run_sql_file(
+        "mkt_criativos_anuncios_fdw.sql", _params(data_ini, data_fim)
+    )
+    if df.empty:
+        return df
+    df = df.copy()
+    for c in ("date_start", "date_stop", "created_time", "updated_time"):
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo leads (audit UTM, ext)…")
+def get_mkt_criativos_leads_utm_audit_ext(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Leads do período em `ext_reconecta.leads` (SELECT * + filtros de e-mail)."""
+    df = run_sql_file(
+        "mkt_criativos_leads_utm_audit_ext.sql", _params(data_ini, data_fim)
+    )
+    if df.empty:
+        return df
+    df = df.copy()
+    if "created_at" in df.columns:
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+    return df
+
+
+def get_mkt_criativos_leads_utm_audit(data_ini: date, data_fim: date) -> tuple[pd.DataFrame, str]:
+    """Leads para auditoria UTM: tenta `lp_form.leads`; fallback `ext_reconecta.leads`.
+
+    Retorna `(df, fonte)` com rótulo da tabela efetiva."""
+    try:
+        df = run_sql_file(
+            "mkt_criativos_leads_utm_audit_lp_form.sql",
+            _params(data_ini, data_fim),
+        )
+    except (ProgrammingError, OperationalError) as e:
+        if looks_like_missing_relation(e):
+            df = get_mkt_criativos_leads_utm_audit_ext(data_ini, data_fim)
+            return df, "ext_reconecta.leads"
+        raise
+    df = df.copy()
+    if "created_at" in df.columns:
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+    return df, "lp_form.leads"
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo cobertura por criativo…")

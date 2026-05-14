@@ -7,23 +7,38 @@
 --   - activities ligadas ao deal via `what_id` normalizado
 --   - considerar apenas activities com `status_reuniao IS NOT NULL`
 --
--- Métricas diárias:
---   - agendamentos_criados = `zoho_activities.created_time::date`
---   - agendamentos         = `zoho_activities.start_datetime::date`
---   - agendamentos_mais_12 = agendamentos com `classificado = 'Atua +12'`
---   - comparecimentos      = status_reuniao IN ('Concluída', 'Concluído')
---   - vendas               = `zoho_deals.data_hora_compra::date`
---                            com `stage = 'Ganho'` e `tipo_venda = 'Novo cliente'`
---   - montante / receita   = valores direto de `zoho_deals`
+-- Métricas diárias (todas dedup por activity_id ou deal_id pra neutralizar
+-- fan-out do LEFT JOIN com ext_reconecta.leads):
+--   - leads / leads_mais_12 / leads_menos_12 → daily-distinct sobre
+--                            ext_reconecta.leads (BOOL_OR por (dia, email)).
+--   - agendamentos_criados = COUNT(DISTINCT activity_id) por created_time::date
+--   - agendamentos         = COUNT(DISTINCT activity_id) por start_datetime::date
+--   - comparecimentos      = COUNT(DISTINCT activity_id) FILTER status concluído
+--   - vencidas             = COUNT(DISTINCT activity_id) FILTER status vencida
+--   - vendas               = COUNT(DISTINCT deal_id) FILTER stage='Ganho'
+--                            AND tipo_venda='Novo cliente' por data_hora_compra
+--   - montante / receita   = soma após DEDUP por deal_id (corrige fan-out
+--                            antigo que somava o montante várias vezes quando
+--                            o mesmo deal tinha N leads pareados)
+--
+-- Regra +12 COMBINADA (4 fontes em OR):
+--   1. zoho_deals.lead_classification = 'Atua +12'
+--   2. zoho_deals.qualificacao        = 'Atua +12'  (fonte manual da gestoria)
+--   3. zoho_deals.classificado_cal    = 'Atua +12'
+--   4. ext_reconecta.leads.classificado = 'Atua +12'
+-- Aplicada em: agendamentos_mais_12, comparecimentos_mais_12, vendas_mais_12.
+-- Regra -12 idem trocando '+12' por '-12' (usada só em leads_menos_12).
 --
 -- Compatibilidade com páginas ainda não migradas:
 --   - `novos_agendamentos` = alias de `agendamentos_criados`
 --   - `vendas_novas`       = alias de `vendas`
 -- =============================================================================
-WITH leads_diario AS (
+WITH leads_clean AS (
+    -- Filtros canônicos (mesma regra do leads_diario antigo + mkt).
     SELECT
-        l.created_at::date AS data_ref,
-        COUNT(DISTINCT lower(btrim(l.email)))::bigint AS leads
+        l.created_at::date                          AS data_ref,
+        lower(btrim(l.email))                       AS email_norm,
+        lower(btrim(coalesce(l.classificado, ''))) AS classif_norm
     FROM ext_reconecta.leads l
     WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
       AND l.email IS NOT NULL
@@ -32,7 +47,27 @@ WITH leads_diario AS (
       AND lower(l.email) NOT LIKE 'teste@%'
       AND lower(l.email) NOT LIKE '%smarts%'
       AND lower(l.email) NOT LIKE '%reconecta%'
-    GROUP BY 1
+),
+leads_dia_email AS (
+    -- Daily-distinct por (dia, email) com flags de classificação. BOOL_OR
+    -- garante que +12 e -12 sejam contados sem dupla contagem do mesmo
+    -- email no mesmo dia.
+    SELECT
+        data_ref,
+        email_norm,
+        BOOL_OR(classif_norm = 'atua +12') AS tem_mais_12,
+        BOOL_OR(classif_norm = 'atua -12') AS tem_menos_12
+    FROM leads_clean
+    GROUP BY data_ref, email_norm
+),
+leads_diario AS (
+    SELECT
+        data_ref,
+        COUNT(*)::bigint                                          AS leads,
+        COUNT(*) FILTER (WHERE tem_mais_12)::bigint               AS leads_mais_12,
+        COUNT(*) FILTER (WHERE tem_menos_12)::bigint              AS leads_menos_12
+    FROM leads_dia_email
+    GROUP BY data_ref
 ),
 base_dados AS (
     SELECT
@@ -58,7 +93,13 @@ base_dados AS (
                      ',', '.'
                  )::numeric
         END AS receita,
-        l.classificado
+        l.classificado,
+        -- 3 fontes de classificação direto do deal. Todas no Zoho (CRM),
+        -- editáveis pela gestoria depois que o lead entra. Replicadas nas
+        -- N linhas do fan-out sem variação (são do deal).
+        d.lead_classification,
+        d.qualificacao,
+        d.classificado_cal
     FROM zoho_deals d
     LEFT JOIN ext_reconecta.leads l ON d.id::text = l.zoho_id::text
 ),
@@ -66,6 +107,9 @@ acts AS (
     SELECT
         bd.deal_id,
         bd.classificado,
+        bd.lead_classification,
+        bd.qualificacao,
+        bd.classificado_cal,
         a.created_time::date AS data_criacao_ref,
         a.start_datetime::date AS data_reuniao_ref,
         a.status_reuniao,
@@ -81,41 +125,87 @@ acts AS (
           OR a.start_datetime::date BETWEEN :data_ini AND :data_fim
       )
 ),
+-- ⚠ Fan-out tratado abaixo: o LEFT JOIN com `ext_reconecta.leads` em
+-- `base_dados` multiplica a mesma activity em N linhas quando o mesmo
+-- `zoho_id` aparece N vezes em `ext_reconecta.leads` (mesmo lead com
+-- múltiplas submissões/recadastros). Em mai/2026 isso inflava
+-- agendamentos 279→247, comparecimentos 113→102, +12 74→65, vencidas
+-- 8→7. Cada agendamento é uma reunião única (1 activity), então a
+-- regra correta é COUNT(DISTINCT activity_id), e os FILTER usam o mesmo
+-- DISTINCT pra não dupla-contar quando o deal tem múltiplas linhas-lead
+-- com a mesma classificação ou status.
 agendamentos_criados_diario AS (
     SELECT
         data_criacao_ref AS data_ref,
-        COUNT(*)::bigint AS agendamentos_criados
+        COUNT(DISTINCT activity_id)::bigint AS agendamentos_criados
     FROM acts
     WHERE data_criacao_ref BETWEEN :data_ini AND :data_fim
     GROUP BY 1
 ),
 agendamentos_diario AS (
+    -- Regra +12 COMBINADA (4 fontes em OR): lead_classification (CRM) OR
+    -- qualificacao (CRM, manual da gestoria) OR classificado_cal (CRM) OR
+    -- classificado (ext_reconecta.leads). Aplicada também em
+    -- comparecimentos_mais_12.
     SELECT
         data_reuniao_ref AS data_ref,
-        COUNT(*)::bigint AS agendamentos,
-        COUNT(*) FILTER (
-            WHERE classificado = 'Atua +12'
+        COUNT(DISTINCT activity_id)::bigint AS agendamentos,
+        COUNT(DISTINCT activity_id) FILTER (
+            WHERE lead_classification = 'Atua +12'
+               OR qualificacao        = 'Atua +12'
+               OR classificado_cal    = 'Atua +12'
+               OR classificado        = 'Atua +12'
         )::bigint AS agendamentos_mais_12,
-        COUNT(*) FILTER (
+        COUNT(DISTINCT activity_id) FILTER (
             WHERE status_reuniao IN ('Concluída', 'Concluído')
         )::bigint AS comparecimentos,
-        COUNT(*) FILTER (
+        COUNT(DISTINCT activity_id) FILTER (
+            WHERE status_reuniao IN ('Concluída', 'Concluído')
+              AND (
+                  lead_classification = 'Atua +12'
+                  OR qualificacao    = 'Atua +12'
+                  OR classificado_cal = 'Atua +12'
+                  OR classificado    = 'Atua +12'
+              )
+        )::bigint AS comparecimentos_mais_12,
+        COUNT(DISTINCT activity_id) FILTER (
             WHERE status_reuniao = 'Vencida'
         )::bigint AS vencidas
     FROM acts
     WHERE data_reuniao_ref BETWEEN :data_ini AND :data_fim
     GROUP BY 1
 ),
-vendas_diario AS (
+deals_ganhos_dedup AS (
+    -- Dedup explícito por deal_id ANTES de somar montante/receita.
+    -- Antes essa CTE era `vendas_diario` somando direto de base_dados,
+    -- o que inflava montante/receita pelo fan-out do LEFT JOIN com leads.
+    -- bool_or da regra +12 combinada agrega TODAS as linhas-lead pareadas:
+    -- basta uma delas ter +12 (em qualquer das 4 fontes) pra o deal contar.
     SELECT
-        bd.data_venda_ref AS data_ref,
-        COUNT(DISTINCT bd.deal_id)::bigint AS vendas,
-        SUM(bd.montante)::numeric AS montante,
-        SUM(bd.receita)::numeric AS receita
+        bd.deal_id,
+        MAX(bd.data_venda_ref)             AS data_venda_ref,
+        MAX(bd.montante)                    AS montante,
+        MAX(bd.receita)                     AS receita,
+        bool_or(
+            bd.lead_classification = 'Atua +12'
+            OR bd.qualificacao    = 'Atua +12'
+            OR bd.classificado_cal = 'Atua +12'
+            OR bd.classificado    = 'Atua +12'
+        )                                   AS tem_mais_12
     FROM base_dados bd
     WHERE bd.stage = 'Ganho'
       AND bd.tipo_venda = 'Novo cliente'
       AND bd.data_venda_ref BETWEEN :data_ini AND :data_fim
+    GROUP BY bd.deal_id
+),
+vendas_diario AS (
+    SELECT
+        data_venda_ref                          AS data_ref,
+        COUNT(*)::bigint                        AS vendas,
+        COUNT(*) FILTER (WHERE tem_mais_12)::bigint AS vendas_mais_12,
+        SUM(montante)::numeric                  AS montante,
+        SUM(receita)::numeric                   AS receita
+    FROM deals_ganhos_dedup
     GROUP BY 1
 ),
 keys AS (
@@ -130,18 +220,22 @@ keys AS (
 SELECT
     k.data_ref,
     COALESCE(l.leads, 0)::bigint AS leads,
+    COALESCE(l.leads_mais_12, 0)::bigint AS leads_mais_12,
+    COALESCE(l.leads_menos_12, 0)::bigint AS leads_menos_12,
     COALESCE(c.agendamentos_criados, 0)::bigint AS agendamentos_criados,
     COALESCE(c.agendamentos_criados, 0)::bigint AS novos_agendamentos,
     COALESCE(a.agendamentos, 0)::bigint AS agendamentos,
     COALESCE(a.agendamentos, 0)::bigint AS reunioes_marcadas,
     COALESCE(a.agendamentos_mais_12, 0)::bigint AS agendamentos_mais_12,
     COALESCE(a.comparecimentos, 0)::bigint AS comparecimentos,
+    COALESCE(a.comparecimentos_mais_12, 0)::bigint AS comparecimentos_mais_12,
     COALESCE(a.comparecimentos, 0)::bigint AS concluidas,
     0::bigint AS canceladas,
     COALESCE(a.vencidas, 0)::bigint AS vencidas,
     0::bigint AS agendadas_pendentes,
     COALESCE(v.vendas, 0)::bigint AS vendas,
     COALESCE(v.vendas, 0)::bigint AS vendas_novas,
+    COALESCE(v.vendas_mais_12, 0)::bigint AS vendas_mais_12,
     COALESCE(v.montante, 0)::numeric AS montante,
     COALESCE(v.receita, 0)::numeric AS receita
 FROM keys k

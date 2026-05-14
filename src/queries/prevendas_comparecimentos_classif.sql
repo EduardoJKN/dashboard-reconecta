@@ -10,10 +10,19 @@
 --   3. ainda NULL → "Sem SDR"
 -- `fonte_sdr` carrega a auditoria.
 --
+-- Classificação +12 / -12 / Não atua — REGRA COMBINADA das 4 fontes
+-- (espelha prevendas_overview_diario.sql / prevendas_por_sdr.sql):
+--   1. zoho_deals.lead_classification  (CRM, principal)
+--   2. zoho_deals.qualificacao         (CRM, manual da gestoria)
+--   3. zoho_deals.classificado_cal     (CRM)
+--   4. ext_reconecta.leads.classificado (ext, última do email)
+-- Antes a query só lia ext.classificado via `last_classif` — leads
+-- classificados só no CRM caíam em "Sem classif". Agora basta UMA das
+-- 4 fontes ter o valor pra o bucket valer.
+--
 -- Caminho:
 --   activity (Consulta/Indicação) → deal (what_id) → lead matched via
---   priority `zoho_id > session_id > email` → classif_final = última
---   classificação do e-mail no período (regra Visão Geral oficial).
+--   priority `zoho_id > session_id > email`.
 -- =============================================================================
 WITH leads_clean AS (
     SELECT
@@ -29,13 +38,6 @@ WITH leads_clean AS (
       AND lower(l.email) NOT LIKE 'teste@%'
       AND lower(l.email) NOT LIKE '%smarts%'
       AND lower(l.email) NOT LIKE '%reconecta%'
-),
-last_classif AS (
-    SELECT DISTINCT ON (email_norm)
-        email_norm,
-        classificado AS classif_final
-    FROM leads_clean
-    ORDER BY email_norm, created_at DESC
 ),
 email_keys AS (
     SELECT DISTINCT ON (email_norm)
@@ -104,22 +106,64 @@ deals_novos AS (
       AND zd.tipo_venda = 'Novo cliente'
       AND zd.data_hora_compra::date BETWEEN :data_ini AND :data_fim
 ),
+deal_classif AS (
+    -- Regra COMBINADA das 4 fontes por deal (espelha a canônica).
+    -- bool_or agrega todas as linhas-lead pareadas em ext.leads; o deal
+    -- vence se QUALQUER fonte indicar +12/-12/Não atua. Filtro de
+    -- e-mails de teste no JOIN com ext.leads (canônico).
+    SELECT
+        d.id                                                AS deal_id,
+        bool_or(
+            d.lead_classification = 'Atua +12'
+            OR d.qualificacao     = 'Atua +12'
+            OR d.classificado_cal = 'Atua +12'
+            OR l.classificado     = 'Atua +12'
+        )                                                   AS tem_mais_12,
+        bool_or(
+            d.lead_classification = 'Atua -12'
+            OR d.qualificacao     = 'Atua -12'
+            OR d.classificado_cal = 'Atua -12'
+            OR l.classificado     = 'Atua -12'
+        )                                                   AS tem_menos_12,
+        bool_or(
+            d.lead_classification = 'Não atua'
+            OR d.qualificacao     = 'Não atua'
+            OR d.classificado_cal = 'Não atua'
+            OR l.classificado     = 'Não atua'
+        )                                                   AS tem_nao_atua
+    FROM zoho_deals d
+    LEFT JOIN ext_reconecta.leads l
+           ON d.id::text = l.zoho_id::text
+          AND (
+              l.email IS NULL
+              OR (
+                  btrim(l.email) <> ''
+                  AND lower(l.email) NOT LIKE '%@teste%'
+                  AND lower(l.email) NOT LIKE 'teste@%'
+                  AND lower(l.email) NOT LIKE '%smarts%'
+                  AND lower(l.email) NOT LIKE '%reconecta%'
+              )
+          )
+    GROUP BY d.id
+),
 final_pairs AS (
     SELECT
         als.email_norm,
         als.sdr,
         als.fonte_sdr,
+        -- Bucket exclusivo +12 > -12 > Não atua > Sem classif (regra
+        -- canônica do projeto).
         CASE
-            WHEN c.classif_final ILIKE '%+12%'      THEN '+12'
-            WHEN c.classif_final ILIKE '%-12%'      THEN '-12'
-            WHEN c.classif_final ILIKE '%não atua%' THEN 'Não atua'
+            WHEN COALESCE(dc.tem_mais_12,  FALSE) THEN '+12'
+            WHEN COALESCE(dc.tem_menos_12, FALSE) THEN '-12'
+            WHEN COALESCE(dc.tem_nao_atua, FALSE) THEN 'Não atua'
             ELSE 'Sem classif'
         END                                          AS bucket,
         als.teve_agend,
         als.teve_compar,
         (dn.deal_id IS NOT NULL)                     AS teve_venda_nova
     FROM acts_lead_sdr als
-    LEFT JOIN last_classif c USING (email_norm)
+    LEFT JOIN deal_classif dc ON dc.deal_id = als.deal_id
     LEFT JOIN deals_novos  dn ON dn.deal_id = als.deal_id
 )
 SELECT

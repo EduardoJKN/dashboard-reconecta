@@ -14,7 +14,8 @@ import streamlit as st
 from src.marketing_queries import (
     get_mkt_criativo_funil,
     get_mkt_criativos,
-    get_mkt_criativos_cobertura,
+    get_mkt_criativos_anuncios_fdw,
+    get_mkt_criativos_leads_utm_audit,
     get_mkt_criativos_resultados,
     get_mkt_paginas_variantes,
     get_mkt_top_criativos_por_nome,
@@ -22,7 +23,6 @@ from src.marketing_queries import (
 from src.marketing_safe import safe_run
 from src.marketing_transforms import (
     agregar_criativos_por_utm_content,
-    cobertura_criativos_kpis,
     compara_criativos_utm_content,
     criativo_funil_etapas,
     criativo_funil_kpis,
@@ -32,7 +32,6 @@ from src.marketing_transforms import (
     criativos_por_status,
     criativos_ranking,
     criativos_top_por_nome_ranking,
-    criativos_tabela,
     lista_criativos_funil,
     lista_criativos_utm_content,
     normalize_status,
@@ -440,6 +439,7 @@ SORT_OPTIONS = {
     # Resultado / derivadas (mart) — anúncios sem mart vão pro fim
     "Leads (maior)":            ("leads_total",    False),
     "Leads +12 (maior)":        ("leads_mais_12",  False),
+    "Não atua (maior)":         ("leads_nao_atua", False),
     "Agendamentos (maior)":     ("agendamentos",   False),
     "Vendas (maior)":           ("vendas",         False),
     "Receita (maior)":          ("valor_receita", False),
@@ -1047,112 +1047,212 @@ else:
     )
 
 # ---------------------------------------------------------------------------
-# Tabela detalhada (expander)
+# Tabelas de auditoria — fdw (mídia) + leads (UTM)
 # ---------------------------------------------------------------------------
-with st.expander("Tabela detalhada (todos os criativos do período)"):
-    full = criativos_tabela(df)
-    if full.empty:
-        st.caption("Sem criativos no período.")
-    else:
-        st.dataframe(
-            full, use_container_width=True, hide_index=True,
-            column_config={
-                "ad_name": "Anúncio",
-                "campaign_name": "Campanha",
-                "adset_name": "Conjunto",
-                "account_label": "Conta",
-                "status_label": "Status",
-                "investimento": st.column_config.NumberColumn(
-                    "Invest.", format="R$ %.2f"),
-                "impressoes": st.column_config.NumberColumn(
-                    "Impressões", format="%d"),
-                "alcance": st.column_config.NumberColumn("Alcance", format="%d"),
-                "cliques": st.column_config.NumberColumn("Cliques", format="%d"),
-                "link_clicks": st.column_config.NumberColumn(
-                    "Link clicks", format="%d"),
-                "ctr": st.column_config.NumberColumn("CTR", format="%.2f%%"),
-                "cpc": st.column_config.NumberColumn("CPC", format="R$ %.2f"),
-                "frequencia": st.column_config.NumberColumn(
-                    "Freq.", format="%.2f"),
-                "quality_label": "Quality",
-                "engagement_ranking": "Engagement",
-                "conversion_ranking": "Conversion",
-                "permalink_url": st.column_config.LinkColumn(
-                    "Meta Ads", display_text="abrir"),
-            },
-        )
+_ANUNCIOS_AUDIT_COLS_FIRST = [
+    "date_start", "date_stop", "campaign_id", "campaign_name", "adset_id",
+    "adset_name", "ad_id", "ad_name", "objective", "optimization_goal",
+    "spend", "impressions", "reach", "frequency", "clicks", "unique_clicks",
+    "inline_link_clicks", "unique_inline_link_clicks", "ctr", "cpc", "cpm",
+    "cpp", "actions_landing_page_view", "actions_omni_landing_page_view",
+    "actions_lead", "actions_onsite_web_lead",
+    "actions_offsite_conversion_fb_pixel_lead", "actions_complete_registration",
+    "conversions_schedule_total", "conversions_schedule_website",
+    "cost_per_action_type_lead", "cost_per_action_type_onsite_web_lead",
+    "cost_per_conversion_schedule_total", "quality_ranking",
+    "engagement_rate_ranking", "conversion_rate_ranking", "created_time",
+    "updated_time", "internacional",
+]
 
-# ---------------------------------------------------------------------------
-# Diagnóstico de cobertura da atribuição mart por ad_id (mesmo padrão de
-# Comparar campanhas — mas para o grão de criativo).
-# ---------------------------------------------------------------------------
-df_cob = safe_run(
-    lambda: get_mkt_criativos_cobertura(ctx.data_ini, ctx.data_fim),
-    view_label="odam.mart_ad_funnel_daily (cobertura ad_id)",
+_LEADS_AUDIT_COLS_FIRST = [
+    "created_at", "timestamp", "email", "first_name", "utm_source",
+    "utm_medium", "utm_campaign", "utm_content", "utm_term", "classificado",
+    "scheduled", "dt_hr_agendamento", "campaign_id", "adset_id", "ad_id",
+    "fbclid", "page_url", "page_pathname", "lead_source", "form_version",
+    "device_type", "lp_variante", "cidade", "zoho_id",
+]
+
+
+def _norm_cell_utm_aud(v) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, float) and v != v:
+        return ""
+    s = str(v).strip().lower()
+    return s
+
+
+def _sn_utm(v: bool) -> str:
+    return "sim" if v else "não"
+
+
+def _prep_leads_utm_audit(
+    df_leads: pd.DataFrame,
+    df_fdw: pd.DataFrame,
+    df_unfiltered: pd.DataFrame,
+    ctx,
+    col_map: dict[str, str],
+) -> pd.DataFrame:
+    if df_leads is None or df_leads.empty:
+        return df_leads
+    out = df_leads.copy()
+    camp_norms: set[str] = set()
+    ad_norms: set[str] = set()
+    if df_fdw is not None and not df_fdw.empty:
+        if "campaign_name" in df_fdw.columns:
+            camp_norms = {
+                _norm_cell_utm_aud(x)
+                for x in df_fdw["campaign_name"].dropna()
+                if _norm_cell_utm_aud(x)
+            }
+        if "ad_name" in df_fdw.columns:
+            ad_norms = {
+                _norm_cell_utm_aud(x)
+                for x in df_fdw["ad_name"].dropna()
+                if _norm_cell_utm_aud(x)
+            }
+    if "utm_campaign" in out.columns:
+        out["utm_campaign_norm"] = out["utm_campaign"].map(_norm_cell_utm_aud)
+    else:
+        out["utm_campaign_norm"] = ""
+    if "utm_content" in out.columns:
+        out["utm_content_norm"] = out["utm_content"].map(_norm_cell_utm_aud)
+    else:
+        out["utm_content_norm"] = ""
+    if "utm_campaign" in out.columns:
+        s = out["utm_campaign"].fillna("").astype(str).str.strip()
+        out["tem_utm_campaign"] = s.ne("") & s.str.lower().ne("nan")
+        out["tem_utm_campaign"] = out["tem_utm_campaign"].map(_sn_utm)
+    else:
+        out["tem_utm_campaign"] = "não"
+    if "utm_content" in out.columns:
+        s2 = out["utm_content"].fillna("").astype(str).str.strip()
+        out["tem_utm_content"] = (s2.ne("") & s2.str.lower().ne("nan")).map(_sn_utm)
+    else:
+        out["tem_utm_content"] = "não"
+    if "ad_id" in out.columns:
+        aid = out["ad_id"].fillna("").astype(str).str.strip()
+        out["tem_ad_id"] = (
+            aid.ne("")
+            & aid.str.lower().ne("nan")
+            & aid.str.lower().ne("none")
+        ).map(_sn_utm)
+    else:
+        out["tem_ad_id"] = "não"
+    ucn = out["utm_campaign_norm"]
+    out["match_campaign_name"] = "não"
+    if camp_norms:
+        out.loc[ucn.ne("") & out["utm_campaign_norm"].isin(camp_norms), "match_campaign_name"] = "sim"
+    utn = out["utm_content_norm"]
+    out["match_ad_name"] = "não"
+    if ad_norms:
+        out.loc[utn.ne("") & out["utm_content_norm"].isin(ad_norms), "match_ad_name"] = "sim"
+
+    sel = ctx.selections.get("campanha", [])
+    ckey = col_map.get("campanha")
+    if (
+        sel
+        and ckey
+        and ckey in df_unfiltered.columns
+        and "utm_campaign" in out.columns
+    ):
+        all_vals = df_unfiltered[ckey].dropna().astype(str).unique().tolist()
+        if len(sel) < len(all_vals):
+            want = {_norm_cell_utm_aud(x) for x in sel}
+            vn = out["utm_campaign"].map(_norm_cell_utm_aud)
+            out = out.loc[vn.isin(want)].copy()
+
+    return out
+
+
+df_an_fdw = safe_run(
+    lambda: get_mkt_criativos_anuncios_fdw(ctx.data_ini, ctx.data_fim),
+    view_label="fdw_reconecta.anuncios (audit)",
+    log_sql_error=True,
 )
-cob = cobertura_criativos_kpis(df_cob)
 
-pct_str = f"{cob['pct_leads_com']:.0f}%".replace(".", ",")
-if cob["nivel"] == "baixa":
-    cob_header = (
-        f"⚠ Cobertura da atribuição por anúncio: parcial ({pct_str}) — "
-        f"clique para detalhes"
-    )
-elif cob["nivel"] == "sem_dados":
-    cob_header = "🔍 Cobertura da atribuição por anúncio (sem dados)"
-else:
-    cob_header = f"🔍 Cobertura da atribuição por anúncio ({pct_str})"
-
-with st.expander(cob_header):
-    if cob["nivel"] == "sem_dados":
-        st.caption(
-            "Sem dados na mart para o período selecionado. Sem leads/"
-            "vendas/receita atribuídos a anúncios."
-        )
+with st.expander("Tabela detalhada — anúncios do período"):
+    st.caption("fonte: **fdw_reconecta.anuncios** (mesma janela do dashboard).")
+    if df_an_fdw.empty:
+        st.info("Sem linhas em fdw_reconecta.anuncios para o período ou fonte indisponível.")
     else:
-        st.markdown(
-            "Os números abaixo dizem quanto da mart consegue ser "
-            "atribuído a um anúncio específico. Linhas com `ad_id` NULL "
-            "**não** entram nos cards de resultado, no Top 12 nem no "
-            "ranking — comportamento intencional."
-        )
-
-        def _fmt_int_pct(n: int, p: float) -> str:
-            return f"{int_br(n)} ({pct(p, casas=1)})"
-
-        def _fmt_money_pct(v: float, p: float) -> str:
-            return f"{brl(v, casas=2)} ({pct(p, casas=1)})"
-
-        cob_rows = [
-            {
-                "Métrica": "Leads",
-                "Com ad_id": _fmt_int_pct(cob["leads_com"], cob["pct_leads_com"]),
-                "Sem ad_id": _fmt_int_pct(cob["leads_sem"], 100 - cob["pct_leads_com"]),
-                "Total": int_br(cob["total_leads"]),
-            },
-            {
-                "Métrica": "Vendas",
-                "Com ad_id": _fmt_int_pct(cob["vendas_com"], cob["pct_vendas_com"]),
-                "Sem ad_id": _fmt_int_pct(cob["vendas_sem"], 100 - cob["pct_vendas_com"]),
-                "Total": int_br(cob["total_vendas"]),
-            },
-            {
-                "Métrica": "Receita",
-                "Com ad_id": _fmt_money_pct(cob["receita_com"], cob["pct_receita_com"]),
-                "Sem ad_id": _fmt_money_pct(cob["receita_sem"], 100 - cob["pct_receita_com"]),
-                "Total": brl(cob["total_receita"], casas=2),
-            },
-        ]
-        import pandas as _pd
-        st.dataframe(
-            _pd.DataFrame(cob_rows),
-            use_container_width=True, hide_index=True,
-        )
-
-        if cob["nivel"] == "baixa":
+        df_an_disp = df_an_fdw
+        if (
+            not df.empty
+            and "ad_id" in df.columns
+            and "ad_id" in df_an_fdw.columns
+        ):
+            ads_ok = set(df["ad_id"].dropna().astype(str).unique())
+            df_an_disp = df_an_fdw[
+                df_an_fdw["ad_id"].astype(str).isin(ads_ok)
+            ].copy()
             st.caption(
-                "**Cobertura baixa.** Os cards de resultado e o ranking "
-                "podem parecer incompletos porque várias linhas da mart "
-                "estão entrando sem o `ad_id` preenchido. Esse é um "
-                "problema de dados na origem (`odam.mart_ad_funnel_daily`)."
+                "Filtros de **campanha** e **status** da página aplicados via "
+                "interseção com os `ad_id` visíveis em `bi.vw_mkt_criativos`."
             )
+        else:
+            st.caption(
+                "Sem filtro de campanha/status (nenhum anúncio na view filtrada); "
+                "exibindo todos os registros fdw no período."
+            )
+        primary = [c for c in _ANUNCIOS_AUDIT_COLS_FIRST if c in df_an_disp.columns]
+        extra = [c for c in df_an_disp.columns if c not in primary]
+        st.dataframe(
+            df_an_disp[primary] if primary else df_an_disp,
+            use_container_width=True,
+            hide_index=True,
+        )
+        if extra:
+            with st.expander(f"Demais colunas fdw ({len(extra)})"):
+                st.dataframe(
+                    df_an_disp[extra],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+with st.expander("Tabela de leads — UTMs e associação com criativos"):
+    df_leads_raw, fonte_leads = get_mkt_criativos_leads_utm_audit(
+        ctx.data_ini, ctx.data_fim
+    )
+    sub_leads = (
+        f"fonte: **{fonte_leads}**; associação via `utm_campaign` ↔ "
+        "`campaign_name` e `utm_content` ↔ `ad_name` "
+        "(normalizado `LOWER(TRIM(·))` vs **fdw** no período)."
+    )
+    st.caption(sub_leads)
+    if df_leads_raw.empty:
+        st.info("Sem leads no período para os critérios de e-mail, ou fonte indisponível.")
+    else:
+        df_leads_enr = _prep_leads_utm_audit(
+            df_leads_raw,
+            df_an_fdw,
+            df_all,
+            ctx,
+            col_map,
+        )
+        front = [c for c in _LEADS_AUDIT_COLS_FIRST if c in df_leads_enr.columns]
+        tail = [
+            "utm_campaign_norm",
+            "utm_content_norm",
+            "tem_utm_campaign",
+            "tem_utm_content",
+            "tem_ad_id",
+            "match_campaign_name",
+            "match_ad_name",
+        ]
+        tail = [c for c in tail if c in df_leads_enr.columns]
+        used = set(front) | set(tail)
+        mid = [c for c in df_leads_enr.columns if c not in used]
+        show_cols = front + tail
+        st.dataframe(
+            df_leads_enr[show_cols],
+            use_container_width=True,
+            hide_index=True,
+        )
+        if mid:
+            with st.expander(f"Demais colunas de leads ({len(mid)})"):
+                st.dataframe(
+                    df_leads_enr[mid],
+                    use_container_width=True,
+                    hide_index=True,
+                )

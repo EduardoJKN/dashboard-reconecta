@@ -26,6 +26,8 @@ from .transforms import _safe_div
 # ---------------------------------------------------------------------------
 _OVERVIEW_ZEROS = {
     "leads": 0,
+    "leads_mais_12": 0,
+    "leads_menos_12": 0,
     "agendamentos_criados": 0,
     "agendamentos_exibidos": 0,
     "agendamentos_mais_12": 0,
@@ -38,7 +40,9 @@ _OVERVIEW_ZEROS = {
     # Aliases legados mantidos para compatibilidade com páginas ainda não migradas.
     "agendamentos": 0,
     "comparecimentos": 0,
+    "comparecimentos_mais_12": 0,
     "vendas": 0, "vendas_novas": 0,
+    "vendas_mais_12": 0,
     "montante": 0.0, "receita": 0.0,
     "ticket_medio": 0.0,
     "taxa_comparecimento": 0.0,
@@ -64,6 +68,22 @@ def prevendas_overview_kpis(df_diario: pd.DataFrame) -> dict:
         return out
 
     out["leads"] = int(df_diario["leads"].sum()) if "leads" in df_diario.columns else 0
+    out["leads_mais_12"] = (
+        int(df_diario["leads_mais_12"].sum())
+        if "leads_mais_12" in df_diario.columns else 0
+    )
+    out["leads_menos_12"] = (
+        int(df_diario["leads_menos_12"].sum())
+        if "leads_menos_12" in df_diario.columns else 0
+    )
+    out["comparecimentos_mais_12"] = (
+        int(df_diario["comparecimentos_mais_12"].sum())
+        if "comparecimentos_mais_12" in df_diario.columns else 0
+    )
+    out["vendas_mais_12"] = (
+        int(df_diario["vendas_mais_12"].sum())
+        if "vendas_mais_12" in df_diario.columns else 0
+    )
     out["agendamentos_criados"] = int(df_diario["agendamentos_criados"].sum()) if "agendamentos_criados" in df_diario.columns else int(df_diario["novos_agendamentos"].sum())
     out["agendamentos_mais_12"] = int(df_diario["agendamentos_mais_12"].sum()) if "agendamentos_mais_12" in df_diario.columns else 0
     out["novos_agendamentos"] = out["agendamentos_criados"]
@@ -96,6 +116,135 @@ def prevendas_overview_kpis(df_diario: pd.DataFrame) -> dict:
     n_dias = max(int(df_diario["data_ref"].nunique() or 1), 1)
     out["media_movel_21d"] = _safe_div(out["vendas"], n_dias)
     return out
+
+
+_MESES_PT = [
+    "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+    "Jul", "Ago", "Set", "Out", "Nov", "Dez",
+]
+
+
+def _semana_do_mes(dia: int) -> int:
+    """Semana do mês na regra fixa pedida pela operação:
+    1-7=1ª, 8-14=2ª, 15-21=3ª, 22-28=4ª, 29-31=5ª."""
+    return ((dia - 1) // 7) + 1
+
+
+def _label_semana(ano: int, mes: int, semana: int, mostrar_ano: bool) -> str:
+    base = f"{semana}ª sem ({_MESES_PT[mes - 1]}"
+    return f"{base}/{ano})" if mostrar_ano else f"{base})"
+
+
+def prevendas_agregar_por_granularidade(df_diario: pd.DataFrame,
+                                        granularidade: str) -> pd.DataFrame:
+    """Agrega `df_diario` (saída de prevendas_overview_diario.sql, já com
+    métricas dedup) por granularidade visual.
+
+    - "Dia":    devolve as linhas como vieram, com `agendamentos_exibidos`,
+                `taxa_comparecimento` e `ticket_medio` derivadas.
+    - "Semana": agrupa por (ano, mês, semana_do_mes) usando a regra fixa
+                1-7 / 8-14 / 15-21 / 22-28 / 29-31. Label exibido inclui
+                o nome do mês; quando o período abrange mais de um ano,
+                acrescenta o ano.
+    - "Mês":    se houver um único mês no período, devolve 1 linha
+                consolidada com o nome do mês (ex.: "Maio/2026"); se
+                houver múltiplos meses, devolve 1 linha por mês.
+
+    Recalcula `taxa_comparecimento` e `ticket_medio` DEPOIS de somar
+    (não é média de taxas diárias — é razão das somas).
+    """
+    if df_diario is None or df_diario.empty:
+        return pd.DataFrame()
+
+    df = df_diario.copy()
+    df["data_ref"] = pd.to_datetime(df["data_ref"])
+
+    sum_cols = [c for c in (
+        "leads", "leads_mais_12", "leads_menos_12",
+        "agendamentos_criados",
+        "agendamentos", "vencidas",
+        "agendamentos_mais_12",
+        "comparecimentos", "comparecimentos_mais_12",
+        "vendas", "vendas_mais_12",
+        "montante", "receita",
+    ) if c in df.columns]
+
+    granularidade = (granularidade or "Dia").strip()
+
+    if granularidade == "Dia":
+        out = (df.sort_values("data_ref")
+                 .groupby("data_ref", as_index=False)[sum_cols].sum())
+        out.insert(0, "periodo", out["data_ref"].dt.strftime("%d/%m/%Y"))
+
+    elif granularidade == "Semana":
+        df["_ano"]    = df["data_ref"].dt.year
+        df["_mes"]    = df["data_ref"].dt.month
+        df["_semana"] = df["data_ref"].dt.day.map(_semana_do_mes)
+        mostrar_ano = df["_ano"].nunique() > 1
+        out = (df.groupby(["_ano", "_mes", "_semana"], as_index=False)[sum_cols]
+                 .sum()
+                 .sort_values(["_ano", "_mes", "_semana"]))
+        out["periodo"] = out.apply(
+            lambda r: _label_semana(int(r["_ano"]), int(r["_mes"]),
+                                    int(r["_semana"]), mostrar_ano),
+            axis=1,
+        )
+        out = out.drop(columns=["_ano", "_mes", "_semana"])
+        cols_final = ["periodo"] + sum_cols
+        out = out[cols_final]
+
+    elif granularidade == "Mês":
+        df["_ano"] = df["data_ref"].dt.year
+        df["_mes"] = df["data_ref"].dt.month
+        out = (df.groupby(["_ano", "_mes"], as_index=False)[sum_cols].sum()
+                 .sort_values(["_ano", "_mes"]))
+        out["periodo"] = out.apply(
+            lambda r: f"{_MESES_PT[int(r['_mes']) - 1]}/{int(r['_ano'])}", axis=1
+        )
+        out = out.drop(columns=["_ano", "_mes"])
+        cols_final = ["periodo"] + sum_cols
+        out = out[cols_final]
+
+    else:
+        out = (df.sort_values("data_ref")
+                 .groupby("data_ref", as_index=False)[sum_cols].sum())
+        out.insert(0, "periodo", out["data_ref"].dt.strftime("%d/%m/%Y"))
+
+    # Derivadas comuns a todas as granularidades.
+    if {"agendamentos", "vencidas"}.issubset(out.columns):
+        out["agendamentos_exibidos"] = (
+            out["agendamentos"].fillna(0) - out["vencidas"].fillna(0)
+        ).clip(lower=0)
+
+    if {"comparecimentos", "agendamentos_exibidos"}.issubset(out.columns):
+        denom = out["agendamentos_exibidos"].where(out["agendamentos_exibidos"] != 0)
+        out["taxa_comparecimento"] = (
+            out["comparecimentos"].astype(float).div(denom).fillna(0) * 100
+        )
+
+    if {"montante", "vendas"}.issubset(out.columns):
+        denom_vendas = out["vendas"].where(out["vendas"] != 0)
+        out["ticket_medio"] = (
+            out["montante"].astype(float).div(denom_vendas).fillna(0)
+        )
+
+    # Conversões do funil (gerais + recorte +12). Denominador 0 → 0%
+    # (consistente com o padrão atual do dashboard, que usa `_safe_div`).
+    def _pct(num_col: str, den_col: str) -> pd.Series:
+        if num_col not in out.columns or den_col not in out.columns:
+            return pd.Series(0.0, index=out.index)
+        denom = out[den_col].where(out[den_col] != 0)
+        return out[num_col].astype(float).div(denom).fillna(0) * 100
+
+    out["pct_lead_agend"]      = _pct("agendamentos_exibidos", "leads")
+    out["pct_agend_comp"]      = _pct("comparecimentos",       "agendamentos_exibidos")
+    out["pct_comp_venda"]      = _pct("vendas",                "comparecimentos")
+
+    out["pct_lead_agend_12"]   = _pct("agendamentos_mais_12",  "leads_mais_12")
+    out["pct_agend_comp_12"]   = _pct("comparecimentos_mais_12", "agendamentos_mais_12")
+    out["pct_comp_venda_12"]   = _pct("vendas_mais_12",        "comparecimentos_mais_12")
+
+    return out.reset_index(drop=True)
 
 
 def prevendas_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
@@ -308,6 +457,289 @@ def prevendas_ranking_sdr_oficiais(df_sdr: pd.DataFrame,
     return (agg[cols]
             .sort_values(["agendamentos", "vendas_novas"], ascending=False)
             .reset_index(drop=True))
+
+
+# ---------------------------------------------------------------------------
+# Detalhe linha-a-linha (prevendas_leads_detalhe_diario.sql) — helpers usados
+# pela tabela "Detalhamento Top SDR" da Visão Geral Pré-vendas.
+# ---------------------------------------------------------------------------
+def prevendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
+    """Enriquecimento mínimo do detalhe diário para máscaras estáveis.
+
+    Adiciona colunas *_filtro (strings limpas, sem NaN) e `nome_cliente_view`
+    (fallback `nome_deal`). Não remove nada — preserva colunas originais.
+    """
+    if df_det is None or df_det.empty:
+        return df_det
+    out = df_det.copy()
+
+    def _series_or_default(col_name: str, default: str = "") -> pd.Series:
+        if col_name in out.columns:
+            return out[col_name]
+        return pd.Series([default] * len(out), index=out.index)
+
+    out["tipo_registro_base_filtro"] = (
+        _series_or_default("tipo_registro_base", "Atividade")
+        .fillna("Atividade").astype(str).str.strip().replace("", "Atividade")
+    )
+    out["classificacao_filtro"] = (
+        _series_or_default("classificacao", "")
+        .fillna("").astype(str).str.strip().replace("", "Sem classificação")
+    )
+    # classificacao_crm: vem direto de zoho_deals.lead_classification.
+    # Pode ser NULL/vazio; preservado como "" para a máscara combinada.
+    out["classificacao_crm_filtro"] = (
+        _series_or_default("classificacao_crm", "")
+        .fillna("").astype(str).str.strip()
+    )
+    out["sdr_filtro"] = (
+        _series_or_default("sdr", "")
+        .fillna("").astype(str).str.strip().replace("", "Sem SDR")
+    )
+    out["closer_filtro"] = (
+        _series_or_default("closer", "")
+        .fillna("").astype(str).str.strip().replace("", "Sem Closer")
+    )
+    out["status_filtro"] = (
+        _series_or_default("status_reuniao", "")
+        .fillna("").astype(str).str.strip().replace("", "Sem status")
+    )
+    out["nome_cliente_view"] = (
+        _series_or_default("nome_cliente", "")
+        .fillna("").astype(str).str.strip()
+    )
+    if "nome_deal" in out.columns:
+        sem_nome = out["nome_cliente_view"] == ""
+        out.loc[sem_nome, "nome_cliente_view"] = (
+            out.loc[sem_nome, "nome_deal"].fillna("").astype(str).str.strip()
+        )
+    return out
+
+
+def prevendas_anotar_tipo_sdr_detalhe(df_det_norm: pd.DataFrame) -> pd.DataFrame:
+    """Adiciona `tipo_sdr_filtro` (Pré-vendas / Social Seller / SDR não
+    classificado / Sem SDR) ao detalhe normalizado. Usa a classificação
+    canônica de `team_classification.classify_sdr` — mesma fonte usada
+    pelo Top SDRs.
+    """
+    if df_det_norm is None or df_det_norm.empty or "sdr_filtro" not in df_det_norm.columns:
+        return df_det_norm
+    out = df_det_norm.copy()
+    out["tipo_sdr_filtro"] = out["sdr_filtro"].apply(classify_sdr)
+    return out
+
+
+def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
+                                      df_diario: pd.DataFrame,
+                                      sdrs_filtro: list[str],
+                                      tipos_sdr_filtro: list[str],
+                                      data_ini,
+                                      data_fim) -> pd.DataFrame:
+    """Recompõe a série diária aplicando filtros locais de SDR/Tipo SDR.
+
+    Usado pelo expander "Ver dados do período" — só essa tabela é
+    reconstruída; o resto da página segue com `df_diario` original.
+
+    Regra:
+      - Leads / Leads +12 / Leads -12 → preservados do df_diario (sem
+        filtro). SDR não é atribuível ao lead cru (a atribuição entra
+        depois, na activity ou no deal).
+      - Demais métricas → recalculadas do df_detalhe filtrado, com:
+            * dedup por activity_id (agendamentos / comparecimentos /
+              vencidas e seus recortes +12);
+            * dedup por deal_id (vendas / vendas +12 / montante / receita).
+      - Datas fora do período (ctx) ignoradas; datas extras introduzidas
+        pelo detalhe filtrado (ex.: activity num dia que não teve lead)
+        são acrescentadas no shape final.
+    """
+    if (df_detalhe_norm is None or df_detalhe_norm.empty
+            or df_diario is None or df_diario.empty):
+        return df_diario
+
+    df = df_detalhe_norm
+    if sdrs_filtro:
+        df = df[df["sdr_filtro"].isin(sdrs_filtro)]
+    if (tipos_sdr_filtro
+            and "tipo_sdr_filtro" in df.columns):
+        df = df[df["tipo_sdr_filtro"].isin(tipos_sdr_filtro)]
+
+    ini = pd.Timestamp(data_ini)
+    fim = pd.Timestamp(data_fim)
+
+    is_ativ = df["tipo_registro_base_filtro"] == "Atividade"
+    is_vnd  = df["tipo_registro_base_filtro"] == "Venda"
+    em_agend = (
+        df["data_agendamento"].notna()
+        & df["data_agendamento"].between(ini, fim, inclusive="both")
+    )
+    em_cria = (
+        df["data_criacao"].notna()
+        & df["data_criacao"].between(ini, fim, inclusive="both")
+    )
+    em_vnd_p = (
+        df["data_venda"].notna()
+        & df["data_venda"].between(ini, fim, inclusive="both")
+    )
+    flag_12 = (
+        (df.get("classificacao_crm_filtro", pd.Series("", index=df.index)) == "Atua +12")
+        | (df["classificacao_filtro"] == "Atua +12")
+    )
+    is_concluido = df["status_filtro"].isin(["Concluída", "Concluído"])
+
+    def _conta(mask, data_col, unidade_col) -> dict:
+        sub = df.loc[mask, [data_col, unidade_col]].dropna()
+        if sub.empty:
+            return {}
+        sub = sub.drop_duplicates(subset=[unidade_col])
+        return sub.groupby(sub[data_col].dt.date).size().to_dict()
+
+    map_agend_cri = _conta(is_ativ & em_cria,                              "data_criacao",     "activity_id")
+    map_agend     = _conta(is_ativ & em_agend,                              "data_agendamento", "activity_id")
+    map_agend12   = _conta(is_ativ & em_agend & flag_12,                    "data_agendamento", "activity_id")
+    map_compar    = _conta(is_ativ & em_agend & is_concluido,               "data_agendamento", "activity_id")
+    map_compar12  = _conta(is_ativ & em_agend & is_concluido & flag_12,     "data_agendamento", "activity_id")
+    map_venc      = _conta(is_ativ & em_agend & (df["status_filtro"] == "Vencida"),
+                           "data_agendamento", "activity_id")
+
+    # Vendas: dedup por deal_id, somar montante/receita
+    vendas_sub = df.loc[is_vnd & em_vnd_p].drop_duplicates(subset=["deal_id"])
+    if vendas_sub.empty:
+        map_vendas = map_vendas12 = {}
+        map_montante = map_receita = {}
+    else:
+        vsdg = vendas_sub.assign(_day=vendas_sub["data_venda"].dt.date)
+        flag_v_12 = (
+            (vsdg.get("classificacao_crm_filtro", pd.Series("", index=vsdg.index)) == "Atua +12")
+            | (vsdg["classificacao_filtro"] == "Atua +12")
+        )
+        map_vendas   = vsdg.groupby("_day").size().to_dict()
+        map_vendas12 = vsdg.loc[flag_v_12].groupby("_day").size().to_dict()
+        map_montante = vsdg.groupby("_day")["montante"].sum().to_dict() if "montante" in vsdg.columns else {}
+        map_receita  = vsdg.groupby("_day")["receita"].sum().to_dict()  if "receita"  in vsdg.columns else {}
+
+    # Une datas de df_diario (preserva todas) + datas extras vindas do detalhe.
+    dia_df = pd.to_datetime(df_diario["data_ref"]).dt.date
+    leads_map       = dict(zip(dia_df, df_diario.get("leads",         pd.Series(0, index=df_diario.index)).fillna(0).astype(int)))
+    leads_mais_map  = dict(zip(dia_df, df_diario.get("leads_mais_12", pd.Series(0, index=df_diario.index)).fillna(0).astype(int)))
+    leads_menos_map = dict(zip(dia_df, df_diario.get("leads_menos_12",pd.Series(0, index=df_diario.index)).fillna(0).astype(int)))
+
+    datas_extras = (set(map_agend_cri) | set(map_agend) | set(map_compar)
+                    | set(map_venc)    | set(map_vendas))
+    todas_datas = sorted(set(dia_df.tolist()) | datas_extras)
+
+    rows = []
+    for dt in todas_datas:
+        rows.append({
+            "data_ref":                pd.Timestamp(dt),
+            "leads":                   leads_map.get(dt, 0),
+            "leads_mais_12":           leads_mais_map.get(dt, 0),
+            "leads_menos_12":          leads_menos_map.get(dt, 0),
+            "agendamentos_criados":    int(map_agend_cri.get(dt, 0)),
+            "agendamentos":            int(map_agend.get(dt, 0)),
+            "agendamentos_mais_12":    int(map_agend12.get(dt, 0)),
+            "comparecimentos":         int(map_compar.get(dt, 0)),
+            "comparecimentos_mais_12": int(map_compar12.get(dt, 0)),
+            "vencidas":                int(map_venc.get(dt, 0)),
+            "vendas":                  int(map_vendas.get(dt, 0)),
+            "vendas_mais_12":          int(map_vendas12.get(dt, 0)),
+            "montante":                float(map_montante.get(dt, 0.0)),
+            "receita":                 float(map_receita.get(dt, 0.0)),
+        })
+    return pd.DataFrame(rows)
+
+
+def prevendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
+                                       metrica: str,
+                                       data_ini,
+                                       data_fim) -> pd.Series:
+    """Mask booleana sobre o detalhe para a métrica selecionada no ranking.
+
+    Espelha 1:1 a regra de `prevendas_por_sdr.sql`:
+      - agendamentos*       → atividade + start_datetime ∈ [ini, fim]
+      - agendamentos_criados → atividade + created_time ∈ [ini, fim]
+      - vendas              → venda + data_hora_compra ∈ [ini, fim]
+      - comparecimentos     → agendamentos + status Concluída/Concluído
+      - cancelados/vencidos → agendamentos + status correspondente
+    Espera `df_det_norm` passado por `prevendas_normalizar_detalhe`.
+    """
+    if df_det_norm is None or df_det_norm.empty:
+        idx = df_det_norm.index if df_det_norm is not None else []
+        return pd.Series(False, index=idx)
+
+    ini = pd.Timestamp(data_ini)
+    fim = pd.Timestamp(data_fim)
+
+    base_atividade = df_det_norm["tipo_registro_base_filtro"] == "Atividade"
+    base_venda     = df_det_norm["tipo_registro_base_filtro"] == "Venda"
+
+    em_periodo_agend = (
+        df_det_norm["data_agendamento"].notna()
+        & df_det_norm["data_agendamento"].between(ini, fim, inclusive="both")
+    )
+    em_periodo_cria = (
+        df_det_norm["data_criacao"].notna()
+        & df_det_norm["data_criacao"].between(ini, fim, inclusive="both")
+    )
+    em_periodo_vnd = (
+        df_det_norm["data_venda"].notna()
+        & df_det_norm["data_venda"].between(ini, fim, inclusive="both")
+    )
+
+    if metrica == "agendamentos_criados":
+        return base_atividade & em_periodo_cria
+    if metrica == "agendamentos":
+        return base_atividade & em_periodo_agend
+    # Regra +12 / -12 combinada: CRM (zoho_deals.lead_classification) OR
+    # ext (ext_reconecta.leads.classificado). Espelha a regra dos cards.
+    if metrica == "agendamentos_mais_12":
+        return (base_atividade & em_periodo_agend
+                & ((df_det_norm["classificacao_crm_filtro"] == "Atua +12")
+                   | (df_det_norm["classificacao_filtro"]     == "Atua +12")))
+    if metrica == "agendamentos_menos_12":
+        return (base_atividade & em_periodo_agend
+                & ((df_det_norm["classificacao_crm_filtro"] == "Atua -12")
+                   | (df_det_norm["classificacao_filtro"]     == "Atua -12")))
+    if metrica == "comparecimentos":
+        return (base_atividade & em_periodo_agend
+                & df_det_norm["status_filtro"].isin(["Concluída", "Concluído"]))
+    if metrica == "vendas":
+        return base_venda & em_periodo_vnd
+    if metrica == "cancelados":
+        return (base_atividade & em_periodo_agend
+                & df_det_norm["status_filtro"].isin(["Cancelada", "Cancelado"]))
+    if metrica == "vencidos":
+        return (base_atividade & em_periodo_agend
+                & (df_det_norm["status_filtro"] == "Vencida"))
+    return pd.Series(False, index=df_det_norm.index)
+
+
+def prevendas_sdrs_brutos_para_oficial(df_det_norm: pd.DataFrame,
+                                       sdr_oficial: str,
+                                       df_sdrs_oficiais: pd.DataFrame) -> list[str]:
+    """Mapeia nome canônico do ranking → valores crus de `sdr_filtro`.
+
+    O ranking expõe o nome oficial da `fdw_reconecta.executivas_pre_vendas`
+    (resolvido por `_canonical_official_name`). O detalhe traz nomes "crus"
+    vindos de `activity.prevendas` / `users.first_name||last_name`. Esta
+    função aplica a mesma resolução canônica sobre os valores únicos do
+    detalhe e devolve aqueles que casam com `sdr_oficial`.
+    """
+    if df_det_norm is None or df_det_norm.empty or not sdr_oficial:
+        return []
+    if df_sdrs_oficiais is None or df_sdrs_oficiais.empty:
+        return []
+    if "nome" not in df_sdrs_oficiais.columns:
+        return []
+    official_names = [
+        str(nome).strip()
+        for nome in df_sdrs_oficiais["nome"].dropna().tolist()
+        if str(nome).strip()
+    ]
+    brutos = df_det_norm["sdr_filtro"].dropna().astype(str).unique().tolist()
+    return [
+        s for s in brutos
+        if _canonical_official_name(s, official_names) == sdr_oficial
+    ]
 
 
 def prevendas_detalhe_sdr_por_fonte(df_sdr: pd.DataFrame) -> pd.DataFrame:

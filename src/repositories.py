@@ -162,6 +162,21 @@ def get_prevendas_por_sdr(data_ini: date, data_fim: date) -> pd.DataFrame:
     )
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo oportunidades por SDR…")
+def get_prevendas_oportunidades_sdr(data_ini: date,
+                                    data_fim: date) -> pd.DataFrame:
+    """Oportunidades (deals criados no período) × Agendamentos (activities
+    no período), agrupado por (sdr, classif_bucket).
+
+    1 row por (sdr, classif_bucket ∈ {+12, -12, Não atua, Sem classif}).
+    O Python pivota para tabela com colunas por bucket + conversões.
+    Detalhes em `src/queries/prevendas_oportunidades_sdr.sql`.
+    """
+    return run_sql_file(
+        "prevendas_oportunidades_sdr.sql", _date_params(data_ini, data_fim)
+    )
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo matriz Pré-vendas SDR × Closer…")
 def get_prevendas_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
     return run_sql_file(
@@ -185,6 +200,65 @@ def get_prevendas_sla(data_ini: date, data_fim: date) -> pd.DataFrame:
     return run_sql_file(
         "prevendas_sla.sql", _date_params(data_ini, data_fim)
     )
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo notificações de vendas…")
+def get_prevendas_notificacoes_vendas(data_ini: date,
+                                      data_fim: date) -> pd.DataFrame:
+    """Notificações de welcome/onboarding (Customer Success) com
+    cruzamento opcional ao funil comercial.
+
+    Fonte: `assistencial.controle_notificacao_vendas` + LEFT JOIN
+    `zoho.crm_negocios` (priority `id_negocio > email`). Documentação
+    completa em `src/queries/prevendas_notificacoes_vendas.sql`.
+    """
+    df = run_sql_file(
+        "prevendas_notificacoes_vendas.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty:
+        df["dt_criacao"] = pd.to_datetime(df["dt_criacao"])
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo leads repassados para SDRs…")
+def get_notificacoes_leads_sdr(data_ini: date,
+                               data_fim: date) -> pd.DataFrame:
+    """Leads daily-distinct com tentativa de associação ao SDR responsável.
+
+    Fonte: `ext_reconecta.leads` (mesma base de leads_visao_geral.sql)
+    cruzado com `zoho_deals` + `zoho_activities` para resolver SDR via
+    cascata `activity.prevendas > deal.sdr_ss > NULL`. Detalhes em
+    `src/queries/notificacoes_leads_sdr.sql`.
+    """
+    df = run_sql_file(
+        "notificacoes_leads_sdr.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty:
+        df["created_at"] = pd.to_datetime(df["created_at"])
+        df["data_ref"]   = pd.to_datetime(df["data_ref"])
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo jornada do lead até a venda…")
+def get_jornada_lead_venda(data_ini: date,
+                           data_fim: date) -> pd.DataFrame:
+    """Deals ganhos no período com os 5 timestamps da jornada para o
+    Python calcular Δt (média/mediana). Detalhes em
+    `src/queries/jornada_lead_venda.sql`."""
+    df = run_sql_file(
+        "jornada_lead_venda.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty:
+        for col in (
+            "ts_lead", "ts_deal", "ts_agendamento_criado",
+            "ts_reuniao_agendada", "ts_comparecimento", "ts_venda",
+        ):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col])
+    return df
 
 
 VIEW_REGISTRY: dict[str, str] = {

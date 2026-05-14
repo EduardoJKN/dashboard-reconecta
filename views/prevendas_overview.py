@@ -8,19 +8,28 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.marketing_queries import get_mkt_visao_geral_periodo
 from src.prevendas_transforms import (
+    prevendas_agregar_por_granularidade,
     prevendas_anotar_sdr,
+    prevendas_anotar_tipo_sdr_detalhe,
+    prevendas_detalhe_mask_por_metrica,
+    prevendas_diario_filtrado_por_sdr,
     prevendas_funil_etapas,
+    prevendas_normalizar_detalhe,
     prevendas_overview_kpis,
     prevendas_ranking_sdr_oficiais,
     prevendas_ranking_sdr,
+    prevendas_sdrs_brutos_para_oficial,
 )
 from src.repositories import (
     get_prevendas_leads_detalhe_diario,
+    get_prevendas_oportunidades_sdr,
     get_prevendas_overview_diario,
     get_prevendas_por_sdr,
     get_prevendas_sdrs_oficiais,
 )
+from src.team_classification import classify_sdr, is_known_sdr
 from src.ui.charts import bar_ranked, funnel
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
@@ -42,12 +51,62 @@ except Exception as e:
     st.error(f"Falha ao consultar Pré-vendas: {e}")
     st.stop()
 
+# Recortes de classificação do card "Leads totais" — mesma fonte/regra da
+# Visão Geral Marketing (mkt_visao_geral_periodo.sql, period-distinct por
+# bucket). Falha silenciosa: se o Marketing estiver indisponível, o hint
+# do card cai pra "—" sem quebrar a página.
+try:
+    df_leads_periodo = get_mkt_visao_geral_periodo(ctx.data_ini, ctx.data_fim)
+    if df_leads_periodo is not None and not df_leads_periodo.empty:
+        row = df_leads_periodo.iloc[0]
+        leads_mais_12_card = int(row.get("leads_mais_12", 0) or 0)
+        leads_menos_12_card = int(row.get("leads_menos_12", 0) or 0)
+        leads_nao_atua_card = int(row.get("leads_nao_atua", 0) or 0)
+    else:
+        leads_mais_12_card = leads_menos_12_card = leads_nao_atua_card = None
+except Exception:
+    leads_mais_12_card = leads_menos_12_card = leads_nao_atua_card = None
+
 df_sdr_anotado = prevendas_anotar_sdr(df_sdr)
 df_sdr_filt = ctx.apply_filters(
     df_sdr_anotado,
     {"sdr": "sdr", "tipo_sdr": "tipo_sdr"},
 )
-k = prevendas_overview_kpis(df_diario)
+
+# -- Filtros globais aplicados ao restante da página -----------------------
+# `df_diario` é agregado sem grão de SDR, então não responde a filtros
+# globais. Quando o usuário seleciona SDR/Tipo SDR no header, recompomos
+# o df_diario a partir do df_detalhe (que tem SDR atribuído por activity
+# e por venda), preservando os totais de Leads (não atribuíveis a SDR).
+df_det_norm_global = prevendas_anotar_tipo_sdr_detalhe(
+    prevendas_normalizar_detalhe(df_detalhe)
+)
+sdr_sel_global      = list(ctx.selections.get("sdr") or [])
+tipo_sdr_sel_global = list(ctx.selections.get("tipo_sdr") or [])
+filtros_globais_ativos = bool(sdr_sel_global or tipo_sdr_sel_global)
+
+if filtros_globais_ativos and df_det_norm_global is not None and not df_det_norm_global.empty:
+    df_diario_view = prevendas_diario_filtrado_por_sdr(
+        df_det_norm_global, df_diario,
+        sdr_sel_global, tipo_sdr_sel_global,
+        ctx.data_ini, ctx.data_fim,
+    )
+
+    # df_detalhe pré-filtrado pelos globais para o Detalhamento Top SDR
+    # e o expander "Ver leads/agendamentos detalhados". O expander
+    # "Ver dados do período" segue usando df_detalhe puro (filtros locais
+    # próprios devem desacoplar dos globais).
+    _mask_global_det = pd.Series(True, index=df_det_norm_global.index)
+    if sdr_sel_global:
+        _mask_global_det &= df_det_norm_global["sdr_filtro"].isin(sdr_sel_global)
+    if tipo_sdr_sel_global:
+        _mask_global_det &= df_det_norm_global["tipo_sdr_filtro"].isin(tipo_sdr_sel_global)
+    df_detalhe_view = df_detalhe.loc[_mask_global_det].copy().reset_index(drop=True)
+else:
+    df_diario_view = df_diario
+    df_detalhe_view = df_detalhe
+
+k = prevendas_overview_kpis(df_diario_view)
 agendamentos_brutos = int(k["agendamentos"])
 agendamentos_vencidos = int(k.get("vencidas", 0))
 agendamentos_exibidos = int(k.get("agendamentos_exibidos",
@@ -63,7 +122,37 @@ section_title(
     f"{ctx.data_ini.strftime('%d/%m/%Y')} → {ctx.data_fim.strftime('%d/%m/%Y')}",
 )
 
-c1, c2, c3, c4, c5 = st.columns(5, gap="small")
+if filtros_globais_ativos:
+    _partes_filtro = []
+    if sdr_sel_global:
+        _partes_filtro.append(f"SDR: {', '.join(sdr_sel_global)}")
+    if tipo_sdr_sel_global:
+        _partes_filtro.append(f"Tipo SDR: {', '.join(tipo_sdr_sel_global)}")
+    st.caption(
+        "🔎 Filtros globais aplicados — "
+        + " · ".join(_partes_filtro)
+        + ". Cards, Funil, Tendência diária, Top SDRs e Detalhamento "
+        "refletem essa seleção. Leads continua mostrando o total geral "
+        "(lead não é atribuível a SDR no momento do form)."
+    )
+
+c0, c1, c2, c3, c4, c5 = st.columns(6, gap="small")
+with c0:
+    if leads_mais_12_card is not None:
+        leads_hint = (
+            f"+12: {int_br(leads_mais_12_card)} · "
+            f"-12: {int_br(leads_menos_12_card)} · "
+            f"Não atua: {int_br(leads_nao_atua_card)}"
+        )
+    else:
+        leads_hint = "Recortes indisponíveis (Marketing)"
+    if filtros_globais_ativos:
+        leads_hint += " · total geral (sem filtro de SDR)"
+    metric_card_v2(
+        "Leads totais",
+        int_br(k["leads"]),
+        hint=leads_hint,
+    )
 with c1:
     metric_card_v2("Agendamentos criados", int_br(k["agendamentos_criados"]),
                    hint="zoho_activities.created_time::date · status_reuniao IS NOT NULL",
@@ -128,10 +217,10 @@ else:
 section_title("Tendência diária",
               "agendamentos criados × agendamentos × comparecimentos")
 
-if df_diario.empty:
+if df_diario_view.empty:
     st.info("Sem dados diários no período.")
 else:
-    df_diario_plot = df_diario.copy()
+    df_diario_plot = df_diario_view.copy()
     if {"agendamentos", "vencidas"}.issubset(df_diario_plot.columns):
         df_diario_plot["agendamentos_liquidos"] = (
             df_diario_plot["agendamentos"].fillna(0)
@@ -193,7 +282,7 @@ else:
     )
 
 # ---------------------------------------------------------------------------
-# Top SDRs
+# Top SDRs — gráfico à esquerda, painel retrátil de detalhe à direita
 # ---------------------------------------------------------------------------
 ranking_metric_options = {
     "Agendamentos criados": "agendamentos_criados",
@@ -205,79 +294,842 @@ ranking_metric_options = {
     "Cancelados": "cancelados",
     "Vencidos": "vencidos",
 }
-ranking_metric_label = st.selectbox(
-    "Métrica do ranking",
-    options=list(ranking_metric_options.keys()),
-    index=1,
-    key="prevendas_overview_ranking_metric",
+
+# `section_title` precisa do label da métrica → resolvemos do session_state
+# antes de criar as colunas (o selectbox vive na coluna da esquerda, mas o
+# header da seção fica acima das duas colunas).
+_label_atual = st.session_state.get(
+    "prevendas_overview_ranking_metric",
+    list(ranking_metric_options.keys())[1],   # default = "Agendamentos"
 )
-ranking_metric_col = ranking_metric_options[ranking_metric_label]
-section_title("Top SDRs", f"ranking do período · {ranking_metric_label.lower()}")
+if _label_atual not in ranking_metric_options:
+    _label_atual = list(ranking_metric_options.keys())[1]
+section_title("Top SDRs", f"ranking do período · {_label_atual.lower()}")
 
 ranking = prevendas_ranking_sdr_oficiais(df_sdr_filt, df_sdrs_oficiais)
-ranking_plot = ranking[ranking[ranking_metric_col].fillna(0) > 0].copy()
-if ranking_plot.empty:
-    st.info(f"Sem {ranking_metric_label.lower()} no período.")
-else:
-    st.plotly_chart(
-        bar_ranked(ranking_plot, "sdr", ranking_metric_col, top_n=12, height=320),
-        use_container_width=True,
-    )
 
-with st.expander("Ver dados diários da regra legada"):
+col_grafico, col_detalhe = st.columns([1.45, 1], gap="large")
+
+# ===========================================================================
+# COLUNA ESQUERDA — métrica + gráfico clicável
+# ===========================================================================
+with col_grafico:
+    ranking_metric_label = st.selectbox(
+        "Métrica do ranking",
+        options=list(ranking_metric_options.keys()),
+        index=list(ranking_metric_options.keys()).index(_label_atual),
+        key="prevendas_overview_ranking_metric",
+    )
+    ranking_metric_col = ranking_metric_options[ranking_metric_label]
+
+    ranking_plot = ranking[ranking[ranking_metric_col].fillna(0) > 0].copy()
+    chart_state = None
+
+    if ranking_plot.empty:
+        st.info(f"Sem {ranking_metric_label.lower()} no período.")
+    else:
+        # `bar_ranked` injeta `customdata = [[nome_sdr]]` em cada barra
+        # (charts.py:211), então não dependemos do label do eixo y truncado.
+        # `on_select="rerun"` é nativo do Streamlit >= 1.37 — sem dependência
+        # externa. `selection_mode="points"` permite clicar uma barra por vez.
+        fig_top = bar_ranked(
+            ranking_plot, "sdr", ranking_metric_col, top_n=12, height=320,
+        )
+        chart_state = st.plotly_chart(
+            fig_top,
+            use_container_width=True,
+            key="prevendas_overview_top_sdrs_chart",
+            on_select="rerun",
+            selection_mode="points",
+        )
+
+# ===========================================================================
+# COLUNA DIREITA — painel retrátil "Detalhe da SDR selecionada"
+# ===========================================================================
+with col_detalhe:
+    if ranking_plot.empty or df_detalhe_view is None or df_detalhe_view.empty:
+        with st.expander("Detalhe da SDR selecionada", expanded=False):
+            st.caption(
+                "Sem dados de ranking ou de detalhe no período para esses "
+                "filtros."
+            )
+    else:
+        sdrs_disponiveis = ranking_plot["sdr"].dropna().astype(str).tolist()
+        OPCAO_TODAS = "Todas"
+
+        # ---- Sincronia clique-no-gráfico ↔ selectbox ----------------------
+        # Lê o ponto clicado em `chart_state` e propaga pro session_state do
+        # selectbox ANTES do widget renderizar. Detecta clique novo via
+        # `_last_click_key` para que mudanças manuais no selectbox em runs
+        # subsequentes não sejam sobrescritas pela seleção persistida do
+        # gráfico (Streamlit mantém o ponto selecionado entre reruns).
+        SELECTBOX_KEY  = "prevendas_overview_top_sdr_detalhe"
+        LAST_CLICK_KEY = "_prevendas_overview_top_sdr_last_chart_pick"
+
+        clicked_sdr = None
+        try:
+            pts = (chart_state or {}).get("selection", {}).get("points", [])
+        except Exception:
+            pts = []
+        if pts:
+            cd = pts[0].get("customdata")
+            if isinstance(cd, (list, tuple)) and cd:
+                clicked_sdr = str(cd[0])
+            elif isinstance(cd, str):
+                clicked_sdr = cd
+            elif pts[0].get("y") is not None:
+                y_clicked = str(pts[0]["y"])
+                clicked_sdr = next(
+                    (s for s in sdrs_disponiveis if s == y_clicked
+                     or s.startswith(y_clicked.rstrip("…"))),
+                    None,
+                )
+
+        if (clicked_sdr
+                and clicked_sdr in sdrs_disponiveis
+                and clicked_sdr != st.session_state.get(LAST_CLICK_KEY)):
+            st.session_state[SELECTBOX_KEY]  = clicked_sdr
+            st.session_state[LAST_CLICK_KEY] = clicked_sdr
+
+        if st.session_state.get(SELECTBOX_KEY) not in (
+                [OPCAO_TODAS] + sdrs_disponiveis):
+            st.session_state[SELECTBOX_KEY] = OPCAO_TODAS
+
+        # Título dinâmico do expander reflete a seleção atual. Streamlit não
+        # permite reabrir programaticamente entre reruns; o painel começa
+        # FECHADO por default (preferência do user) — o conteúdo dentro
+        # ainda atualiza coerentemente quando o user reabre depois de
+        # clicar numa barra ou trocar o selectbox.
+        sdr_atual = st.session_state.get(SELECTBOX_KEY, OPCAO_TODAS)
+        titulo_expander = (
+            "Detalhe da SDR selecionada"
+            if sdr_atual == OPCAO_TODAS
+            else f"Detalhe — {sdr_atual}"
+        )
+
+        with st.expander(titulo_expander, expanded=False):
+            st.caption(
+                "💡 **Clique numa barra do gráfico** para detalhar aquele SDR — "
+                "ou use o seletor abaixo. 'Todas' mostra o consolidado."
+            )
+            sdr_escolhido = st.selectbox(
+                "SDR para detalhar",
+                options=[OPCAO_TODAS] + sdrs_disponiveis,
+                key=SELECTBOX_KEY,
+            )
+
+            df_det_norm = prevendas_normalizar_detalhe(df_detalhe_view)
+            mask_metrica = prevendas_detalhe_mask_por_metrica(
+                df_det_norm, ranking_metric_col, ctx.data_ini, ctx.data_fim
+            )
+
+            if sdr_escolhido == OPCAO_TODAS:
+                contagem_grafico = int(
+                    ranking_plot[ranking_metric_col].fillna(0).sum()
+                )
+                mask_sdr = pd.Series(True, index=df_det_norm.index)
+            else:
+                contagem_grafico = int(
+                    ranking_plot.loc[
+                        ranking_plot["sdr"] == sdr_escolhido, ranking_metric_col
+                    ].iloc[0]
+                )
+                sdrs_brutos = prevendas_sdrs_brutos_para_oficial(
+                    df_det_norm, sdr_escolhido, df_sdrs_oficiais
+                )
+                mask_sdr = df_det_norm["sdr_filtro"].isin(sdrs_brutos)
+
+            linhas_brutas = df_det_norm[mask_sdr & mask_metrica].copy()
+
+            # Unidade da métrica: vendas conta deal_id distinto; resto conta
+            # activity_id distinto. Fan-out em activity_rows do SQL (base_dados
+            # LEFT JOIN ext_reconecta.leads multiplica activities quando o
+            # mesmo zoho_id tem N linhas de lead) é removido aqui.
+            unidade_col = "deal_id" if ranking_metric_col == "vendas" else "activity_id"
+
+            if unidade_col in linhas_brutas.columns:
+                contagem_tabela = int(linhas_brutas[unidade_col].nunique(dropna=False))
+                linhas = linhas_brutas.drop_duplicates(
+                    subset=[unidade_col], keep="first"
+                ).copy()
+            else:
+                contagem_tabela = len(linhas_brutas)
+                linhas = linhas_brutas.copy()
+
+            linhas_duplicadas = len(linhas_brutas) - len(linhas)
+
+            # ---------------- Mini-cards de resumo ----------------------
+            # Lê do `ranking` (1 row por SDR oficial) para a SDR escolhida
+            # ou soma do ranking_plot para "Todas".
+            if sdr_escolhido == OPCAO_TODAS:
+                fonte = ranking_plot
+            else:
+                fonte = ranking_plot.loc[ranking_plot["sdr"] == sdr_escolhido]
+
+            def _sum_col(col: str) -> int:
+                if col in fonte.columns:
+                    return int(fonte[col].fillna(0).sum())
+                return 0
+
+            def _sum_money(col: str) -> float:
+                if col in fonte.columns:
+                    return float(fonte[col].fillna(0).sum())
+                return 0.0
+
+            st.markdown(
+                f"**{sdr_escolhido}** · {ranking_metric_label}: "
+                f"gráfico {int_br(contagem_grafico)} · "
+                f"tabela {int_br(contagem_tabela)}"
+            )
+
+            mc1, mc2, mc3 = st.columns(3, gap="small")
+            with mc1:
+                metric_card_v2(
+                    "Agendamentos",
+                    int_br(_sum_col("agendamentos")),
+                    hint="Atividades Consulta/Indicação (bruto)",
+                )
+            with mc2:
+                metric_card_v2(
+                    "Agendamentos +12",
+                    int_br(_sum_col("agendamentos_mais_12")),
+                    hint="classificação combinada lead+CRM",
+                )
+            with mc3:
+                metric_card_v2(
+                    "Comparecimentos",
+                    int_br(_sum_col("comparecimentos")),
+                    hint="status_reuniao = 'Concluída'",
+                )
+
+            mc4, mc5 = st.columns(2, gap="small")
+            with mc4:
+                metric_card_v2(
+                    "Vendas",
+                    int_br(_sum_col("vendas")),
+                    hint="deals ganhos no período",
+                    accent=True,
+                )
+            with mc5:
+                receita_val = _sum_money("receita")
+                if receita_val == 0:
+                    receita_val = _sum_money("montante")
+                    label_receita = "Montante"
+                else:
+                    label_receita = "Receita"
+                metric_card_v2(
+                    label_receita,
+                    f"R$ {receita_val:,.0f}".replace(",", "."),
+                    hint=("receita dos deals ganhos"
+                          if label_receita == "Receita"
+                          else "montante dos deals ganhos"),
+                )
+
+            # ---------------- Avisos de divergência ---------------------
+            _card_metric_map = {
+                "agendamentos_criados": k.get("agendamentos_criados"),
+                "agendamentos":          k.get("agendamentos"),
+                "agendamentos_mais_12":  k.get("agendamentos_mais_12"),
+                "comparecimentos":       k.get("comparecimentos"),
+                "vendas":                k.get("vendas"),
+            }
+            if (sdr_escolhido == OPCAO_TODAS
+                    and ranking_metric_col in _card_metric_map):
+                valor_card = int(_card_metric_map[ranking_metric_col] or 0)
+                soma_ranking = int(ranking_plot[ranking_metric_col].fillna(0).sum())
+                diff = valor_card - soma_ranking
+                if diff == 0:
+                    st.caption(
+                        f"✓ Soma do ranking ({int_br(soma_ranking)}) bate com o "
+                        f"card de **{ranking_metric_label}** ({int_br(valor_card)})."
+                    )
+                else:
+                    st.caption(
+                        f"ℹ Ranking visível: {int_br(soma_ranking)} · card "
+                        f"**{ranking_metric_label}**: {int_br(valor_card)} "
+                        f"(Δ {int_br(diff)}). O ranking só inclui SDRs oficiais; "
+                        "Letícia Garcia, Bruna Braga, 'Sem SDR' etc. contam no "
+                        "card mas não aparecem aqui."
+                        + (" O card de Agendamentos no topo é líquido "
+                           "(bruto − vencidos); aqui usamos o bruto."
+                           if ranking_metric_col == "agendamentos" else "")
+                    )
+
+            if contagem_tabela != contagem_grafico:
+                delta = contagem_tabela - contagem_grafico
+                if delta < 0:
+                    st.warning(
+                        f"Tabela: {int_br(contagem_tabela)} · gráfico: "
+                        f"{int_br(contagem_grafico)} (faltam "
+                        f"{int_br(abs(delta))}). O ranking inclui atividade "
+                        "com SDR oficial mesmo sem deal pareado; o detalhe "
+                        "exige vínculo com deal."
+                    )
+                else:
+                    st.warning(
+                        f"Tabela: {int_br(contagem_tabela)} · gráfico: "
+                        f"{int_br(contagem_grafico)} (sobram "
+                        f"{int_br(delta)}). Pode haver `{unidade_col}` no "
+                        "detalhe não considerado pelo ranking ou fan-out "
+                        "residual."
+                    )
+
+            if linhas_duplicadas > 0:
+                st.caption(
+                    f"⚙ Removidas {int_br(linhas_duplicadas)} duplicata(s) "
+                    f"por `{unidade_col}`."
+                )
+
+            # ---------------- Tabela resumida ---------------------------
+            if linhas.empty:
+                st.caption("Nenhum registro encontrado para esse SDR/métrica.")
+            else:
+                sort_cols = [
+                    c for c in ("data_agendamento", "data_criacao",
+                                "data_venda", "deal_id", "activity_id")
+                    if c in linhas.columns
+                ]
+                linhas = linhas.sort_values(
+                    sort_cols, na_position="last",
+                ).reset_index(drop=True)
+                linhas.insert(0, "#", range(1, len(linhas) + 1))
+
+                # Subset resumido conforme pedido (Nome · E-mail · Classif ·
+                # Status · Origem · Data agend · Closer).
+                cols_map_resumo = [
+                    ("#",                       "#"),
+                    ("nome_cliente_view",       "Nome do cliente/lead"),
+                    ("email_lead",              "E-mail"),
+                    ("classificacao_filtro",    "Classificação"),
+                    ("status_filtro",           "Status reunião"),
+                    ("origem_fonte",            "Origem/fonte"),
+                    ("data_agendamento",        "Data agendamento"),
+                    ("closer_filtro",           "Closer"),
+                ]
+                cols_resumo = [c for c, _ in cols_map_resumo
+                               if c in linhas.columns]
+                tabela_resumo = linhas[cols_resumo].rename(
+                    columns={c: lbl for c, lbl in cols_map_resumo
+                             if c in cols_resumo}
+                )
+                cfg_resumo = {
+                    "#": st.column_config.NumberColumn("#", format="%d"),
+                }
+                if "Data agendamento" in tabela_resumo.columns:
+                    cfg_resumo["Data agendamento"] = st.column_config.DateColumn(
+                        "Data agendamento", format="DD/MM/YYYY"
+                    )
+                st.dataframe(
+                    tabela_resumo,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=cfg_resumo,
+                )
+
+                # Toggle "Ver tabela completa" — Streamlit não permite expander
+                # aninhado dentro de expander; toggle preserva a UX retrátil.
+                ver_completa = st.toggle(
+                    "Ver tabela completa",
+                    value=False,
+                    key="prevendas_overview_top_sdr_ver_completa",
+                )
+                if ver_completa:
+                    cols_map_top = [
+                        ("#", "#"),
+                        ("nome_cliente_view", "Nome do cliente/lead"),
+                        ("email_lead", "E-mail"),
+                        ("sdr_filtro", "SDR"),
+                        ("closer_filtro", "Closer"),
+                        ("classificacao_filtro", "Classif. (lead)"),
+                        ("classificacao_crm_filtro", "Classif. (CRM)"),
+                        ("status_filtro", "Status reunião"),
+                        ("origem_fonte", "Origem/fonte"),
+                        ("data_criacao", "Data de criação"),
+                        ("data_agendamento", "Data do agendamento"),
+                        ("data_venda", "Data da venda"),
+                        ("deal_id", "ID do deal"),
+                        ("activity_id", "ID da activity"),
+                        ("montante", "Montante"),
+                        ("receita", "Receita"),
+                    ]
+                    cols_full = [c for c, _ in cols_map_top
+                                 if c in linhas.columns]
+                    tabela_full = linhas[cols_full].rename(
+                        columns={c: lbl for c, lbl in cols_map_top
+                                 if c in cols_full}
+                    )
+                    cfg_full = {
+                        "#": st.column_config.NumberColumn("#", format="%d"),
+                    }
+                    if "Data de criação" in tabela_full.columns:
+                        cfg_full["Data de criação"] = st.column_config.DateColumn(
+                            "Data de criação", format="DD/MM/YYYY"
+                        )
+                    if "Data do agendamento" in tabela_full.columns:
+                        cfg_full["Data do agendamento"] = st.column_config.DateColumn(
+                            "Data do agendamento", format="DD/MM/YYYY"
+                        )
+                    if "Data da venda" in tabela_full.columns:
+                        cfg_full["Data da venda"] = st.column_config.DateColumn(
+                            "Data da venda", format="DD/MM/YYYY"
+                        )
+                    if "Montante" in tabela_full.columns:
+                        cfg_full["Montante"] = st.column_config.NumberColumn(
+                            "Montante", format="R$ %.2f"
+                        )
+                    if "Receita" in tabela_full.columns:
+                        cfg_full["Receita"] = st.column_config.NumberColumn(
+                            "Receita", format="R$ %.2f"
+                        )
+                    st.dataframe(
+                        tabela_full,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config=cfg_full,
+                    )
+
+# ===========================================================================
+# Indicadores por Pré-vendas — Oportunidades × Agendamentos × Conversão
+# ===========================================================================
+# Universo: deals criados no período (zoho_deals.created_at).
+#   - Oportunidades = COUNT(DISTINCT deal_id) atribuídos ao SDR.
+#   - Agendamentos  = COUNT(DISTINCT activity_id) Consulta/Indicação no
+#     período (mesma janela das demais queries).
+#   - Bucket exclusivo: +12 > -12 > Não atua > Sem classif, com a regra
+#     combinada das 4 fontes (CRM + ext.leads).
+#   - SDR resolvido pela cascata canônica (activity.prevendas > deal.sdr_ss).
+#
+# Filtra para SDRs do cadastro oficial (mesma regra do Top SDRs) e
+# respeita os filtros globais SDR/Tipo SDR. Não bate com "Leads totais"
+# porque o universo aqui é deal-criado-no-período e ainda exclui SDRs
+# não oficiais — caption explica.
+section_title(
+    "Indicadores por Pré-vendas",
+    "Oportunidades recebidas, agendamentos e conversão por classificação.",
+)
+
+try:
+    df_oport_raw = get_prevendas_oportunidades_sdr(ctx.data_ini, ctx.data_fim)
+except Exception as e:
+    st.error(f"Falha ao consultar oportunidades por SDR: {e}")
+    df_oport_raw = pd.DataFrame()
+
+if df_oport_raw.empty:
+    st.info("Sem oportunidades no período selecionado.")
+else:
+    from src.prevendas_transforms import _canonical_official_name
+
+    # 1) Mapear cada SDR cru pro nome oficial (mesma regra de
+    #    prevendas_ranking_sdr_oficiais). Sem mapping → vazio → fica fora.
+    if df_sdrs_oficiais is not None and not df_sdrs_oficiais.empty:
+        official_names = [
+            str(n).strip()
+            for n in df_sdrs_oficiais["nome"].dropna().tolist()
+            if str(n).strip()
+        ]
+    else:
+        official_names = []
+
+    df_oport = df_oport_raw.copy()
+    df_oport["sdr"] = df_oport["sdr"].astype(str)
+    df_oport["sdr_oficial"] = df_oport["sdr"].apply(
+        lambda nome: _canonical_official_name(nome, official_names)
+    )
+    df_oport = df_oport[df_oport["sdr_oficial"] != ""].copy()
+
+    if df_oport.empty:
+        st.info(
+            "Nenhuma oportunidade atribuída a SDR do cadastro oficial no "
+            "período. Veja o Top SDRs acima — pode haver SDRs fora da "
+            "composição oficial respondendo por essas oportunidades."
+        )
+    else:
+        # 2) Pivotar (sdr × bucket) — 1 row por SDR com colunas por bucket
+        #    para oportunidades, agendamentos e vendas (3 pivots paralelos).
+        BUCKETS = ["+12", "-12", "Não atua", "Sem classif"]
+        df_oport_g = (
+            df_oport.groupby(["sdr_oficial", "classif_bucket"],
+                             as_index=False, dropna=False)
+                    .agg(oport=("oportunidades", "sum"),
+                         agend=("agendamentos", "sum"),
+                         vendas=("vendas", "sum"))
+        )
+
+        def _piv(col: str) -> pd.DataFrame:
+            return (
+                df_oport_g.pivot_table(
+                    index="sdr_oficial", columns="classif_bucket",
+                    values=col, aggfunc="sum", fill_value=0,
+                ).reindex(columns=BUCKETS, fill_value=0)
+            )
+
+        piv_oport  = _piv("oport")
+        piv_agend  = _piv("agend")
+        piv_vendas = _piv("vendas")
+
+        tabela = pd.DataFrame({
+            "SDR / Pré-vendas":           piv_oport.index,
+            "oport_total":                piv_oport.sum(axis=1).values,
+            "oport_+12":                  piv_oport["+12"].values,
+            "oport_-12":                  piv_oport["-12"].values,
+            "oport_nao_atua":             piv_oport["Não atua"].values,
+            "oport_sem_classif":          piv_oport["Sem classif"].values,
+            "agend_+12":                  piv_agend["+12"].values,
+            "agend_-12":                  piv_agend["-12"].values,
+            "agend_nao_atua":             piv_agend["Não atua"].values,
+            "agend_total":                piv_agend.sum(axis=1).values,
+            "vendas_+12":                 piv_vendas["+12"].values,
+            "vendas_total":               piv_vendas.sum(axis=1).values,
+        })
+
+        # 3) Tipo SDR (para filtro global Tipo SDR).
+        tabela["tipo_sdr"] = tabela["SDR / Pré-vendas"].apply(classify_sdr)
+
+        # 4) Aplicar filtros globais (SDR / Tipo SDR).
+        if sdr_sel_global:
+            tabela = tabela[tabela["SDR / Pré-vendas"].isin(sdr_sel_global)]
+        if tipo_sdr_sel_global:
+            tabela = tabela[tabela["tipo_sdr"].isin(tipo_sdr_sel_global)]
+
+        if tabela.empty:
+            st.info("Sem SDRs no recorte dos filtros SDR / Tipo SDR.")
+        else:
+            # 5) Métricas Looker-style. Pré-calculadas pra usar tanto no
+            #    modo "Percentuais" quanto nos totais do caption.
+            #    % Agendamento  = Agend / Oport
+            #    % Ag. +12      = Agend +12 / Oport +12
+            #    % Ag. -12      = Agend -12 / Oport -12
+            #    % Ag. Não atua = Agend Não atua / Oport Não atua
+            #    % Conversão    = Vendas / Agendamentos       (padrão Looker)
+            #    % Conv. +12    = Vendas +12 / Agend +12
+            def _ratio(num, den):
+                return (num / den * 100.0) if den else None
+
+            tabela["pct_agend"]          = tabela.apply(
+                lambda r: _ratio(r["agend_total"],   r["oport_total"]),    axis=1)
+            tabela["pct_agend_+12"]      = tabela.apply(
+                lambda r: _ratio(r["agend_+12"],     r["oport_+12"]),      axis=1)
+            tabela["pct_agend_-12"]      = tabela.apply(
+                lambda r: _ratio(r["agend_-12"],     r["oport_-12"]),      axis=1)
+            tabela["pct_agend_nao_atua"] = tabela.apply(
+                lambda r: _ratio(r["agend_nao_atua"], r["oport_nao_atua"]), axis=1)
+            tabela["pct_conversao"]      = tabela.apply(
+                lambda r: _ratio(r["vendas_total"],  r["agend_total"]),    axis=1)
+            tabela["pct_conv_+12"]       = tabela.apply(
+                lambda r: _ratio(r["vendas_+12"],    r["agend_+12"]),      axis=1)
+
+            tabela = tabela.sort_values(
+                "oport_total", ascending=False,
+            ).reset_index(drop=True)
+            tabela.insert(0, "#", range(1, len(tabela) + 1))
+
+            # 6) Toggle Números / Percentuais / Números + Percentuais —
+            #    `st.segmented_control` (Streamlit ≥ 1.34) é mais visual
+            #    que radio. Cai pra radio se o atributo não existir.
+            opcoes_view = ["Números", "Percentuais", "Números + Percentuais"]
+            if hasattr(st, "segmented_control"):
+                modo_view = st.segmented_control(
+                    "Visualizar indicadores como",
+                    options=opcoes_view,
+                    default="Números",
+                    key="prevendas_overview_oport_modo",
+                )
+            else:
+                modo_view = st.radio(
+                    "Visualizar indicadores como",
+                    options=opcoes_view,
+                    index=0,
+                    horizontal=True,
+                    key="prevendas_overview_oport_modo",
+                )
+            # segmented_control pode devolver None se o usuário desclicar.
+            if modo_view not in opcoes_view:
+                modo_view = "Números"
+
+            # 7) Renderização — colunas variam conforme `modo_view`.
+            #    Larguras: SDR fica como única coluna "medium"; resto
+            #    "small". Streamlit alinha números à direita por padrão.
+            _num_small = lambda label, fmt="%d": st.column_config.NumberColumn(  # noqa: E731
+                label, format=fmt, width="small"
+            )
+
+            def _fmt_n_pct(n, denom) -> str:
+                """Formata 'N (P,P%)'. Denominador zero → só o número.
+                Usa vírgula decimal pt-BR. Aceita None/NaN como 0."""
+                try:
+                    n_int = int(n) if pd.notna(n) else 0
+                except (TypeError, ValueError):
+                    n_int = 0
+                if denom and denom > 0:
+                    pct = n_int / float(denom) * 100.0
+                    return f"{n_int} ({pct:.1f}%)".replace(".", ",")
+                return f"{n_int}"
+
+            if modo_view == "Números":
+                tabela_view = pd.DataFrame({
+                    "#":                tabela["#"],
+                    "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
+                    "Op.":              tabela["oport_total"].astype(int),
+                    "Op. +12":          tabela["oport_+12"].astype(int),
+                    "Op. -12":          tabela["oport_-12"].astype(int),
+                    "Op. Não atua":     tabela["oport_nao_atua"].astype(int),
+                    "Ag.":              tabela["agend_total"].astype(int),
+                    "Ag. +12":          tabela["agend_+12"].astype(int),
+                    "Ag. -12":          tabela["agend_-12"].astype(int),
+                    "Ag. Não atua":     tabela["agend_nao_atua"].astype(int),
+                    "Vendas":           tabela["vendas_total"].astype(int),
+                    "Vendas +12":       tabela["vendas_+12"].astype(int),
+                })
+                column_config_oport = {
+                    "#":                _num_small("#"),
+                    "SDR / Pré-vendas": st.column_config.TextColumn(
+                        "SDR / Pré-vendas", width="medium"),
+                    "Op.":              _num_small("Op."),
+                    "Op. +12":          _num_small("Op. +12"),
+                    "Op. -12":          _num_small("Op. -12"),
+                    "Op. Não atua":     _num_small("Op. Não atua"),
+                    "Ag.":              _num_small("Ag."),
+                    "Ag. +12":          _num_small("Ag. +12"),
+                    "Ag. -12":          _num_small("Ag. -12"),
+                    "Ag. Não atua":     _num_small("Ag. Não atua"),
+                    "Vendas":           _num_small("Vendas"),
+                    "Vendas +12":       _num_small("Vendas +12"),
+                }
+            elif modo_view == "Percentuais":
+                tabela_view = pd.DataFrame({
+                    "#":                tabela["#"],
+                    "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
+                    "% Agendamento":    tabela["pct_agend"],
+                    "% Ag. +12":        tabela["pct_agend_+12"],
+                    "% Ag. -12":        tabela["pct_agend_-12"],
+                    "% Ag. Não atua":   tabela["pct_agend_nao_atua"],
+                    "% Conversão":      tabela["pct_conversao"],
+                    "% Conversão +12":  tabela["pct_conv_+12"],
+                })
+                column_config_oport = {
+                    "#":                _num_small("#"),
+                    "SDR / Pré-vendas": st.column_config.TextColumn(
+                        "SDR / Pré-vendas", width="medium"),
+                    "% Agendamento":    _num_small("% Agendamento",   "%.1f%%"),
+                    "% Ag. +12":        _num_small("% Ag. +12",       "%.1f%%"),
+                    "% Ag. -12":        _num_small("% Ag. -12",       "%.1f%%"),
+                    "% Ag. Não atua":   _num_small("% Ag. Não atua",  "%.1f%%"),
+                    "% Conversão":      _num_small("% Conversão",     "%.1f%%"),
+                    "% Conversão +12":  _num_small("% Conversão +12", "%.1f%%"),
+                }
+            else:  # "Números + Percentuais" — célula = "N (P,P%)"
+                # Denominadores conforme spec:
+                #   Op. → sem % (base); Op.{+12,-12,Não atua} / Op.
+                #   Ag. / Op.; Ag.{+12,-12,Não atua} / Op.{respectivo}
+                #   Vendas / Ag.; Vendas +12 / Ag. +12
+                tabela_view = pd.DataFrame({
+                    "#":                tabela["#"],
+                    "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
+                    "Op.":              tabela["oport_total"].astype(int).astype(str),
+                    "Op. +12":          [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["oport_+12"], tabela["oport_total"])],
+                    "Op. -12":          [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["oport_-12"], tabela["oport_total"])],
+                    "Op. Não atua":     [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["oport_nao_atua"], tabela["oport_total"])],
+                    "Ag.":              [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["agend_total"], tabela["oport_total"])],
+                    "Ag. +12":          [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["agend_+12"], tabela["oport_+12"])],
+                    "Ag. -12":          [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["agend_-12"], tabela["oport_-12"])],
+                    "Ag. Não atua":     [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["agend_nao_atua"], tabela["oport_nao_atua"])],
+                    "Vendas":           [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["vendas_total"], tabela["agend_total"])],
+                    "Vendas +12":       [_fmt_n_pct(n, d) for n, d in
+                                          zip(tabela["vendas_+12"], tabela["agend_+12"])],
+                })
+                # Células viram texto — Streamlit alinha texto à esquerda.
+                # `width="small"` cabe "999 (100,0%)" sem quebrar.
+                _txt_small = lambda label: st.column_config.TextColumn(  # noqa: E731
+                    label, width="small"
+                )
+                column_config_oport = {
+                    "#":                _num_small("#"),
+                    "SDR / Pré-vendas": st.column_config.TextColumn(
+                        "SDR / Pré-vendas", width="medium"),
+                    "Op.":              _txt_small("Op."),
+                    "Op. +12":          _txt_small("Op. +12"),
+                    "Op. -12":          _txt_small("Op. -12"),
+                    "Op. Não atua":     _txt_small("Op. Não atua"),
+                    "Ag.":              _txt_small("Ag."),
+                    "Ag. +12":          _txt_small("Ag. +12"),
+                    "Ag. -12":          _txt_small("Ag. -12"),
+                    "Ag. Não atua":     _txt_small("Ag. Não atua"),
+                    "Vendas":           _txt_small("Vendas"),
+                    "Vendas +12":       _txt_small("Vendas +12"),
+                }
+
+            st.dataframe(
+                tabela_view,
+                use_container_width=True,
+                hide_index=True,
+                column_config=column_config_oport,
+            )
+
+            # 7) Totais + caption explicativo.
+            total_oport  = int(tabela["oport_total"].sum())
+            total_agend  = int(tabela["agend_total"].sum())
+            total_vendas = int(tabela["vendas_total"].sum())
+            pct_agend_g  = (total_agend  / total_oport  * 100.0) if total_oport  else 0.0
+            pct_conv_g   = (total_vendas / total_agend  * 100.0) if total_agend  else 0.0
+            st.caption(
+                f"**{int_br(len(tabela))} SDR(s)** · "
+                f"**{int_br(total_oport)} oport.** · "
+                f"**{int_br(total_agend)} agend.** · "
+                f"**{int_br(total_vendas)} vendas** · "
+                f"% Agendamento **{pct_agend_g:.1f}%** · "
+                f"% Conversão **{pct_conv_g:.1f}%**. "
+                "**% Conversão = Vendas / Agendamentos** (padrão Looker). "
+                "Oportunidades = `zoho_deals` criados no período; "
+                "agendamentos = activities Consulta/Indicação no período; "
+                "vendas = deals ganhos no período (stage Ganho · tipo "
+                "Novo cliente). SDR atribuído via cascata "
+                "`activity.prevendas > deal.sdr_ss`. Apenas SDRs do cadastro "
+                "oficial. Conversões com denominador zero ficam em branco."
+            )
+
+with st.expander("Ver dados do período (diário, semanal ou mensal)"):
     if df_diario.empty:
         st.caption("Sem dados diários no período.")
     else:
-        tabela = df_diario.copy().sort_values("data_ref").reset_index(drop=True)
+        # Controles locais — afetam SÓ esta tabela.
+        f_gran, f_sdr, f_tipo = st.columns([1.3, 2, 2], gap="medium")
 
-        if {"agendamentos", "vencidas"}.issubset(tabela.columns):
-            tabela["agendamentos_exibidos"] = (
-                tabela["agendamentos"].fillna(0) - tabela["vencidas"].fillna(0)
-            ).clip(lower=0)
-
-        if {"comparecimentos", "agendamentos_exibidos"}.issubset(tabela.columns):
-            denom = tabela["agendamentos_exibidos"].where(
-                tabela["agendamentos_exibidos"] != 0
-            )
-            tabela["taxa_comparecimento"] = (
-                tabela["comparecimentos"].astype(float)
-                .div(denom)
-                .fillna(0)
-                * 100
+        with f_gran:
+            granularidade = st.radio(
+                "Visualizar por",
+                options=["Dia", "Semana", "Mês"],
+                index=0,
+                horizontal=True,
+                key="prevendas_overview_granularidade",
             )
 
-        if {"montante", "vendas"}.issubset(tabela.columns):
-            denom_vendas = tabela["vendas"].where(tabela["vendas"] != 0)
-            tabela["ticket_medio"] = (
-                tabela["montante"].astype(float)
-                .div(denom_vendas)
-                .fillna(0)
+        # Detalhe anotado com tipo_sdr — fonte das opções de filtro e da
+        # recomposição da série diária quando algum filtro estiver ativo.
+        df_det_norm_full = prevendas_normalizar_detalhe(df_detalhe)
+        df_det_norm_full = prevendas_anotar_tipo_sdr_detalhe(df_det_norm_full)
+
+        if df_det_norm_full is not None and not df_det_norm_full.empty:
+            opcoes_sdr_local = sorted(
+                df_det_norm_full["sdr_filtro"].dropna().astype(str).unique().tolist()
             )
+            opcoes_tipo_sdr_local = sorted(
+                df_det_norm_full["tipo_sdr_filtro"].dropna().astype(str).unique().tolist()
+            )
+        else:
+            opcoes_sdr_local = []
+            opcoes_tipo_sdr_local = []
+
+        with f_sdr:
+            sdrs_sel_local = st.multiselect(
+                "SDR (filtra só esta tabela)",
+                options=opcoes_sdr_local,
+                default=[],
+                placeholder="Todos",
+                key="prevendas_overview_tabela_sdr",
+            )
+        with f_tipo:
+            tipos_sel_local = st.multiselect(
+                "Tipo SDR (filtra só esta tabela)",
+                options=opcoes_tipo_sdr_local,
+                default=[],
+                placeholder="Todos",
+                key="prevendas_overview_tabela_tipo_sdr",
+            )
+
+        filtro_local_ativo = bool(sdrs_sel_local or tipos_sel_local)
+        if filtro_local_ativo and df_det_norm_full is not None and not df_det_norm_full.empty:
+            # Filtros locais desacoplam dos globais — base é o df_diario
+            # PURO, com filtro local aplicado.
+            df_diario_expander = prevendas_diario_filtrado_por_sdr(
+                df_det_norm_full,
+                df_diario,
+                sdrs_sel_local,
+                tipos_sel_local,
+                ctx.data_ini,
+                ctx.data_fim,
+            )
+            st.caption(
+                "⚙ Filtro local ativo (desacopla dos filtros globais do header) · "
+                "**Leads / Leads +12 / Leads -12 não são afetados** pelos filtros "
+                "de SDR/Tipo SDR (no momento do form ainda não há SDR atribuído "
+                "ao lead). As demais métricas — Agendamentos, Comparecimentos, "
+                "Vendas, Montante, Receita, Vencidas — refletem apenas o(s) "
+                "SDR/Tipo SDR selecionado(s) aqui."
+            )
+        else:
+            # Sem filtro local → respeita os filtros globais do header.
+            df_diario_expander = df_diario_view
+
+        tabela = prevendas_agregar_por_granularidade(df_diario_expander, granularidade)
 
         cols_map = [
-            ("data_ref", "Data"),
-            ("agendamentos_criados", "Agendamentos criados"),
-            ("agendamentos", "Agendamentos (bruto)"),
-            ("vencidas", "Vencidas"),
-            ("agendamentos_exibidos", "Agendamentos exibidos"),
+            ("periodo", "Período"),
+            # Leads
+            ("leads", "Leads"),
+            ("leads_mais_12", "Leads +12"),
+            ("leads_menos_12", "Leads -12"),
+            # Agendamentos (exibidos = bruto - vencidas)
+            ("agendamentos_exibidos", "Agendamentos"),
             ("agendamentos_mais_12", "Agendamentos +12"),
+            # Comparecimentos
             ("comparecimentos", "Comparecimentos"),
+            ("comparecimentos_mais_12", "Comparecimentos +12"),
+            # Vendas
             ("vendas", "Vendas"),
+            ("vendas_mais_12", "Vendas +12"),
+            # Conversões gerais
+            ("pct_lead_agend", "% Lead → Agend."),
+            ("pct_agend_comp", "% Agend. → Comp."),
+            ("pct_comp_venda", "% Comp. → Venda"),
+            # Conversões +12
+            ("pct_lead_agend_12", "% Lead +12 → Agend. +12"),
+            ("pct_agend_comp_12", "% Agend. +12 → Comp. +12"),
+            ("pct_comp_venda_12", "% Comp. +12 → Venda +12"),
+            # Financeiro
             ("montante", "Montante"),
             ("receita", "Receita"),
-            ("taxa_comparecimento", "Taxa de comparecimento"),
             ("ticket_medio", "Ticket médio"),
+            ("vencidas", "Vencidas"),
         ]
         cols_presentes = [orig for orig, _ in cols_map if orig in tabela.columns]
         tabela = tabela[cols_presentes].rename(
             columns={orig: label for orig, label in cols_map if orig in cols_presentes}
         )
 
-        column_config = {}
-        if "Data" in tabela.columns:
-            column_config["Data"] = st.column_config.DateColumn(
-                "Data", format="DD/MM/YYYY"
-            )
+        column_config = {
+            "Período": st.column_config.TextColumn("Período"),
+        }
+        # Volumes (inteiros) — formato implícito do dataframe já cuida disso,
+        # mas garantimos com NumberColumn quando útil pra alinhamento.
+        for col_int in (
+            "Leads", "Leads +12", "Leads -12",
+            "Agendamentos", "Agendamentos +12",
+            "Comparecimentos", "Comparecimentos +12",
+            "Vendas", "Vendas +12", "Vencidas",
+        ):
+            if col_int in tabela.columns:
+                column_config[col_int] = st.column_config.NumberColumn(
+                    col_int, format="%d"
+                )
+        # Conversões em %
+        for col_pct in (
+            "% Lead → Agend.", "% Agend. → Comp.", "% Comp. → Venda",
+            "% Lead +12 → Agend. +12", "% Agend. +12 → Comp. +12",
+            "% Comp. +12 → Venda +12",
+        ):
+            if col_pct in tabela.columns:
+                column_config[col_pct] = st.column_config.NumberColumn(
+                    col_pct, format="%.1f%%"
+                )
+        # Financeiro
         if "Montante" in tabela.columns:
             column_config["Montante"] = st.column_config.NumberColumn(
                 "Montante", format="R$ %.2f"
@@ -286,18 +1138,20 @@ with st.expander("Ver dados diários da regra legada"):
             column_config["Receita"] = st.column_config.NumberColumn(
                 "Receita", format="R$ %.2f"
             )
-        if "Taxa de comparecimento" in tabela.columns:
-            column_config["Taxa de comparecimento"] = st.column_config.NumberColumn(
-                "Taxa de comparecimento", format="%.2f%%"
-            )
         if "Ticket médio" in tabela.columns:
             column_config["Ticket médio"] = st.column_config.NumberColumn(
                 "Ticket médio", format="R$ %.2f"
             )
 
         st.caption(
-            "Nesta tabela, `Agendamentos (bruto)` segue a regra legada original. "
-            "`Agendamentos exibidos` = bruto - vencidas, alinhado ao card, funil e tendência."
+            "**Funil por período.** Volumes dedup por `activity_id` "
+            "(Agendamentos/Comparecimentos/Vencidas) e `deal_id` (Vendas). "
+            "**Agendamentos** = bruto − vencidas. **Recortes +12** usam regra "
+            "combinada (4 fontes em OR): `zoho_deals.lead_classification`, "
+            "`zoho_deals.qualificacao`, `zoho_deals.classificado_cal` e "
+            "`ext_reconecta.leads.classificado`. Conversões = razão dos "
+            "totais (não média das taxas diárias). Denominador 0 ⇒ 0,0%. "
+            "Semana usa janela fixa 1-7 / 8-14 / 15-21 / 22-28 / 29-31."
         )
         st.dataframe(
             tabela,
@@ -307,10 +1161,16 @@ with st.expander("Ver dados diários da regra legada"):
         )
 
 with st.expander("Ver leads/agendamentos detalhados"):
-    if df_detalhe.empty:
-        st.caption("Sem linhas detalhadas no período.")
+    if df_detalhe_view.empty:
+        if filtros_globais_ativos:
+            st.caption(
+                "Sem linhas detalhadas para a combinação de SDR/Tipo SDR "
+                "selecionada no header."
+            )
+        else:
+            st.caption("Sem linhas detalhadas no período.")
     else:
-        tabela_det = df_detalhe.copy().sort_values(
+        tabela_det = df_detalhe_view.copy().sort_values(
             ["data_agendamento", "data_criacao", "data_venda", "deal_id", "activity_id"],
             na_position="last",
         ).reset_index(drop=True)
@@ -333,6 +1193,12 @@ with st.expander("Ver leads/agendamentos detalhados"):
             .astype(str)
             .str.strip()
             .replace("", "Sem classificação")
+        )
+        tabela_det["classificacao_crm_filtro"] = (
+            _series_or_default("classificacao_crm", "")
+            .fillna("")
+            .astype(str)
+            .str.strip()
         )
         tabela_det["sdr_filtro"] = (
             _series_or_default("sdr", "")
@@ -506,13 +1372,15 @@ with st.expander("Ver leads/agendamentos detalhados"):
                 base_mask
                 & mask_atividade
                 & mask_data_agendamento
-                & (tabela_det["classificacao_filtro"] == "Atua +12")
+                & ((tabela_det["classificacao_crm_filtro"] == "Atua +12")
+                   | (tabela_det["classificacao_filtro"]    == "Atua +12"))
             ),
             "Agendamentos -12": (
                 base_mask
                 & mask_atividade
                 & mask_data_agendamento
-                & (tabela_det["classificacao_filtro"] == "Atua -12")
+                & ((tabela_det["classificacao_crm_filtro"] == "Atua -12")
+                   | (tabela_det["classificacao_filtro"]    == "Atua -12"))
             ),
             "Comparecimentos": (
                 base_mask
@@ -556,10 +1424,12 @@ with st.expander("Ver leads/agendamentos detalhados"):
             & tabela_det["data_agendamento"].notna()
         )
         mask_mais_12 = mask_agendamentos & (
-            tabela_det["classificacao_filtro"] == "Atua +12"
+            (tabela_det["classificacao_crm_filtro"] == "Atua +12")
+            | (tabela_det["classificacao_filtro"]    == "Atua +12")
         )
         mask_menos_12 = mask_agendamentos & (
-            tabela_det["classificacao_filtro"] == "Atua -12"
+            (tabela_det["classificacao_crm_filtro"] == "Atua -12")
+            | (tabela_det["classificacao_filtro"]    == "Atua -12")
         )
         mask_comparecimentos = mask_agendamentos & (
             tabela_det["status_filtro"].isin(["Concluída", "Concluído"])
@@ -600,7 +1470,8 @@ with st.expander("Ver leads/agendamentos detalhados"):
             ("data_venda", "Data da venda"),
             ("nome_cliente_view", "Nome do cliente/lead"),
             ("email_lead", "E-mail do lead"),
-            ("classificacao_filtro", "Classificação"),
+            ("classificacao_filtro", "Classif. (lead)"),
+            ("classificacao_crm_filtro", "Classif. (CRM)"),
             ("status_filtro", "Status reunião"),
             ("origem_fonte", "Origem/fonte"),
             ("sdr_filtro", "SDR"),
@@ -654,16 +1525,17 @@ with st.expander("Ver leads/agendamentos detalhados"):
         )
 
 st.caption(
-    "**Regra legada fiel nesta etapa.** Base principal em `zoho_deals`, "
-    "com `LEFT JOIN ext_reconecta.leads ON d.id::text = l.zoho_id::text`. "
-    "Activities ligadas ao deal via `what_id` normalizado e filtradas em "
-    "`activity_type IN ('Consulta','Indicação')` com "
-    "`status_reuniao IS NOT NULL`. **Agendamentos criados** usam "
-    "`created_time::date`; **Agendamentos** usam `start_datetime::date`; "
-    "**Agendamentos +12** contam `classificado = 'Atua +12'`; "
-    "**Comparecimentos** usam `status_reuniao IN ('Concluída','Concluído')`. "
-    "**Vendas** usam `zoho_deals.data_hora_compra::date` com "
-    "`stage = 'Ganho'` e `tipo_venda = 'Novo cliente'`. Nesta etapa, os "
-    "filtros `SDR` / `Tipo SDR` seguem aplicando ao ranking `Top SDRs`; os "
-    "cards do topo usam a série setorial do legado."
+    "**Regras canônicas (consistência entre cards, ranking e detalhe).** "
+    "Base principal em `zoho_deals`, com `LEFT JOIN ext_reconecta.leads`. "
+    "Activities ligadas via `what_id` normalizado, filtradas em "
+    "`activity_type IN ('Consulta','Indicação')` com `status_reuniao IS NOT NULL`. "
+    "**Contagens de activity** usam `COUNT(DISTINCT activity_id)` (neutraliza "
+    "fan-out do JOIN com leads). **Agendamentos +12 / -12** usam regra "
+    "combinada: `zoho_deals.lead_classification = 'Atua +12'` OR "
+    "`ext_reconecta.leads.classificado = 'Atua +12'` (CRM é fonte preferencial; "
+    "ext entra como fallback). **Vendas** = `COUNT(DISTINCT deal_id)` com "
+    "`stage = 'Ganho'` e `tipo_venda = 'Novo cliente'`. **Leads totais** = "
+    "soma diária de e-mails únicos no período (`ext_reconecta.leads`). "
+    "Os filtros `SDR` / `Tipo SDR` aplicam ao ranking Top SDRs e à tabela "
+    "de detalhamento; os cards do topo refletem o total do período."
 )
