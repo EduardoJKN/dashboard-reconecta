@@ -91,12 +91,31 @@ tab_matrix, tab_sdr, tab_closer = st.tabs(
 with tab_matrix:
     section_title("Matriz de compatibilidade",
                   "escolha a métrica exibida na célula")
-    metrica = st.selectbox(
+
+    # Label amigável → coluna interna do df. Mantém as 4 métricas
+    # originais e acrescenta repasses + classificações.
+    METRICA_OPCOES: dict[str, str] = {
+        "Ganhos":             "ganhos",
+        "Montante":           "montante_total",
+        "Receita":            "receita_total",
+        "Ticket médio":       "ticket_medio",
+        "Repasses":           "repasses",
+        "Repasses +12":       "repasses_mais_12",
+        "Repasses -12":       "repasses_menos_12",
+        "Repasses Não atua":  "repasses_nao_atua",
+        "Ganhos +12":         "ganhos_mais_12",
+        "Ganhos -12":         "ganhos_menos_12",
+        "Ganhos Não atua":    "ganhos_nao_atua",
+    }
+    metrica_label = st.selectbox(
         "Métrica",
-        ["ganhos", "montante_total", "receita_total", "ticket_medio"],
+        list(METRICA_OPCOES.keys()),
         index=0,
         label_visibility="collapsed",
+        key="prevendas_sdr_closer_metrica",
     )
+    metrica = METRICA_OPCOES[metrica_label]
+
     matriz = sdr_closer_matriz(df, metrica=metrica)
     if matriz.empty:
         st.info("Sem dados para montar a matriz.")
@@ -155,10 +174,15 @@ with tab_closer:
             )
 
 st.caption(
-    "**Mesmas fontes da página SDR × Closer do Time de Vendas.** SDR vem "
-    "de `zoho_deals.sdr_ss` (NULL → 'Sem SDR'). Closer vem de "
-    "`zoho_deals.executiva_vendas` (NULL → 'Sem Closer'). Filtros: "
-    "`stage IN ('Ganho','Fechado Ganho')` · `tipo_venda='Novo cliente'` · "
-    "janela em `data_hora_compra::date`. Validado mai/2026: 12 ganhos / "
-    "R$ 249.000 montante / R$ 147.200 receita."
+    "**Universos independentes — padrão Looker.** "
+    "**Ganhos**: `stage IN ('Ganho','Fechado Ganho') · tipo_venda='Novo "
+    "cliente' · data_hora_compra::date no período`. "
+    "**Repasses**: `created_at::date no período · sdr_ss IS NOT NULL · "
+    "executiva_vendas IS NOT NULL` (`hora_saida_prevendas` está zerada em "
+    "100% dos deals atuais — `created_at` é o proxy autoritativo). "
+    "Um deal pode ser repassado num mês e ganho em outro. "
+    "**Classificação +12/-12/Não atua** = regra combinada das 4 fontes "
+    "(`lead_classification` · `qualificacao` · `classificado_cal` · "
+    "`ext.classificado`), prioridade exclusiva `+12 > -12 > Não atua`. "
+    "**Dedup**: `COUNT(DISTINCT deal_id)` em todas as contagens."
 )

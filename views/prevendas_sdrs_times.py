@@ -14,12 +14,15 @@ from src.prevendas_transforms import (
     prevendas_ranking_sdr,
 )
 from src.repositories import (
+    get_prevendas_leads_detalhe_diario,
     get_prevendas_overview_diario,
     get_prevendas_por_sdr,
+    get_prevendas_sdrs_oficiais,
 )
-from src.ui.charts import bar_ranked, bar_simple
+from src.ui.charts import bar_simple
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
+from src.ui.prevendas_components import render_top_sdr_interativo
 from src.ui.theme import brl, int_br, pct
 
 ctx = start_page(
@@ -29,8 +32,10 @@ ctx = start_page(
 )
 
 try:
-    df_sdr    = get_prevendas_por_sdr(ctx.data_ini, ctx.data_fim)
-    df_diario = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
+    df_sdr           = get_prevendas_por_sdr(ctx.data_ini, ctx.data_fim)
+    df_diario        = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
+    df_detalhe       = get_prevendas_leads_detalhe_diario(ctx.data_ini, ctx.data_fim)
+    df_sdrs_oficiais = get_prevendas_sdrs_oficiais()
 except Exception as e:
     st.error(f"Falha ao consultar Pré-vendas: {e}")
     st.stop()
@@ -82,18 +87,36 @@ tab_rank, tab_tipo, tab_temp = st.tabs(
 )
 
 with tab_rank:
-    section_title("Ranking por SDR", "ordenado por agendamentos · top 15")
-    ranking = prevendas_ranking_sdr(df_sdr_filt)
-    if ranking.empty:
-        st.info("Sem dados pra os filtros aplicados.")
-    else:
-        st.plotly_chart(
-            bar_ranked(ranking, "sdr", "agendamentos", top_n=15, height=340),
-            use_container_width=True,
-        )
-        with st.expander("Tabela completa (consolidado por SDR)"):
+    # Modelo unificado de Top SDR — mesmo helper da Visão Geral
+    # Pré-vendas e Comparecimentos & Oportunidades. Gráfico clicável
+    # à esquerda, painel retrátil de detalhe à direita.
+    render_top_sdr_interativo(
+        df_sdr_filt=df_sdr_filt,
+        df_sdrs_oficiais=df_sdrs_oficiais,
+        df_detalhe=df_detalhe,
+        metric_options={
+            "Agendamentos":         "agendamentos",
+            "Agendamentos +12":     "agendamentos_mais_12",
+            "Agendamentos -12":     "agendamentos_menos_12",
+            "Comparecimentos":      "comparecimentos",
+            "Vendas":               "vendas",
+            "Cancelados":           "cancelados",
+            "Vencidos":             "vencidos",
+        },
+        default_metric_label="Agendamentos",
+        data_ini=ctx.data_ini,
+        data_fim=ctx.data_fim,
+        key_prefix="prevendas_sdrs_times",
+        section_title_text="Ranking por SDR",
+    )
+
+    # Tabela auxiliar (consolidado bruto) — mantida para auditoria,
+    # agora como expander secundário.
+    ranking_bruto = prevendas_ranking_sdr(df_sdr_filt)
+    if not ranking_bruto.empty:
+        with st.expander("Tabela completa (consolidado por SDR — bruto)"):
             st.dataframe(
-                ranking, use_container_width=True, hide_index=True,
+                ranking_bruto, use_container_width=True, hide_index=True,
                 column_config={
                     "sdr": "SDR",
                     "tipo_sdr": "Tipo",
@@ -101,8 +124,7 @@ with tab_rank:
                         "Fonte SDR",
                         help="Caminho do COALESCE que creditou o SDR: "
                              "`activity.prevendas` (preferida), `deal.sdr_ss` "
-                             "(fallback) ou ambas quando o mesmo SDR teve "
-                             "atividades vindo de fontes diferentes."),
+                             "(fallback) ou ambas."),
                     "agendamentos": st.column_config.NumberColumn(
                         "Agend.", format="%d"),
                     "comparecimentos": st.column_config.NumberColumn(

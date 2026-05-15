@@ -9,16 +9,18 @@ from src.prevendas_transforms import (
     prevendas_anotar_sdr,
     prevendas_classif_kpis,
     prevendas_overview_kpis,
-    prevendas_ranking_sdr,
 )
 from src.repositories import (
     get_prevendas_comparecimentos_classif,
+    get_prevendas_leads_detalhe_diario,
     get_prevendas_overview_diario,
     get_prevendas_por_sdr,
+    get_prevendas_sdrs_oficiais,
 )
-from src.ui.charts import bar_ranked, funnel
+from src.ui.charts import funnel
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
+from src.ui.prevendas_components import render_top_sdr_interativo
 from src.ui.theme import int_br, pct
 
 ctx = start_page(
@@ -28,9 +30,11 @@ ctx = start_page(
 )
 
 try:
-    df_classif = get_prevendas_comparecimentos_classif(ctx.data_ini, ctx.data_fim)
-    df_diario  = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
-    df_sdr     = get_prevendas_por_sdr(ctx.data_ini, ctx.data_fim)
+    df_classif       = get_prevendas_comparecimentos_classif(ctx.data_ini, ctx.data_fim)
+    df_diario        = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
+    df_sdr           = get_prevendas_por_sdr(ctx.data_ini, ctx.data_fim)
+    df_detalhe       = get_prevendas_leads_detalhe_diario(ctx.data_ini, ctx.data_fim)
+    df_sdrs_oficiais = get_prevendas_sdrs_oficiais()
 except Exception as e:
     st.error(f"Falha ao consultar Pré-vendas: {e}")
     st.stop()
@@ -130,19 +134,29 @@ with st.expander("Tabela detalhada — SDR × bucket de classificação"):
         )
 
 # ---------------------------------------------------------------------------
-# Ranking por SDR — agendamentos · comparec · taxa
+# Ranking por SDR — modelo unificado (helper compartilhado com Visão Geral
+# Pré-vendas e SDRs & Times). Gráfico clicável + painel retrátil de
+# detalhe. Default = Comparecimentos (foco da página).
 # ---------------------------------------------------------------------------
-section_title("Ranking por SDR",
-              "agendamentos · comparecimentos · % comparecimento")
-
-ranking = prevendas_ranking_sdr(df_sdr_filt)
-if ranking.empty:
-    st.info("Sem dados pra os filtros aplicados.")
-else:
-    st.plotly_chart(
-        bar_ranked(ranking, "sdr", "comparecimentos", top_n=12, height=320),
-        use_container_width=True,
-    )
+render_top_sdr_interativo(
+    df_sdr_filt=df_sdr_filt,
+    df_sdrs_oficiais=df_sdrs_oficiais,
+    df_detalhe=df_detalhe,
+    metric_options={
+        "Comparecimentos":      "comparecimentos",
+        "Agendamentos":         "agendamentos",
+        "Agendamentos +12":     "agendamentos_mais_12",
+        "Agendamentos -12":     "agendamentos_menos_12",
+        "Vendas":               "vendas",
+        "Cancelados":           "cancelados",
+    },
+    default_metric_label="Comparecimentos",
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    key_prefix="prevendas_comparecimentos",
+    section_title_text="Ranking por SDR",
+    section_subtitle="agendamentos · comparecimentos · % comparecimento",
+)
 
 st.caption(
     "**Bucket** = última classificação do e-mail no período "

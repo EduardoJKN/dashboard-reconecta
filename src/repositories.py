@@ -177,6 +177,43 @@ def get_prevendas_oportunidades_sdr(data_ini: date,
     )
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo cohort de agendamentos…")
+def get_prevendas_cohort_agendamentos(data_ini: date,
+                                      data_fim: date) -> pd.DataFrame:
+    """Cohort de agendamentos por dia de geração do deal.
+
+    Grão: 1 row por deal criado no período (`data_geracao`, `sdr`,
+    `data_agend`, `lag_dias`). O Python pivota e acumula D0..D7.
+    Detalhes em `src/queries/prevendas_cohort_agendamentos.sql`.
+    """
+    df = run_sql_file(
+        "prevendas_cohort_agendamentos.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty:
+        df["data_geracao"] = pd.to_datetime(df["data_geracao"])
+        if "data_agend" in df.columns:
+            df["data_agend"] = pd.to_datetime(df["data_agend"])
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo cohort de agendamentos (leads)…")
+def get_prevendas_cohort_leads(data_ini: date,
+                               data_fim: date) -> pd.DataFrame:
+    """Cohort de agendamentos por dia de geração do LEAD (daily-distinct
+    por email). Grão: 1 row por (data_lead, email_norm) com `sdr` (via
+    deal pareado) e `lag_dias` até o primeiro agendamento.
+    Detalhes em `src/queries/prevendas_cohort_leads.sql`.
+    """
+    df = run_sql_file(
+        "prevendas_cohort_leads.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty:
+        df["data_lead"] = pd.to_datetime(df["data_lead"])
+        if "data_agend" in df.columns:
+            df["data_agend"] = pd.to_datetime(df["data_agend"])
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo matriz Pré-vendas SDR × Closer…")
 def get_prevendas_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
     return run_sql_file(

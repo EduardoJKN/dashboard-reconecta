@@ -23,6 +23,8 @@ from src.prevendas_transforms import (
     prevendas_sdrs_brutos_para_oficial,
 )
 from src.repositories import (
+    get_prevendas_cohort_agendamentos,
+    get_prevendas_cohort_leads,
     get_prevendas_leads_detalhe_diario,
     get_prevendas_oportunidades_sdr,
     get_prevendas_overview_diario,
@@ -1523,6 +1525,242 @@ with st.expander("Ver leads/agendamentos detalhados"):
             hide_index=True,
             column_config=column_config_det,
         )
+
+# ===========================================================================
+# Cohort de agendamentos por dia de geração
+# ===========================================================================
+# Toggle Leads (default) vs Oportunidades. Linha por data de geração ·
+# Colunas D0..D7 acumuladas (% do cohort que teve primeiro agendamento
+# até D+n). Filtros globais SDR/Tipo SDR aplicados em Python.
+with st.expander(
+    "Cohort de agendamentos por dia de geração", expanded=True
+):
+    # Toggle de base — Leads = visão principal.
+    base_opcoes = ["Leads", "Oportunidades"]
+    if hasattr(st, "segmented_control"):
+        cohort_base = st.segmented_control(
+            "Base do cohort",
+            options=base_opcoes,
+            default="Leads",
+            key="prevendas_overview_cohort_base",
+        )
+    else:
+        cohort_base = st.radio(
+            "Base do cohort",
+            options=base_opcoes,
+            index=0,
+            horizontal=True,
+            key="prevendas_overview_cohort_base",
+        )
+    if cohort_base not in base_opcoes:
+        cohort_base = "Leads"
+
+    # Carrega a fonte conforme escolha. Cada loader devolve grão "1 row
+    # por unidade (lead-daily-distinct ou deal) com (data_geracao, sdr,
+    # lag_dias)". Padronizamos as colunas para a lógica de pivot ser igual.
+    try:
+        if cohort_base == "Leads":
+            df_cohort_raw = get_prevendas_cohort_leads(
+                ctx.data_ini, ctx.data_fim
+            )
+            data_col_origem = "data_lead"
+            denom_label = "Leads"
+        else:
+            df_cohort_raw = get_prevendas_cohort_agendamentos(
+                ctx.data_ini, ctx.data_fim
+            )
+            data_col_origem = "data_geracao"
+            denom_label = "Oportunidades"
+    except Exception as e:
+        st.error(f"Falha ao consultar cohort: {e}")
+        df_cohort_raw = pd.DataFrame()
+        data_col_origem = "data_lead"
+        denom_label = "Leads"
+
+    if df_cohort_raw.empty:
+        st.info(f"Sem {denom_label.lower()} no período selecionado.")
+    else:
+        # Filtros globais SDR/Tipo SDR — mesma regra das demais seções.
+        df_coh = df_cohort_raw.copy()
+        df_coh["sdr"] = df_coh["sdr"].astype(str)
+        df_coh["tipo_sdr"] = df_coh["sdr"].apply(classify_sdr)
+
+        if sdr_sel_global:
+            df_coh = df_coh[df_coh["sdr"].isin(sdr_sel_global)]
+        if tipo_sdr_sel_global:
+            df_coh = df_coh[df_coh["tipo_sdr"].isin(tipo_sdr_sel_global)]
+
+        if df_coh.empty:
+            st.info(
+                f"Sem {denom_label.lower()} no recorte dos filtros "
+                "SDR / Tipo SDR."
+            )
+        else:
+            from datetime import date as _date_cls
+            hoje = _date_cls.today()
+            COHORT_DIAS = list(range(0, 8))  # D0..D7
+
+            # Padroniza coluna de data — ambas as fontes ficam como `data_ref`.
+            df_coh["data_ref"] = pd.to_datetime(
+                df_coh[data_col_origem]
+            ).dt.date
+            # Negativo → 0 (clip em D0). NaN (sem agendamento) → None.
+            df_coh["lag_dias_eff"] = df_coh["lag_dias"].apply(
+                lambda v: int(max(v, 0)) if pd.notna(v) else None
+            )
+
+            # Por (data_ref): conta unidades e quantas agendaram até D_n.
+            grupos = df_coh.groupby("data_ref", dropna=False)
+            linhas = []
+            for dt, g in grupos:
+                denom = len(g)
+                lags = g["lag_dias_eff"].dropna()
+                row = {"cohort_dt": dt, denom_label: denom}
+                idade_dias = (hoje - dt).days if isinstance(
+                    dt, _date_cls) else None
+                for n in COHORT_DIAS:
+                    if idade_dias is not None and idade_dias < n:
+                        row[f"D{n}"] = None  # ainda não maturou
+                    elif denom == 0:
+                        row[f"D{n}"] = None
+                    else:
+                        row[f"D{n}"] = int((lags <= n).sum()) / denom * 100.0
+                linhas.append(row)
+
+            cohort_df = pd.DataFrame(linhas).sort_values(
+                "cohort_dt", ascending=False
+            ).reset_index(drop=True)
+
+            # Overall — denominador ajustado por maturidade.
+            total_uni = len(df_coh)
+            overall = {"cohort_dt": None,
+                       denom_label: total_uni,
+                       "Cohort": "Overall"}
+            for n in COHORT_DIAS:
+                maturos_mask = df_coh["data_ref"].apply(
+                    lambda d: (hoje - d).days >= n
+                              if isinstance(d, _date_cls) else False
+                )
+                denom = int(maturos_mask.sum())
+                if denom == 0:
+                    overall[f"D{n}"] = None
+                else:
+                    num = int(
+                        (df_coh.loc[maturos_mask, "lag_dias_eff"]
+                                .fillna(99999) <= n).sum()
+                    )
+                    overall[f"D{n}"] = num / denom * 100.0
+
+            cohort_df["Cohort"] = cohort_df["cohort_dt"].apply(
+                lambda d: d.strftime("%d/%m") if isinstance(d, _date_cls) else "—"
+            )
+
+            cols_ordem = ["Cohort", denom_label] + [
+                f"D{n}" for n in COHORT_DIAS]
+            cohort_view = pd.concat(
+                [pd.DataFrame([overall]), cohort_df],
+                ignore_index=True,
+            )[cols_ordem]
+
+            # ----- Formatação de percentual (pt-BR, 2 casas) -----
+            # NaN / não maturado → "" (célula vazia). 0% → "0,00%" (não
+            # confunde com vazio, recebe cor clara).
+            def _fmt_pct(v):
+                if v is None or pd.isna(v):
+                    return ""
+                return f"{v:.2f}%".replace(".", ",")
+
+            # ----- Paleta azul progressiva (claro → escuro) -----
+            # NaN → "" (fundo padrão escuro do dataframe).
+            # 0% exato → azul quase branco (#EFF6FF).
+            # Texto: quase-preto nas faixas claras, branco bold a partir
+            # do azul médio (50%).
+            def _bg_color(v):
+                if v is None or pd.isna(v):
+                    return ""
+                if v == 0:
+                    return "background-color: #EFF6FF; color: #0F172A"
+                if v <= 10:
+                    return "background-color: #DBEAFE; color: #0F172A"
+                if v <= 20:
+                    return "background-color: #BFDBFE; color: #0F172A"
+                if v <= 35:
+                    return "background-color: #93C5FD; color: #0F172A"
+                if v <= 50:
+                    return "background-color: #60A5FA; color: #0F172A"
+                if v <= 65:
+                    return ("background-color: #3B82F6; color: #ffffff; "
+                            "font-weight: 600")
+                if v <= 80:
+                    return ("background-color: #2563EB; color: #ffffff; "
+                            "font-weight: 600")
+                return ("background-color: #1D4ED8; color: #ffffff; "
+                        "font-weight: 700")
+
+            cols_pct = [f"D{n}" for n in COHORT_DIAS]
+
+            # ----- Estratégia robusta: pré-formatar células em string -----
+            # Algumas versões/contextos do Streamlit ignoram Styler.format
+            # quando o subset cobre colunas de dtype 'object' com mistura
+            # float/None. Para garantir que a célula renderize SEMPRE como
+            # texto "6,83%" (e nunca como "6.831120"), formato as colunas
+            # D_n diretamente para string no DataFrame de exibição. Mantém
+            # `cohort_view` com valores numéricos para alimentar a paleta.
+            cohort_display = cohort_view.copy()
+            for c in cols_pct:
+                cohort_display[c] = cohort_view[c].apply(_fmt_pct)
+
+            # Cor por célula puxando o valor NUMÉRICO de cohort_view via
+            # DataFrame paralelo. `Styler.apply(axis=0)` recebe a Series
+            # da coluna e devolve list[str] de CSS, uma por linha.
+            def _color_col(s_display):
+                nums = cohort_view[s_display.name]
+                return [_bg_color(v) for v in nums]
+
+            styler = (
+                cohort_display.style
+                    .format({denom_label: "{:,.0f}".format})
+                    .apply(_color_col, subset=cols_pct, axis=0)
+            )
+
+            st.caption(
+                f"**Como ler.** Linha = data de geração do {denom_label[:-1].lower() if denom_label.endswith('s') else denom_label.lower()}. "
+                "**D_n** = % daquele cohort que teve **primeiro agendamento "
+                "até D+n** (acumulado). Linha **Overall** consolida todos os "
+                "cohorts do período, com denominador ajustado por maturidade "
+                "(cohorts ainda não maturados não entram em D_n). Células "
+                "em branco = cohort ainda não maturou para esse D_n."
+            )
+
+            st.dataframe(
+                styler,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            if cohort_base == "Leads":
+                rodape = (
+                    f"**{int_br(total_uni)} lead(s)** no recorte. "
+                    "Universo: `ext_reconecta.leads` daily-distinct por "
+                    "`(dia, email)` com filtros canônicos de e-mail teste/"
+                    "interno. Lead pareado ao deal via cascata `zoho_id > "
+                    "session_id > email`. Agendamento = `MIN(start_datetime)` "
+                    "de activity Consulta/Indicação com `status_reuniao IS "
+                    "NOT NULL`. Leads sem deal pareado ficam com `sdr = "
+                    "'Sem SDR'` — saem do recorte quando o filtro de SDR "
+                    "específico está ativo."
+                )
+            else:
+                rodape = (
+                    f"**{int_br(total_uni)} oportunidade(s)** no recorte. "
+                    "Universo: `zoho_deals` criados no período. "
+                    "Agendamento = 1ª activity Consulta/Indicação com "
+                    "`status_reuniao IS NOT NULL`, deduplicada por "
+                    "`activity_id`, ordenada por `start_datetime ASC`. "
+                    "`lag_dias` negativos (agendamento datado antes do "
+                    "deal) são tratados como D0."
+                )
+            st.caption(rodape)
 
 st.caption(
     "**Regras canônicas (consistência entre cards, ranking e detalhe).** "
