@@ -289,6 +289,28 @@ def get_mkt_criativo_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
     )
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo funil por campanha…")
+def get_mkt_campanha_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Funil completo POR CAMPANHA (grão `campaign_name` consolidado).
+
+    Espelho de `get_mkt_criativo_funil` em outro grão: 1 linha por
+    `campaign_name_norm` no período, com mídia (invest/imp/cliques/
+    alcance/CTR/CPC) + leads (totais/+12/-12/qualif) + funil
+    (agendamentos/comparecimentos/vendas_novas) e derivadas (CPL/CPL+12/
+    CAC/taxas).
+
+    Match: `lower(btrim(campaign_name)) = lower(btrim(utm_campaign))`.
+    `campaign_id` não está populado nos leads — utm_campaign é o token
+    confiável. Granularidade `campaign_name` consolida múltiplos
+    `campaign_id` do mesmo nome (cópias, CBO). Lead → deal e deal →
+    activity seguem a regra oficial (mesma da Visão Geral / Growth /
+    funil de criativos).
+    """
+    return run_sql_file(
+        "mkt_campanha_funil.sql", _params(data_ini, data_fim)
+    )
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Growth (mart diária)…")
 def get_mkt_growth_daily(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Resultado atribuído POR DATA — agrega `odam.mart_ad_funnel_daily`

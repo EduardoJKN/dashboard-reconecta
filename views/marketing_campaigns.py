@@ -13,6 +13,7 @@ import streamlit as st
 
 from src.marketing_queries import (
     get_mkt_campanha_cobertura,
+    get_mkt_campanha_funil,
     get_mkt_campanhas,
     get_mkt_campanhas_leads_canal_diario,
     get_mkt_campanhas_leads_por_utm,
@@ -23,6 +24,8 @@ from src.marketing_safe import safe_run
 from src.marketing_transforms import (
     CANAIS_PAGOS,
     agregar_campanhas_por_utm,
+    campanha_funil_etapas,
+    campanha_funil_kpis,
     campanha_utm_kpis,
     campanhas_diario_v2,
     campanhas_kpis,
@@ -33,11 +36,13 @@ from src.marketing_transforms import (
     cobertura_atribuicao_kpis,
     compara_campanhas_utm,
     filtro_canais_padrao,
+    lista_campanhas_funil,
     lista_campanhas_por_utm,
 )
 from src.transforms import _safe_div
 from src.ui.charts import donut, last_point_text
 from src.ui.components import metric_card_v2, section_title
+from src.ui.marketing_components import render_funil_selecionado
 from src.ui.page import start_page
 from src.ui.theme import PALETTE, brl, int_br, pct
 
@@ -178,6 +183,53 @@ with s3:
         int_br(k["impressoes"]),
         hint=f"CTR {pct(k['ctr'], casas=2)} · CPC {brl(k['cpc'], casas=2)}",
     )
+
+# ---------------------------------------------------------------------------
+# Funil da campanha selecionada — usa o mesmo helper compartilhado com a
+# página Criativos, só muda o grão (campaign_name vs ad_name) e a chave de
+# match (utm_campaign vs utm_content). Mesmas regras: e-mail-único por
+# entidade; lead → deal priority `zoho_id > session_id > email`;
+# deal → activity via what_id; venda nova = stage Ganho/Fechado Ganho +
+# tipo_venda Novo cliente.
+# ---------------------------------------------------------------------------
+df_camp_funil = safe_run(
+    lambda: get_mkt_campanha_funil(ctx.data_ini, ctx.data_fim),
+    view_label="mkt_campanha_funil",
+)
+
+render_funil_selecionado(
+    df_funil=df_camp_funil,
+    key_col="campaign_name_norm",
+    entity_label="Campanha",
+    section_title_text="Funil da campanha selecionada",
+    sel_state_key="camp_funil_selecionado",
+    lista_fn=lista_campanhas_funil,
+    kpis_fn=campanha_funil_kpis,
+    etapas_fn=campanha_funil_etapas,
+    empty_msg="Sem campanhas com investimento ou leads no período.",
+    caption=(
+        "Funil por campanha usa `campaign_name = utm_campaign`. Campanhas "
+        "sem match podem aparecer sem leads atribuídos."
+    ),
+    expander_md=(
+        "- **Match:** `lower(btrim(campaign_name)) = "
+        "  lower(btrim(utm_campaign))`.\n"
+        "- **`campaign_id`** não está populado nos leads — esse é o melhor "
+        "  match disponível hoje (mesma situação do `ad_id` no funil de "
+        "  criativos).\n"
+        "- **Granularidade:** consolidado por `campaign_name`. Múltiplos "
+        "  `campaign_id` do mesmo nome (cópias/CBO) somam mídia mas não "
+        "  inflam leads (utm_campaign é o nome).\n"
+        "- **Lead → deal:** priority match `zoho_id > session_id > email` "
+        "  (mesma regra Visão Geral / Growth / Funil criativos).\n"
+        "- **Agendamentos / Comparecimentos:** leads únicos com activity "
+        "  `Consulta` ou `Indicação` em `zoho_activities` ligada via "
+        "  `what_id = deal_id`. Comparecimento exige "
+        "  `status_reuniao = 'Concluída'`.\n"
+        "- **Vendas novas:** deals com `stage IN ('Ganho','Fechado Ganho')` "
+        "  e `tipo_venda = 'Novo cliente'`."
+    ),
+)
 
 # ---------------------------------------------------------------------------
 # Tendência diária — invest (barra) + leads + leads qualif (linhas)

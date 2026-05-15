@@ -2549,6 +2549,57 @@ def criativo_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
 
 
 # ---------------------------------------------------------------------------
+# Campanha — espelho de criativo, mas com grão `campaign_name`. As funções
+# delegam para as de criativo renomeando as 2 colunas-chave do DataFrame
+# (campaign_name_norm → ad_name_norm, campaign_name → ad_name). Mantém uma
+# única implementação de lógica; reduz risco de divergência futura.
+# ---------------------------------------------------------------------------
+def _campanha_df_como_criativo(df: pd.DataFrame) -> pd.DataFrame:
+    """Renomeia 2 colunas pra reusar as funções de criativo sem alterar a
+    lógica. Devolve uma cópia (não muta o df original)."""
+    if df is None or df.empty:
+        return df
+    return df.rename(columns={
+        "campaign_name_norm": "ad_name_norm",
+        "campaign_name":      "ad_name",
+    })
+
+
+def lista_campanhas_funil(df_funil: pd.DataFrame,
+                          sort_by: str = "investimento") -> pd.DataFrame:
+    """Opções para o selectbox da seção "Funil da campanha selecionada".
+    Retorna `(campaign_name_norm, campaign_name, label)`. Lógica idêntica
+    à `lista_criativos_funil` — mesmo formato de label."""
+    inner = lista_criativos_funil(
+        _campanha_df_como_criativo(df_funil), sort_by=sort_by
+    )
+    if inner is None or inner.empty:
+        return pd.DataFrame(
+            columns=["campaign_name_norm", "campaign_name", "label"]
+        )
+    return inner.rename(columns={
+        "ad_name_norm": "campaign_name_norm",
+        "ad_name":      "campaign_name",
+    })
+
+
+def campanha_funil_kpis(df_funil: pd.DataFrame,
+                        campaign_name_norm: str | None) -> dict:
+    """Projeção da row da campanha selecionada num dict. Reusa
+    `criativo_funil_kpis` — mesmo shape de chaves (investimento, leads_*,
+    agendamentos, vendas_novas, cpl, cac, taxa_*, etc.)."""
+    return criativo_funil_kpis(
+        _campanha_df_como_criativo(df_funil), campaign_name_norm
+    )
+
+
+def campanha_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
+    """7 etapas do funil de uma campanha — idêntico a
+    `criativo_funil_etapas` (depende só do dict de kpis, não do grão)."""
+    return criativo_funil_etapas(k)
+
+
+# ---------------------------------------------------------------------------
 # Social (Instagram orgânico)
 # ---------------------------------------------------------------------------
 
