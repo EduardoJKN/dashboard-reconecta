@@ -1724,6 +1724,15 @@ with st.expander(
             )
 
             st.caption(
+                "**Bases.** *Leads* = **todos os leads válidos** que entraram "
+                "no funil (daily-distinct por email, sem filtro de "
+                "classificação). *Oportunidades* = leads/deals classificados "
+                "como **Atua +12 ou Atua -12** (regra combinada das 4 fontes: "
+                "`lead_classification` / `qualificacao` / `classificado_cal` / "
+                "`ext.classificado`). **Não atua** e **sem classificação** "
+                "ficam fora da base Oportunidades."
+            )
+            st.caption(
                 f"**Como ler.** Linha = data de geração do {denom_label[:-1].lower() if denom_label.endswith('s') else denom_label.lower()}. "
                 "**D_n** = % daquele cohort que teve **primeiro agendamento "
                 "até D+n** (acumulado). Linha **Overall** consolida todos os "
@@ -1753,7 +1762,10 @@ with st.expander(
             else:
                 rodape = (
                     f"**{int_br(total_uni)} oportunidade(s)** no recorte. "
-                    "Universo: `zoho_deals` criados no período. "
+                    "Universo: `zoho_deals` criados no período **classificados "
+                    "como Atua +12 ou Atua -12** pela regra combinada das 4 "
+                    "fontes (CRM + ext.leads). Deals em **Não atua** ou **sem "
+                    "classificação** ficam de fora. "
                     "Agendamento = 1ª activity Consulta/Indicação com "
                     "`status_reuniao IS NOT NULL`, deduplicada por "
                     "`activity_id`, ordenada por `start_datetime ASC`. "
