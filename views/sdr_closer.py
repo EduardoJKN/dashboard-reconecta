@@ -72,12 +72,34 @@ tab_matrix, tab_sdr, tab_closer = st.tabs(
 
 with tab_matrix:
     section_title("Matriz de compatibilidade", "escolha a métrica exibida na célula")
-    metrica = st.selectbox(
+
+    # Label amigável → coluna interna do df. Mantém as 4 métricas
+    # originais e acrescenta repasses + classificações (mesmas opções da
+    # página equivalente de Pré-vendas — colunas vêm do SQL
+    # `compatibilidade_sdr_closer.sql`, classificação combinada das 4
+    # fontes com prioridade exclusiva +12 > -12 > Não atua).
+    METRICA_OPCOES: dict[str, str] = {
+        "Ganhos":             "ganhos",
+        "Montante":           "montante_total",
+        "Receita":            "receita_total",
+        "Ticket médio":       "ticket_medio",
+        "Repasses":           "repasses",
+        "Repasses +12":       "repasses_mais_12",
+        "Repasses -12":       "repasses_menos_12",
+        "Repasses Não atua":  "repasses_nao_atua",
+        "Ganhos +12":         "ganhos_mais_12",
+        "Ganhos -12":         "ganhos_menos_12",
+        "Ganhos Não atua":    "ganhos_nao_atua",
+    }
+    metrica_label = st.selectbox(
         "Métrica",
-        ["ganhos", "montante_total", "receita_total", "ticket_medio"],
+        list(METRICA_OPCOES.keys()),
         index=0,
         label_visibility="collapsed",
+        key="vendas_sdr_closer_metrica",
     )
+    metrica = METRICA_OPCOES[metrica_label]
+
     matriz = sdr_closer_matriz(df, metrica=metrica)
     if matriz.empty:
         st.info("Sem dados para montar a matriz.")
@@ -119,3 +141,16 @@ with tab_closer:
                 "taxa_conversao": st.column_config.NumberColumn("% Conversão", format="%.1f%%"),
             },
         )
+
+st.caption(
+    "**Universos independentes — padrão Looker.** "
+    "**Ganhos**: `stage IN ('Ganho','Fechado Ganho') · tipo_venda='Novo "
+    "cliente' · data_hora_compra::date no período`. "
+    "**Repasses**: `created_at::date no período · sdr_ss IS NOT NULL · "
+    "executiva_vendas IS NOT NULL`. Um deal pode ser repassado num mês e "
+    "ganho em outro. "
+    "**Classificação +12/-12/Não atua** = regra combinada das 4 fontes "
+    "(`lead_classification` · `qualificacao` · `classificado_cal` · "
+    "`ext.classificado`), prioridade exclusiva `+12 > -12 > Não atua`. "
+    "**Dedup**: `COUNT(DISTINCT deal_id)` em todas as contagens."
+)
