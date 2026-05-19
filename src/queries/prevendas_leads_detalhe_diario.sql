@@ -90,6 +90,31 @@ acts AS (
           OR a.start_datetime::date BETWEEN :data_ini AND :data_fim
       )
 ),
+closer_resolved AS (
+    -- Resolve nome do closer + time_vendas por user. CASE espelha o da
+    -- view bi.vw_dashboard_comercial_executivas_rw para manter o time
+    -- exibido aqui idêntico ao da página de Vendas. Usado tanto em
+    -- activity_rows quanto em sales_rows.
+    SELECT
+        uc.id::text                                                 AS closer_id,
+        NULLIF(TRIM(uc.first_name || ' ' || uc.last_name), '')      AS closer_name,
+        CASE
+            WHEN TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Andrezza Ayuso Serpa%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Hawinne Cristina%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Nathally Pereira dos Santos%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Thaís Cadó%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Thais Cado%'
+                THEN 'Time da Leidianne'
+            WHEN TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Leandro Alves%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Leonardo Melo Patriota%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Leonardo Patriota%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Nathan Carloto%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Camile Silveira%'
+                THEN 'Time do Marcelo'
+            ELSE 'Sem time definido'
+        END                                                         AS time_vendas
+    FROM zoho_users uc
+),
 activity_rows AS (
     SELECT
         'Atividade'::text AS tipo_registro_base,
@@ -108,10 +133,8 @@ activity_rows AS (
             NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
             'Sem SDR'
         ) AS sdr,
-        COALESCE(
-            NULLIF(TRIM(uc.first_name || ' ' || uc.last_name), ''),
-            'Sem Closer'
-        ) AS closer,
+        COALESCE(cr.closer_name, 'Sem Closer')                      AS closer,
+        COALESCE(cr.time_vendas, 'Sem time definido')               AS time_vendas,
         b.deal_id,
         a.activity_id,
         NULL::numeric AS montante,
@@ -121,8 +144,8 @@ activity_rows AS (
       ON a.act_deal_id = b.deal_id
     LEFT JOIN zoho_users u
            ON u.id::text = b.sdr_ss_id
-    LEFT JOIN zoho_users uc
-           ON uc.id::text = b.closer_id
+    LEFT JOIN closer_resolved cr
+           ON cr.closer_id = b.closer_id
 ),
 sales_base AS (
     SELECT DISTINCT ON (b.deal_id)
@@ -137,10 +160,8 @@ sales_base AS (
             NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
             'Sem SDR'
         ) AS sdr,
-        COALESCE(
-            NULLIF(TRIM(uc.first_name || ' ' || uc.last_name), ''),
-            'Sem Closer'
-        ) AS closer,
+        COALESCE(cr.closer_name, 'Sem Closer')                      AS closer,
+        COALESCE(cr.time_vendas, 'Sem time definido')               AS time_vendas,
         b.deal_id,
         b.montante,
         b.receita,
@@ -148,8 +169,8 @@ sales_base AS (
     FROM base_dados b
     LEFT JOIN zoho_users u
            ON u.id::text = b.sdr_ss_id
-    LEFT JOIN zoho_users uc
-           ON uc.id::text = b.closer_id
+    LEFT JOIN closer_resolved cr
+           ON cr.closer_id = b.closer_id
     WHERE b.stage = 'Ganho'
       AND b.tipo_venda = 'Novo cliente'
       AND b.data_venda BETWEEN :data_ini AND :data_fim
@@ -170,6 +191,7 @@ sales_rows AS (
         sb.origem_fonte,
         sb.sdr,
         sb.closer,
+        sb.time_vendas,
         sb.deal_id,
         NULL::text AS activity_id,
         sb.montante,
@@ -191,6 +213,7 @@ final_rows AS (
         origem_fonte,
         sdr,
         closer,
+        time_vendas,
         deal_id,
         activity_id,
         montante,
@@ -213,12 +236,17 @@ final_rows AS (
         origem_fonte,
         sdr,
         closer,
+        time_vendas,
         deal_id,
         activity_id,
         montante,
         receita
     FROM sales_rows
 )
+-- `time_vendas` é coluna nova adicionada para o Top Closers de Vendas
+-- (mesma regra de classificação por time da view
+-- bi.vw_dashboard_comercial_executivas_rw). Pré-vendas não consome —
+-- propaga silenciosamente, sem quebrar consumidores existentes.
 SELECT
     tipo_registro_base,
     data_agendamento,
@@ -233,6 +261,7 @@ SELECT
     origem_fonte,
     sdr,
     closer,
+    time_vendas,
     deal_id,
     activity_id,
     montante,

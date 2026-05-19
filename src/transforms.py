@@ -59,12 +59,37 @@ def meta_periodo(df_exec: pd.DataFrame) -> float:
 # vw_dashboard_comercial_executivas_rw
 # ---------------------------------------------------------------------------
 
+# Buckets de classificação (regra canônica +12 > -12 > Não atua > Sem
+# classif). 4 buckets pra contagens, 3 pra montante/receita (a view não
+# expõe `montante_sem_classificacao` / `receita_sem_classificacao` —
+# vendas sem classificação não têm financeiro quebrado).
+_CLASSIF_BUCKETS_4 = ("mais_12", "menos_12", "nao_atua", "sem_classificacao")
+_CLASSIF_BUCKETS_3 = ("mais_12", "menos_12", "nao_atua")
+
+_EXEC_CLASSIF_SUM = [
+    *(f"oportunidades_{b}"    for b in _CLASSIF_BUCKETS_4),
+    *(f"agendamentos_{b}"     for b in _CLASSIF_BUCKETS_4),
+    *(f"comparecimentos_{b}"  for b in _CLASSIF_BUCKETS_4),
+    *(f"ganhos_{b}"           for b in _CLASSIF_BUCKETS_4),
+    *(f"montante_{b}"         for b in _CLASSIF_BUCKETS_3),
+    *(f"receita_{b}"          for b in _CLASSIF_BUCKETS_3),
+]
+
+# `leads_lp_form` é DELIBERADAMENTE omitido daqui: a view agrega só por
+# data (sem executiva), então o valor se repete entre executivas do
+# mesmo dia. Somar via groupby('executiva').sum() infla N×.
 _EXEC_SUM = [
     "oportunidades", "agendamentos", "comparecimentos", "vendas",
     "montante", "receita", "perdidos", "cancelados",
     "novos", "ascensoes", "renovacoes", "indicacoes",
     "lead_in_consultoria_gratuita",
+    *_EXEC_CLASSIF_SUM,
 ]
+
+_EXEC_PCT_KEYS = (
+    "pct_agendamento", "pct_comparecimento", "pct_conversao",
+    "pct_vendas", "pct_venda_lead", "ticket_medio", "pct_recebimento",
+)
 
 
 def executivas_kpis(df: pd.DataFrame) -> dict:
@@ -80,13 +105,10 @@ def executivas_kpis(df: pd.DataFrame) -> dict:
       pct_recebimento    = receita / montante
     """
     if df.empty:
-        return {k: 0 for k in (
-            "oportunidades", "agendamentos", "comparecimentos", "vendas",
-            "montante", "receita", "perdidos", "cancelados",
-            "novos", "ascensoes", "renovacoes", "indicacoes",
-            "pct_agendamento", "pct_comparecimento", "pct_conversao",
-            "pct_vendas", "pct_venda_lead", "ticket_medio", "pct_recebimento",
-        )}
+        # Default derivado de `_EXEC_SUM` (inclui buckets) + as 7 pcts derivadas.
+        # Garante que a UI possa acessar k["oportunidades_mais_12"] etc. sem KeyError
+        # quando o filtro de período não retorna linhas.
+        return {**{k: 0 for k in _EXEC_SUM}, **{k: 0 for k in _EXEC_PCT_KEYS}}
 
     totais = {c: float(df[c].sum()) for c in _EXEC_SUM if c in df.columns}
 
@@ -116,11 +138,14 @@ def executivas_por_dia(df: pd.DataFrame) -> pd.DataFrame:
     return df.groupby("data_ref", as_index=False)[cols].sum().sort_values("data_ref")
 
 
-_RANKING_BASE_COLS = ("oportunidades", "agendamentos", "comparecimentos",
-                      "vendas", "montante", "receita",
-                      "perdidos", "cancelados",
-                      "novos", "ascensoes", "renovacoes", "indicacoes",
-                      "lead_in_consultoria_gratuita")
+_RANKING_BASE_COLS = (
+    "oportunidades", "agendamentos", "comparecimentos",
+    "vendas", "montante", "receita",
+    "perdidos", "cancelados",
+    "novos", "ascensoes", "renovacoes", "indicacoes",
+    "lead_in_consultoria_gratuita",
+    *_EXEC_CLASSIF_SUM,
+)
 _RANKING_DERIVED_COLS = ("pct_agendamento", "pct_comparecimento",
                          "pct_conversao", "pct_vendas",
                          "pct_recebimento", "ticket_medio")
@@ -182,6 +207,209 @@ def executivas_mix_venda(df: pd.DataFrame) -> pd.DataFrame:
     total_geral = totals["quantidade"].sum()
     totals["pct"] = totals["quantidade"].apply(lambda q: _safe_div(q, total_geral) * 100)
     return totals
+
+
+# ---------------------------------------------------------------------------
+# Detalhe linha-a-linha de Vendas — alimenta o Top Closers de Executivas &
+# Times e da Visão Geral. Fonte: prevendas_leads_detalhe_diario.sql (a
+# mesma query é consumida pelas duas áreas; cache é compartilhado via
+# get_vendas_leads_detalhe_diario → get_prevendas_leads_detalhe_diario).
+#
+# Pré-vendas tem helpers próprios em src/prevendas_transforms.py; os de
+# Vendas vivem aqui pra não atravessar fronteira de módulo. O normalizador
+# de Vendas reaproveita o de Pré-vendas e só acrescenta `time_vendas_filtro`.
+# ---------------------------------------------------------------------------
+
+def vendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
+    """Enriquece o detalhe diário pra consumo no Top Closers de Vendas.
+
+    Aplica a normalização canônica (mesmas colunas `*_filtro` que
+    `prevendas_normalizar_detalhe` produz: classificacao_filtro,
+    classificacao_crm_filtro, sdr_filtro, closer_filtro, status_filtro,
+    tipo_registro_base_filtro, nome_cliente_view) e acrescenta
+    `time_vendas_filtro` — disponível após a inclusão de `time_vendas` em
+    prevendas_leads_detalhe_diario.sql.
+
+    Import de `prevendas_normalizar_detalhe` é lazy/local porque
+    `prevendas_transforms` importa `_safe_div` daqui — top-level criaria
+    ciclo. Como a função é chamada em runtime (request da página, não na
+    importação), o lazy import resolve antes de qualquer uso real.
+    """
+    if df_det is None or df_det.empty:
+        return df_det
+    from .prevendas_transforms import (
+        prevendas_normalizar_detalhe as _prevendas_normalizar_detalhe,
+    )
+    out = _prevendas_normalizar_detalhe(df_det)
+    if out is None or out.empty:
+        return out
+    if "time_vendas" in out.columns:
+        out["time_vendas_filtro"] = (
+            out["time_vendas"].fillna("").astype(str).str.strip()
+            .replace("", "Sem time definido")
+        )
+    else:
+        out["time_vendas_filtro"] = "Sem time definido"
+    return out
+
+
+def vendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
+                                    metrica: str,
+                                    data_ini,
+                                    data_fim) -> pd.Series:
+    """Mask booleana sobre o detalhe normalizado pra Vendas, por métrica.
+
+    Universo do detalhe (`activity_rows` ∪ `sales_rows`) cobre:
+      - agendamentos / mais_12 / menos_12 / nao_atua / sem_classificacao
+      - comparecimentos / <buckets>
+      - vendas (sinônimo: ganhos) / <buckets>
+      - montante  / <buckets>            (universo = vendas)
+      - receita   / <buckets>            (universo = vendas)
+      - cancelados, vencidos             (status_reuniao)
+
+    Métricas SEM cobertura no detalhe → devolve all-False:
+      oportunidades, perdidos, lead_in_consultoria_gratuita,
+      novos/ascensoes/renovacoes/indicacoes, leads_lp_form.
+
+    ⚠ Classificação no detalhe usa 2 fontes (`lead_classification` CRM +
+    `classificado` ext.leads), enquanto a view usa 4 fontes
+    (adiciona `qualificacao` + `classificado_cal`). Pode haver pequena
+    divergência quando um deal está classificado apenas pelas 2 fontes
+    extras. A UI deve avisar nessas seções (`if contagem_tabela ≠
+    contagem_grafico:` no padrão do Top SDRs de Pré-vendas).
+    """
+    if df_det_norm is None or df_det_norm.empty:
+        idx = df_det_norm.index if df_det_norm is not None else []
+        return pd.Series(False, index=idx)
+
+    ini = pd.Timestamp(data_ini)
+    fim = pd.Timestamp(data_fim)
+
+    base_atividade = df_det_norm["tipo_registro_base_filtro"] == "Atividade"
+    base_venda     = df_det_norm["tipo_registro_base_filtro"] == "Venda"
+
+    em_agend = (
+        df_det_norm["data_agendamento"].notna()
+        & df_det_norm["data_agendamento"].between(ini, fim, inclusive="both")
+    )
+    em_vnd = (
+        df_det_norm["data_venda"].notna()
+        & df_det_norm["data_venda"].between(ini, fim, inclusive="both")
+    )
+
+    classif_crm = df_det_norm.get(
+        "classificacao_crm_filtro",
+        pd.Series("", index=df_det_norm.index),
+    )
+    classif_ext = df_det_norm["classificacao_filtro"]
+
+    flag_mais_12  = (classif_crm == "Atua +12") | (classif_ext == "Atua +12")
+    flag_menos_12 = (classif_crm == "Atua -12") | (classif_ext == "Atua -12")
+    flag_nao_atua = (classif_crm == "Não atua")  | (classif_ext == "Não atua")
+
+    # Bucket exclusivo +12 > -12 > Não atua > Sem classif (espelha view).
+    is_mais_12  = flag_mais_12
+    is_menos_12 = ~flag_mais_12 & flag_menos_12
+    is_nao_atua = ~flag_mais_12 & ~flag_menos_12 & flag_nao_atua
+    is_sem_clf  = ~flag_mais_12 & ~flag_menos_12 & ~flag_nao_atua
+
+    status_concluida = df_det_norm["status_filtro"].isin(["Concluída", "Concluído"])
+    status_cancelada = df_det_norm["status_filtro"].isin(["Cancelada", "Cancelado"])
+    status_vencida   = df_det_norm["status_filtro"] == "Vencida"
+
+    # ----- agendamentos
+    if metrica == "agendamentos":
+        return base_atividade & em_agend
+    if metrica == "agendamentos_mais_12":
+        return base_atividade & em_agend & is_mais_12
+    if metrica == "agendamentos_menos_12":
+        return base_atividade & em_agend & is_menos_12
+    if metrica == "agendamentos_nao_atua":
+        return base_atividade & em_agend & is_nao_atua
+    if metrica == "agendamentos_sem_classificacao":
+        return base_atividade & em_agend & is_sem_clf
+
+    # ----- comparecimentos
+    if metrica == "comparecimentos":
+        return base_atividade & em_agend & status_concluida
+    if metrica == "comparecimentos_mais_12":
+        return base_atividade & em_agend & status_concluida & is_mais_12
+    if metrica == "comparecimentos_menos_12":
+        return base_atividade & em_agend & status_concluida & is_menos_12
+    if metrica == "comparecimentos_nao_atua":
+        return base_atividade & em_agend & status_concluida & is_nao_atua
+    if metrica == "comparecimentos_sem_classificacao":
+        return base_atividade & em_agend & status_concluida & is_sem_clf
+
+    # ----- vendas / ganhos (sinônimos no contexto do detalhe)
+    if metrica in ("vendas", "ganhos"):
+        return base_venda & em_vnd
+    if metrica in ("ganhos_mais_12", "vendas_mais_12"):
+        return base_venda & em_vnd & is_mais_12
+    if metrica in ("ganhos_menos_12", "vendas_menos_12"):
+        return base_venda & em_vnd & is_menos_12
+    if metrica in ("ganhos_nao_atua", "vendas_nao_atua"):
+        return base_venda & em_vnd & is_nao_atua
+    if metrica in ("ganhos_sem_classificacao", "vendas_sem_classificacao"):
+        return base_venda & em_vnd & is_sem_clf
+
+    # ----- financeiros: mesmo universo de vendas (caller soma montante/receita)
+    if metrica in ("montante", "receita"):
+        return base_venda & em_vnd
+    if metrica in ("montante_mais_12", "receita_mais_12"):
+        return base_venda & em_vnd & is_mais_12
+    if metrica in ("montante_menos_12", "receita_menos_12"):
+        return base_venda & em_vnd & is_menos_12
+    if metrica in ("montante_nao_atua", "receita_nao_atua"):
+        return base_venda & em_vnd & is_nao_atua
+
+    # ----- status auxiliares
+    if metrica == "cancelados":
+        return base_atividade & em_agend & status_cancelada
+    if metrica == "vencidos":
+        return base_atividade & em_agend & status_vencida
+
+    return pd.Series(False, index=df_det_norm.index)
+
+
+def vendas_detalhe_filtrar_closer(df_det_norm: pd.DataFrame,
+                                  closer_nome: str) -> pd.Series:
+    """Mask booleana — linhas do detalhe cujo `closer_filtro` casa com
+    `closer_nome` (match exato, espaços normalizados).
+
+    O ranking de Vendas expõe `executiva` = `TRIM(first_name||' '||last_name)`
+    via zoho_users (com fallback pro owner_id quando não pareia); o detalhe
+    expõe `closer_filtro` com a mesma fórmula (fallback 'Sem Closer'). Match
+    string-exato funciona pra todos os closers cadastrados em zoho_users.
+    Edge case: um closer cujo `executiva_vendas` é ID sem user pareado
+    aparece no ranking como o ID raw e no detalhe como 'Sem Closer' — essa
+    linha do ranking não terá detalhe disponível (caller deve sinalizar).
+    """
+    if df_det_norm is None or df_det_norm.empty:
+        idx = df_det_norm.index if df_det_norm is not None else []
+        return pd.Series(False, index=idx)
+    nome = (closer_nome or "").strip()
+    if not nome:
+        return pd.Series(False, index=df_det_norm.index)
+    return df_det_norm["closer_filtro"].astype(str).str.strip() == nome
+
+
+def vendas_detalhe_filtrar_time(df_det_norm: pd.DataFrame,
+                                time_nome: str) -> pd.Series:
+    """Mask booleana — linhas do detalhe cujo `time_vendas_filtro` casa.
+
+    Útil pro filtro global de Times da página (header da view): quando
+    o usuário seleciona 'Time da Leidianne', o detalhe é pré-filtrado
+    pra refletir o mesmo recorte do ranking. Match exato, espaços
+    normalizados.
+    """
+    if df_det_norm is None or df_det_norm.empty:
+        idx = df_det_norm.index if df_det_norm is not None else []
+        return pd.Series(False, index=idx)
+    nome = (time_nome or "").strip()
+    if not nome:
+        return pd.Series(False, index=df_det_norm.index)
+    return df_det_norm["time_vendas_filtro"].astype(str).str.strip() == nome
 
 
 # ---------------------------------------------------------------------------

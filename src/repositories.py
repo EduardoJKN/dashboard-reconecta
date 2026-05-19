@@ -138,6 +138,20 @@ def get_prevendas_leads_detalhe_diario(data_ini: date,
     return df
 
 
+def get_vendas_leads_detalhe_diario(data_ini: date,
+                                    data_fim: date) -> pd.DataFrame:
+    """Detalhe linha-a-linha pra Top Closers de Vendas.
+
+    Reaproveita `prevendas_leads_detalhe_diario.sql` — mesma fonte/regra
+    do detalhe de Pré-vendas, com `time_vendas` agora exposto (CASE
+    espelha a view bi.vw_dashboard_comercial_executivas_rw). Delega pra
+    `get_prevendas_leads_detalhe_diario` para compartilhar o cache
+    `@st.cache_data` — uma única carga por período atende as duas
+    páginas (Pré-vendas Visão Geral + Vendas Executivas/Visão Geral).
+    """
+    return get_prevendas_leads_detalhe_diario(data_ini, data_fim)
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pré-vendas…")
 def get_prevendas_sdrs_oficiais() -> pd.DataFrame:
     return run_sql_file("prevendas_sdrs_oficiais.sql")
