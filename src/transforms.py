@@ -513,36 +513,93 @@ def investimento_totais(df: pd.DataFrame) -> dict:
     }
 
 
-def roas_diario(df_invest: pd.DataFrame, df_exec: pd.DataFrame) -> pd.DataFrame:
-    """Junta investimento diário com receita/vendas diárias por data_ref."""
+def roas_diario(df_invest: pd.DataFrame, df_exec: pd.DataFrame,
+                taxa_recebimento: float | None = None) -> pd.DataFrame:
+    """Junta investimento diário com receita/vendas diárias por data_ref.
+
+    Devolve as colunas originais + `roas` (realizado, receita/invest) +
+    `roas_realizado` (alias explícito) + `roas_projetado` (montante × taxa
+    de recebimento esperada / invest). Quando `taxa_recebimento` é None,
+    cai pra `roas_projetado == roas_realizado` (sem projeção).
+
+    A taxa é aplicada uniformemente em todos os dias do período — usar a
+    taxa de cada dia individual seria ruidoso (deals novos ainda não
+    recebidos no mesmo dia).
+    """
     if df_invest.empty:
         return pd.DataFrame()
     exec_diario = executivas_por_dia(df_exec)
     merged = df_invest.merge(exec_diario, on="data_ref", how="left").fillna(0)
+
     merged["roas"] = merged.apply(
-        lambda r: _safe_div(r.get("receita", 0), r["investimento_total"]), axis=1
+        lambda r: _safe_div(r.get("receita", 0), r["investimento_total"]), axis=1)
+    # alias explícito p/ legendas de gráfico (`roas` puro confunde)
+    merged["roas_realizado"] = merged["roas"]
+
+    taxa = taxa_recebimento if taxa_recebimento is not None else None
+    merged["roas_projetado"] = merged.apply(
+        lambda r: _safe_div(
+            r.get("montante", 0) * taxa if taxa is not None else r.get("receita", 0),
+            r["investimento_total"],
+        ),
+        axis=1,
     )
+
     merged["cac"] = merged.apply(
         lambda r: _safe_div(r["investimento_total"], r.get("vendas", 0)), axis=1
     )
     return merged.sort_values("data_ref")
 
 
-def roas_resumo(df_invest: pd.DataFrame, df_exec: pd.DataFrame) -> dict:
+def roas_resumo(df_invest: pd.DataFrame, df_exec: pd.DataFrame,
+                taxa_recebimento: float | None = None) -> dict:
+    """Totais consolidados de ROAS / CAC.
+
+    `taxa_recebimento` (entre 0 e 1) é a expectativa de recebimento aplicada
+    sobre o montante pra estimar receita futura. Quando None, `roas_projetado`
+    cai para o `roas_realizado` (sem ganho informacional).
+
+    Campos retornados:
+      - `roas_realizado`   = receita já paga ÷ investimento
+      - `roas_projetado`   = (montante × taxa) ÷ investimento
+      - `receita_projetada` = montante × taxa
+      - `taxa_aplicada`    = taxa usada no cálculo (0..1) — só pra exibir no hint
+      - `taxa_periodo`     = receita/montante do próprio período (0..1) —
+                              informacional; **não** usado no projetado pra
+                              evitar circularidade
+      - `roas`             = alias backward-compat para `roas_realizado`
+    """
     totais_inv = investimento_totais(df_invest)
     totais_exec = executivas_kpis(df_exec)
     receita = totais_exec.get("receita", 0)
     montante = totais_exec.get("montante", 0)
     vendas = totais_exec.get("vendas", 0)
     invest = totais_inv.get("total", 0)
+
+    taxa_periodo = _safe_div(receita, montante)
+    taxa_aplicada = taxa_recebimento if taxa_recebimento is not None else taxa_periodo
+    receita_projetada = float(montante) * float(taxa_aplicada)
+
+    roas_realizado = _safe_div(receita, invest)
+    roas_projetado = (_safe_div(receita_projetada, invest)
+                      if taxa_recebimento is not None else roas_realizado)
+
     return {
-        "investimento": invest,
-        "receita": receita,
-        "montante": montante,
-        "vendas": vendas,
-        "roas": _safe_div(receita, invest),
-        "cac": _safe_div(invest, vendas),
-        "dias": totais_inv.get("dias", 0),
+        # backward compat — antigos consumidores leem `r["roas"]`
+        "roas": roas_realizado,
+        # novos campos
+        "roas_realizado":     roas_realizado,
+        "roas_projetado":     roas_projetado,
+        "receita_projetada":  receita_projetada,
+        "taxa_aplicada":      taxa_aplicada,
+        "taxa_periodo":       taxa_periodo,
+        # campos existentes
+        "investimento":       invest,
+        "receita":            receita,
+        "montante":           montante,
+        "vendas":             vendas,
+        "cac":                _safe_div(invest, vendas),
+        "dias":               totais_inv.get("dias", 0),
     }
 
 
