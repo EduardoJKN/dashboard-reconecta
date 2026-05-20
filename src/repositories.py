@@ -157,6 +157,15 @@ def get_prevendas_sdrs_oficiais() -> pd.DataFrame:
     return run_sql_file("prevendas_sdrs_oficiais.sql")
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Vendas…")
+def get_executivas_oficiais() -> pd.DataFrame:
+    """Time ativo de Vendas (`fdw_reconecta.executivas_vendas WHERE ativo='y'`).
+
+    Fonte oficial usada para filtrar o ranking de closers das páginas Visão
+    Geral e Executivas & Times. Detalhes em `executivas_oficiais.sql`."""
+    return run_sql_file("executivas_oficiais.sql")
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (diário por SDR)…")
 def get_prevendas_overview_diario_por_sdr(data_ini: date,
                                           data_fim: date) -> pd.DataFrame:

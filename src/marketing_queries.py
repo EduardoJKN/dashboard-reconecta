@@ -311,6 +311,40 @@ def get_mkt_campanha_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
     )
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo auditoria do funil…")
+def get_mkt_funil_leads_auditoria(data_ini: date, data_fim: date,
+                                  nivel: str, item_norm: str) -> pd.DataFrame:
+    """Tabela de conferência nome-a-nome de leads/vendas do funil.
+
+    Reaproveita 100% a lógica de atribuição de `mkt_criativo_funil.sql` /
+    `mkt_campanha_funil.sql` (deal-centric, email > telefone, cross-período
+    per-deal, desempate origem_util + lead mais recente).
+
+    Params:
+      - nivel: 'criativo' | 'campanha' (determina utm_content vs utm_campaign)
+      - item_norm: valor de `ad_name_norm` ou `campaign_name_norm` do bucket
+        selecionado. Aceita também os sintéticos:
+            '__todos__' (todos os resultados)
+            '__sem_criativo_identificado__'
+            '__sem_campanha_identificada__'
+
+    Schema: 18 colunas (Data venda · Nome deal · E-mail/Telefone deal ·
+    Montante · Data lead · Dias lead-venda · Nome/E-mail/Telefone lead ·
+    Classificação · Tipo de origem · UTM source · UTM medium · Campanha
+    atribuída · Criativo atribuído · Tipo match · Regra atribuição)."""
+    params = {
+        **_params(data_ini, data_fim),
+        "nivel": str(nivel),
+        "item_norm": str(item_norm),
+    }
+    df = run_sql_file("mkt_funil_leads_auditoria.sql", params)
+    if not df.empty:
+        for col in ("data_venda", "data_lead"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col])
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Growth (mart diária)…")
 def get_mkt_growth_daily(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Resultado atribuído POR DATA — agrega `odam.mart_ad_funnel_daily`

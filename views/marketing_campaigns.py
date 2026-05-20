@@ -206,6 +206,10 @@ render_funil_selecionado(
     lista_fn=lista_campanhas_funil,
     kpis_fn=campanha_funil_kpis,
     etapas_fn=campanha_funil_etapas,
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    nivel="campanha",
+    auditoria_state_key="camp_funil_auditoria",
     empty_msg="Sem campanhas com investimento ou leads no período.",
     caption=(
         "Funil por campanha usa `campaign_name = utm_campaign`. Campanhas "

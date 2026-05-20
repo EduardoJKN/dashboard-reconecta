@@ -9,11 +9,13 @@ estrutura visual e regras de cálculo.
 from __future__ import annotations
 
 import html as html_lib
+from datetime import date
 from typing import Callable
 
 import pandas as pd
 import streamlit as st
 
+from src.marketing_queries import get_mkt_funil_leads_auditoria
 from src.ui.components import metric_card_v2, section_title
 from src.ui.theme import PALETTE, brl, int_br, pct
 
@@ -130,6 +132,13 @@ def render_funil_selecionado(
     empty_msg: str | None = None,
     caption: str | None = None,
     expander_md: str | None = None,
+    # Auditoria (opcional) — quando data_ini/data_fim/nivel passados,
+    # renderiza tabela "Conferir leads e vendas deste funil" abaixo dos
+    # cards e ACIMA do expander "Como este funil é calculado?".
+    data_ini: date | None = None,
+    data_fim: date | None = None,
+    nivel: str | None = None,              # 'criativo' | 'campanha'
+    auditoria_state_key: str = "funil_auditoria",
 ) -> None:
     """Bloco "Funil do {entidade} selecionado(a)" — UI completa.
 
@@ -251,6 +260,189 @@ def render_funil_selecionado(
     if caption:
         st.caption(caption)
 
+    # ----------------------------------------------------------------------
+    # Tabela de auditoria — "Conferir leads e vendas deste funil"
+    # ----------------------------------------------------------------------
+    if data_ini is not None and data_fim is not None and nivel in ("criativo", "campanha"):
+        _render_funil_auditoria_block(
+            data_ini=data_ini,
+            data_fim=data_fim,
+            nivel=nivel,
+            item_norm=sel,
+            entity_label=entity_label,
+            state_key=auditoria_state_key,
+        )
+
     if expander_md:
         with st.expander(f"Como este funil é calculado?"):
             st.markdown(expander_md)
+
+
+# ============================================================================
+# Bloco auxiliar — tabela "Conferir leads e vendas deste funil"
+# ============================================================================
+
+_AUDIT_STATUS_OPCOES = (
+    "Todos", "+12", "-12", "Não atua", "Ganhos",
+    "Com agendamento", "Com comparecimento", "Sem venda",
+)
+
+
+def _render_funil_auditoria_block(
+    *,
+    data_ini: date,
+    data_fim: date,
+    nivel: str,                # 'criativo' | 'campanha'
+    item_norm: str | None,     # ad_name_norm | campaign_name_norm | sintéticos
+    entity_label: str,         # "Criativo" | "Campanha"
+    state_key: str,
+) -> None:
+    """Renderiza expansor "Conferir leads e vendas deste funil" com filtros
+    locais (status/classificação + busca) e tabela.
+
+    Dados vêm de `get_mkt_funil_leads_auditoria(data_ini, data_fim, nivel,
+    item_norm)`. A query é deal-centric (1 linha por deal ganho atribuído
+    ao item selecionado) — "Sem venda" e "Com agendamento/comparecimento"
+    funcionam APENAS se a query devolver os flags correspondentes; caso
+    contrário a opção continua aparecendo no selectbox mas não filtra
+    nada (futura iteração extende a SQL)."""
+    if not item_norm:
+        return
+
+    with st.expander("Conferir leads e vendas deste funil", expanded=False):
+        try:
+            df_aud = get_mkt_funil_leads_auditoria(
+                data_ini, data_fim, nivel, str(item_norm),
+            )
+        except Exception as e:
+            st.error(f"Falha ao carregar auditoria: {e}")
+            return
+
+        if df_aud is None or df_aud.empty:
+            st.caption(
+                f"Nenhuma venda atribuída para este(a) {entity_label.lower()} "
+                "no período."
+            )
+            return
+
+        # ------------- Filtros locais (acima da tabela) -----------------
+        fc1, fc2 = st.columns([1, 2], gap="small")
+        with fc1:
+            status_sel = st.selectbox(
+                "Status / Classificação",
+                options=_AUDIT_STATUS_OPCOES,
+                index=0,
+                key=f"{state_key}_status",
+            )
+        with fc2:
+            busca = st.text_input(
+                "Buscar nome ou e-mail",
+                value="",
+                placeholder="ex.: maria silva, maria@gmail.com",
+                key=f"{state_key}_busca",
+            )
+
+        # ------------- Aplica filtros -----------------------------------
+        df_view = df_aud.copy()
+
+        # Status/Classificação
+        classif_col = df_view.get("classificacao", pd.Series("", index=df_view.index))
+        classif_norm = classif_col.fillna("").astype(str).str.lower()
+        tipo_match_col = df_view.get("tipo_match", pd.Series("", index=df_view.index)).fillna("").astype(str)
+
+        if status_sel == "+12":
+            df_view = df_view[classif_norm.str.contains("+12", regex=False, na=False)]
+        elif status_sel == "-12":
+            df_view = df_view[classif_norm.str.contains("-12", regex=False, na=False)]
+        elif status_sel == "Não atua":
+            df_view = df_view[classif_norm.str.contains("não atua", na=False)]
+        elif status_sel == "Ganhos":
+            # Query deal-centric: todos os rows são vendas com tipo_match em
+            # ('email','telefone','sem_match'). "Ganhos" = todos. No-op.
+            pass
+        elif status_sel == "Sem venda":
+            # Query atual NÃO tem rows sem venda — todas são deals ganhos.
+            # Filtro vira no-op visual; aviso pro user.
+            st.caption(
+                "ℹ A auditoria atual mostra somente vendas atribuídas. "
+                "Filtro 'Sem venda' não tem efeito até a query incluir "
+                "leads do período sem venda."
+            )
+        elif status_sel in ("Com agendamento", "Com comparecimento"):
+            st.caption(
+                f"ℹ Filtro '{status_sel}' requer colunas de agendamento/"
+                "comparecimento na query — não disponíveis ainda. "
+                "Próxima iteração."
+            )
+
+        # Busca por nome/e-mail (qualquer um dos 4 campos)
+        if busca.strip():
+            q = busca.strip().lower()
+            mask = pd.Series(False, index=df_view.index)
+            for col in ("nome_lead", "email_lead", "nome_deal", "email_deal"):
+                if col in df_view.columns:
+                    mask |= df_view[col].fillna("").astype(str).str.lower().str.contains(q, regex=False, na=False)
+            df_view = df_view[mask]
+
+        if df_view.empty:
+            st.caption(
+                f"Nenhum registro casa com filtros (status='{status_sel}'"
+                + (f", busca='{busca}'" if busca.strip() else "")
+                + ")."
+            )
+            return
+
+        # ------------- Caption de contagem ------------------------------
+        st.caption(
+            f"{len(df_view)} registro(s) · "
+            f"{int(df_view['tipo_match'].eq('email').sum())} por e-mail · "
+            f"{int(df_view['tipo_match'].eq('telefone').sum())} por telefone · "
+            f"{int(df_view['tipo_match'].eq('sem_match').sum())} sem match"
+        )
+
+        # ------------- Tabela -------------------------------------------
+        # Reordena colunas: lead primeiro, depois venda, depois match/regra.
+        cols_ordem = [
+            ("data_lead",          "Data lead"),
+            ("nome_lead",          "Nome lead"),
+            ("email_lead",         "E-mail lead"),
+            ("telefone_lead",      "Telefone lead"),
+            ("classificacao",      "Classificação"),
+            ("tipo_origem",        "Tipo de origem"),
+            ("utm_source",         "UTM source"),
+            ("utm_medium",         "UTM medium"),
+            ("campanha_atribuida", "Campanha atribuída"),
+            ("criativo_atribuido", "Criativo atribuído"),
+            ("data_venda",         "Data venda"),
+            ("dias_lead_venda",    "Dias lead→venda"),
+            ("nome_deal",          "Nome deal"),
+            ("email_deal",         "E-mail deal"),
+            ("telefone_deal",      "Telefone deal"),
+            ("montante",           "Montante"),
+            ("tipo_match",         "Tipo de match"),
+            ("regra_atribuicao",   "Regra de atribuição"),
+        ]
+        cols_disp = [c for c, _ in cols_ordem if c in df_view.columns]
+        df_show = df_view[cols_disp].rename(
+            columns={c: lbl for c, lbl in cols_ordem if c in cols_disp}
+        )
+        cfg: dict = {}
+        for date_lbl in ("Data lead", "Data venda"):
+            if date_lbl in df_show.columns:
+                cfg[date_lbl] = st.column_config.DateColumn(
+                    date_lbl, format="DD/MM/YYYY",
+                )
+        if "Montante" in df_show.columns:
+            cfg["Montante"] = st.column_config.NumberColumn(
+                "Montante", format="R$ %.0f",
+            )
+        if "Dias lead→venda" in df_show.columns:
+            cfg["Dias lead→venda"] = st.column_config.NumberColumn(
+                "Dias lead→venda", format="%d",
+            )
+        st.dataframe(
+            df_show,
+            use_container_width=True,
+            hide_index=True,
+            column_config=cfg,
+        )

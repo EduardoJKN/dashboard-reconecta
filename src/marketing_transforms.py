@@ -2446,6 +2446,11 @@ _CRI_FUNIL_ZEROS = {
 }
 
 
+_TODOS_AD_NAME_NORM = "__todos__"
+_SEM_CRIATIVO_AD_NAME_NORM = "__sem_criativo_identificado__"
+_SEM_CAMPANHA_NAME_NORM = "__sem_campanha_identificada__"
+
+
 def lista_criativos_funil(df_funil: pd.DataFrame,
                           sort_by: str = "investimento") -> pd.DataFrame:
     """Opções para o selectbox da seção "Funil do criativo selecionado".
@@ -2453,40 +2458,144 @@ def lista_criativos_funil(df_funil: pd.DataFrame,
     Retorna `(ad_name_norm, ad_name, label)` ordenado por `investimento`
     desc (default) ou `leads_totais` desc. Label sugerido:
         "ad_name · R$ invest · X leads"
-    Criativos com `investimento=0` E `leads_totais=0` ficam fora — sem nada
-    pra mostrar. Se o usuário quiser ver criativos zerados, expandir o
-    filtro futuramente."""
+
+    Mai/2026: prepend de 2 opções sintéticas:
+      1. `__todos__`: agrega todos os criativos do período.
+      2. `__sem_criativo_identificado__`: bucket do funil SQL — vendas sem
+         lead atribuível (cross-período não casa). Só aparece se a row
+         existir no DF E tiver vendas > 0.
+    Criativos individuais (com algum sinal de mídia/leads/vendas) seguem
+    ordenados por sort_by."""
     if df_funil is None or df_funil.empty:
         return pd.DataFrame(columns=["ad_name_norm", "ad_name", "label"])
 
     df = df_funil.copy()
-    # Mantém só criativos com algum sinal (mídia OU leads). Zero-zero seria
-    # ruído no dropdown.
-    mask = (df["investimento"].fillna(0) > 0) | (df["leads_totais"].fillna(0) > 0)
+    # Mantém criativos com algum sinal (mídia OU leads OU vendas — vendas
+    # cross-período entram mesmo sem leads no período).
+    mask = (
+        (df["investimento"].fillna(0) > 0)
+        | (df["leads_totais"].fillna(0) > 0)
+        | (df.get("vendas_novas", pd.Series(0, index=df.index)).fillna(0) > 0)
+    )
     df = df[mask]
     if df.empty:
         return pd.DataFrame(columns=["ad_name_norm", "ad_name", "label"])
-
-    sort_col = sort_by if sort_by in df.columns else "investimento"
-    df = df.sort_values(
-        [sort_col, "leads_totais", "ad_name"],
-        ascending=[False, False, True],
-    ).reset_index(drop=True)
 
     def _label(row) -> str:
         nome = (row.get("ad_name") or row.get("ad_name_norm") or "(sem nome)")
         nome_short = nome if len(nome) <= 56 else nome[:53] + "…"
         invest = float(row.get("investimento") or 0)
         leads = int(row.get("leads_totais") or 0)
-        # Format pt-BR: "R$ 16.967" (sem casas), milhar com ponto.
         if invest >= 1:
             inv_fmt = f"R$ {invest:,.0f}".replace(",", ".")
         else:
             inv_fmt = "R$ 0"
         return f"{nome_short} · {inv_fmt} · {leads} lead{'s' if leads != 1 else ''}"
 
-    df["label"] = df.apply(_label, axis=1)
-    return df[["ad_name_norm", "ad_name", "label"]]
+    # --- Opções sintéticas (prepend) -----------------------------------
+    sinteticas: list[dict] = []
+
+    # "Todos os resultados" — agregado de todo o df
+    invest_total = float(df["investimento"].fillna(0).sum())
+    leads_total  = int(df["leads_totais"].fillna(0).sum())
+    vendas_total = int(df.get("vendas_novas", pd.Series(0)).fillna(0).sum())
+    inv_fmt_t = f"R$ {invest_total:,.0f}".replace(",", ".") if invest_total >= 1 else "R$ 0"
+    sinteticas.append({
+        "ad_name_norm": _TODOS_AD_NAME_NORM,
+        "ad_name":      "Todos os resultados",
+        "label":        f"Todos os resultados · {inv_fmt_t} · "
+                        f"{leads_total} lead{'s' if leads_total != 1 else ''} · "
+                        f"{vendas_total} venda{'s' if vendas_total != 1 else ''}",
+    })
+
+    # "Sem criativo/campanha identificad{o,a}" — só se a row do bucket
+    # existir com vendas. Detecta ambos os valores possíveis (criativo OU
+    # campanha) — o df de campanha entra renomeado como ad_name_norm,
+    # mas o VALOR do bucket é '__sem_campanha_identificada__'.
+    bucket_candidates = (
+        (_SEM_CRIATIVO_AD_NAME_NORM, "Sem criativo identificado"),
+        (_SEM_CAMPANHA_NAME_NORM,    "Sem campanha identificada"),
+    )
+    for bucket_norm, bucket_label in bucket_candidates:
+        sem_mask = df["ad_name_norm"] == bucket_norm
+        if not sem_mask.any():
+            continue
+        row_sc = df[sem_mask].iloc[0]
+        vendas_sc = int(row_sc.get("vendas_novas") or 0)
+        if vendas_sc > 0:
+            sinteticas.append({
+                "ad_name_norm": bucket_norm,
+                "ad_name":      bucket_label,
+                "label":        f"{bucket_label} · "
+                                f"{vendas_sc} venda{'s' if vendas_sc != 1 else ''}",
+            })
+        break
+
+    # --- Criativos individuais (excluindo o bucket sintético, que já entrou
+    # como opção própria acima) ----------------------------------------
+    df_indiv = df[
+        ~df["ad_name_norm"].isin([_SEM_CRIATIVO_AD_NAME_NORM,
+                                  _SEM_CAMPANHA_NAME_NORM])
+    ].copy()
+    if not df_indiv.empty:
+        sort_col = sort_by if sort_by in df_indiv.columns else "investimento"
+        df_indiv = df_indiv.sort_values(
+            [sort_col, "leads_totais", "ad_name"],
+            ascending=[False, False, True],
+        ).reset_index(drop=True)
+        df_indiv["label"] = df_indiv.apply(_label, axis=1)
+        df_indiv = df_indiv[["ad_name_norm", "ad_name", "label"]]
+    else:
+        df_indiv = pd.DataFrame(columns=["ad_name_norm", "ad_name", "label"])
+
+    return pd.concat(
+        [pd.DataFrame(sinteticas), df_indiv],
+        ignore_index=True,
+    )[["ad_name_norm", "ad_name", "label"]]
+
+
+def _criativo_funil_kpis_todos(df_funil: pd.DataFrame) -> dict:
+    """Agrega TODAS as rows do df_funil em um dict (opção sintética
+    'Todos os resultados'). Soma absolutos; recomputa taxas e CPL/CAC
+    a partir dos absolutos."""
+    out = dict(_CRI_FUNIL_ZEROS)
+    out["tem_dados"] = True
+    out["ad_name_norm"] = _TODOS_AD_NAME_NORM
+    out["ad_name"] = "Todos os resultados"
+
+    int_cols = ("qtd_adids", "impressoes", "cliques", "link_clicks", "alcance",
+                "leads_totais", "leads_qualificados", "leads_mais_12",
+                "leads_menos_12", "leads_nao_atua",
+                "agendamentos", "comparecimentos", "vendas_novas")
+    for c in int_cols:
+        if c in df_funil.columns:
+            out[c] = int(df_funil[c].fillna(0).sum())
+
+    if "investimento" in df_funil.columns:
+        out["investimento"] = float(df_funil["investimento"].fillna(0).sum())
+
+    # Taxas / CPL / CAC / CTR / CPC recomputados a partir dos somatórios
+    inv = float(out["investimento"] or 0)
+    imp = int(out["impressoes"] or 0)
+    clk = int(out["cliques"] or 0)
+    leads = int(out["leads_totais"] or 0)
+    leads_12 = int(out["leads_mais_12"] or 0)
+    agend = int(out["agendamentos"] or 0)
+    compar = int(out["comparecimentos"] or 0)
+    vendas = int(out["vendas_novas"] or 0)
+    leads_q = int(out["leads_qualificados"] or 0)
+
+    out["ctr"]  = (clk / imp * 100) if imp > 0 else 0.0
+    out["cpc"]  = (inv / clk) if clk > 0 else 0.0
+    out["taxa_qualificacao"]         = (leads_q / leads * 100) if leads > 0 else 0.0
+    out["taxa_mais_12"]              = (leads_12 / leads * 100) if leads > 0 else 0.0
+    out["taxa_lead_agendamento"]     = (agend  / leads * 100) if leads > 0 else 0.0
+    out["taxa_lead_comparecimento"]  = (compar / leads * 100) if leads > 0 else 0.0
+    out["taxa_lead_venda_nova"]      = (vendas / leads * 100) if leads > 0 else 0.0
+    out["cpl"]                       = (inv / leads)    if leads > 0    else 0.0
+    out["cpl_mais_12"]               = (inv / leads_12) if leads_12 > 0 else 0.0
+    out["cac"]                       = (inv / vendas)   if vendas > 0   else 0.0
+    return out
 
 
 def criativo_funil_kpis(df_funil: pd.DataFrame,
@@ -2496,18 +2605,24 @@ def criativo_funil_kpis(df_funil: pd.DataFrame,
     Retorna dict com TODAS as colunas do SQL (mídia + leads + funil +
     derivadas), mais `tem_dados=True/False` indicando se a seleção bateu
     em alguma row. Quando `ad_name_norm` é None ou não existe no df, devolve
-    o dict de zeros — UI escolhe se mostra placeholder ou esconde."""
+    o dict de zeros.
+
+    Mai/2026: trata `ad_name_norm='__todos__'` agregando o df inteiro
+    (opção sintética 'Todos os resultados' do selectbox)."""
     out = dict(_CRI_FUNIL_ZEROS)
     out["tem_dados"] = False
     if df_funil is None or df_funil.empty or not ad_name_norm:
         return out
+
+    if ad_name_norm == _TODOS_AD_NAME_NORM:
+        return _criativo_funil_kpis_todos(df_funil)
+
     sub = df_funil[df_funil["ad_name_norm"] == ad_name_norm]
     if sub.empty:
         return out
 
     row = sub.iloc[0].to_dict()
     out["tem_dados"] = True
-    # Casts (numpy → python) pra evitar surpresas no Streamlit/format.
     int_cols = ("qtd_adids", "impressoes", "cliques", "link_clicks", "alcance",
                 "leads_totais", "leads_qualificados", "leads_mais_12",
                 "leads_menos_12", "leads_nao_atua",

@@ -1,12 +1,18 @@
 import pandas as pd
 import streamlit as st
 
-from src.repositories import get_executivas, get_vendas_leads_detalhe_diario
+from src.repositories import (
+    get_executivas,
+    get_executivas_oficiais,
+    get_vendas_leads_detalhe_diario,
+)
 from src.transforms import (
     executivas_kpis,
     executivas_por_dia,
     executivas_por_time,
     executivas_ranking,
+    executivas_ranking_oficiais,
+    ranking_dividir_principal_detalhado,
     vendas_detalhe_filtrar_closer,
     vendas_detalhe_filtrar_time,
     vendas_detalhe_mask_por_metrica,
@@ -324,6 +330,32 @@ with tab_rank:
             ranking = ranking.merge(_agg_venc, on="executiva", how="left").fillna({"vencidos": 0})
         else:
             ranking["vencidos"] = 0
+
+    # ------------------------------------------------------------------------
+    # Filtro pelo time oficial ATIVO de Vendas (fdw_reconecta.executivas_vendas).
+    # Aplicado AQUI — antes do gráfico e das tabelas — para que gráfico,
+    # tabela principal e tabela complementar consumam o mesmo universo já
+    # enxuto. Fallback silencioso: se a FDW falhar/vier vazia, mantém o
+    # ranking inteiro e exibe caption discreto. Match por nome normalizado
+    # (token-based, ver `executivas_ranking_oficiais` em src/transforms.py).
+    # Evolução prevista: trocar por INNER JOIN em id_crm quando a view
+    # expor o ID Zoho da executiva.
+    # ------------------------------------------------------------------------
+    try:
+        _df_oficiais_exec = get_executivas_oficiais()
+        _falha_oficiais_exec = False
+    except Exception:
+        _df_oficiais_exec = None
+        _falha_oficiais_exec = True
+
+    if (ranking is not None and not ranking.empty
+            and _df_oficiais_exec is not None and not _df_oficiais_exec.empty):
+        ranking = executivas_ranking_oficiais(ranking, _df_oficiais_exec)
+    elif _falha_oficiais_exec:
+        st.caption(
+            "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
+            "ranking mostrado sem o filtro do time oficial."
+        )
 
     # ------------------------------------------------------------------------
     # Header — label da métrica precisa ser resolvido ANTES das colunas
@@ -679,10 +711,37 @@ with tab_rank:
                             )
 
         # ===================================================================
-        # Expander auxiliar fora das 2 colunas — ranking completo
+        # Expander auxiliar fora das 2 colunas — ranking completo, dividido
+        # em tabela principal (métricas-chave, ordem canônica) + tabela
+        # complementar (demais colunas, incluindo buckets +12/-12 etc.).
+        # Mesma divisão é usada na Visão Geral (views/home.py) via
+        # `ranking_dividir_principal_detalhado` em src/transforms.py.
         # ===================================================================
+        df_principal, df_detalhado = ranking_dividir_principal_detalhado(ranking)
+        # Os pcts vêm na escala 0–100 da view (ex.: 53.2258), então o format
+        # do NumberColumn só exibe o sufixo `%` sem multiplicar.
+        _ranking_col_cfg = {
+            "pct_comparecimento": st.column_config.NumberColumn(
+                "% Comparecimento", format="%.2f%%"),
+            "pct_conversao": st.column_config.NumberColumn(
+                "% Conversão", format="%.2f%%"),
+            "pct_vendas": st.column_config.NumberColumn(
+                "% Vendas", format="%.2f%%"),
+            "pct_recebimento": st.column_config.NumberColumn(
+                "% Recebimento", format="%.2f%%"),
+        }
         with st.expander("Ver ranking completo (todas as colunas/closers)"):
-            st.dataframe(ranking, use_container_width=True, hide_index=True)
+            st.dataframe(
+                df_principal,
+                use_container_width=True,
+                hide_index=True,
+                column_config=_ranking_col_cfg,
+            )
+        if not df_detalhado.empty and len(df_detalhado.columns) > 1:
+            with st.expander("Ver detalhes complementares do ranking"):
+                st.dataframe(
+                    df_detalhado, use_container_width=True, hide_index=True,
+                )
 
 with tab_time:
     por_time_raw = executivas_por_time(df)

@@ -5,6 +5,7 @@ import streamlit as st
 
 from src.repositories import (
     get_executivas,
+    get_executivas_oficiais,
     get_investimento_diario,
     get_leads_visao_geral,
     get_media_movel_vendas,
@@ -13,6 +14,8 @@ from src.repositories import (
 from src.transforms import (
     delta_pct,
     executivas_ranking,
+    executivas_ranking_oficiais,
+    ranking_dividir_principal_detalhado,
     receita_por_mes,
     vendas_detalhe_filtrar_closer,
     vendas_detalhe_filtrar_time,
@@ -286,6 +289,31 @@ else:
         ).fillna({"vencidos": 0})
     else:
         ranking_home["vencidos"] = 0
+
+# ---------------------------------------------------------------------------
+# Filtro pelo time oficial ATIVO de Vendas (fdw_reconecta.executivas_vendas).
+# Aplicado AQUI — antes do gráfico e das tabelas — para que gráfico, tabela
+# principal e tabela complementar consumam o mesmo universo já enxuto.
+# Fallback silencioso: se a FDW falhar/vier vazia, mantém o ranking inteiro
+# e exibe caption discreto. Evita derrubar a página por falha de fonte
+# externa. Match por nome normalizado (token-based, ver
+# `executivas_ranking_oficiais` em src/transforms.py). Evolução prevista:
+# trocar p/ INNER JOIN por id_crm quando a view expor o ID Zoho.
+# ---------------------------------------------------------------------------
+try:
+    _df_oficiais_home = get_executivas_oficiais()
+    _falha_oficiais_home = False
+except Exception:
+    _df_oficiais_home = None
+    _falha_oficiais_home = True
+
+if _df_oficiais_home is not None and not _df_oficiais_home.empty:
+    ranking_home = executivas_ranking_oficiais(ranking_home, _df_oficiais_home)
+elif _falha_oficiais_home:
+    st.caption(
+        "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
+        "ranking mostrado sem o filtro do time oficial."
+    )
 
 # ---------------------------------------------------------------------------
 # Header — label da métrica precisa ser resolvido ANTES das colunas
@@ -634,7 +662,36 @@ else:
                         )
 
     # =======================================================================
-    # Expander fora do layout 2-cols — ranking completo agregado
+    # Expander fora do layout 2-cols — ranking completo agregado, dividido
+    # em tabela principal (métricas-chave, ordem canônica) + tabela
+    # complementar (demais colunas, p/ ex. buckets +12/-12, perdidos etc.).
+    # A divisão vive em `ranking_dividir_principal_detalhado` p/ não
+    # duplicar a lógica entre Visão Geral e Executivas & Times.
     # =======================================================================
+    df_principal_home, df_detalhado_home = ranking_dividir_principal_detalhado(
+        ranking_home
+    )
+    # Os pcts vêm na escala 0–100 da view (ex.: 53.2258), então o format do
+    # NumberColumn só exibe o sufixo `%` sem multiplicar.
+    _ranking_col_cfg_home = {
+        "pct_comparecimento": st.column_config.NumberColumn(
+            "% Comparecimento", format="%.2f%%"),
+        "pct_conversao": st.column_config.NumberColumn(
+            "% Conversão", format="%.2f%%"),
+        "pct_vendas": st.column_config.NumberColumn(
+            "% Vendas", format="%.2f%%"),
+        "pct_recebimento": st.column_config.NumberColumn(
+            "% Recebimento", format="%.2f%%"),
+    }
     with st.expander("Ver ranking completo (todas as colunas/closers)"):
-        st.dataframe(ranking_home, use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_principal_home,
+            use_container_width=True,
+            hide_index=True,
+            column_config=_ranking_col_cfg_home,
+        )
+    if not df_detalhado_home.empty and len(df_detalhado_home.columns) > 1:
+        with st.expander("Ver detalhes complementares do ranking"):
+            st.dataframe(
+                df_detalhado_home, use_container_width=True, hide_index=True,
+            )

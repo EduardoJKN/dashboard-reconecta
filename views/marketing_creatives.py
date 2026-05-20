@@ -186,6 +186,10 @@ render_funil_selecionado(
     lista_fn=lista_criativos_funil,
     kpis_fn=criativo_funil_kpis,
     etapas_fn=criativo_funil_etapas,
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    nivel="criativo",
+    auditoria_state_key="cri_funil_auditoria",
     empty_msg="Sem criativos com investimento ou leads no período.",
     caption=(
         "Funil por criativo usa `ad_name = utm_content`. Criativos sem "

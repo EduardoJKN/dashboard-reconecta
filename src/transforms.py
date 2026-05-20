@@ -180,6 +180,162 @@ def executivas_ranking(df: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values("receita", ascending=False).reset_index(drop=True)
 
 
+# ---------------------------------------------------------------------------
+# Ranking — partição principal × complementar (consumido por Time de Vendas
+# → Visão Geral e Executivas & Times). Mantém uma fonte única para a ordem
+# e a regra de partição, pra evitar drift entre as duas páginas.
+# ---------------------------------------------------------------------------
+
+COLUNAS_PRINCIPAIS_RANKING = [
+    "executiva",
+    "oportunidades",
+    "agendamentos",
+    "comparecimentos",
+    "vendas",
+    "montante",
+    "receita",
+    "pct_comparecimento",
+    "pct_conversao",
+    "pct_vendas",
+    "pct_recebimento",
+    "ticket_medio",
+]
+
+
+# Conectores de nome ("Maria DE Lima", "Pedro DA Silva") — descartados na
+# tokenização para o match com o cadastro oficial. Lista fechada
+# propositalmente curta: só conectores PT-BR que aparecem em nomes
+# próprios. NÃO incluir sobrenomes curtos tipo "Sá" ou "Lê".
+_RANKING_CONECTORES_NOME = frozenset({"de", "da", "do", "das", "dos", "e"})
+
+
+def _normalize_nome_ranking(nome) -> str:
+    """NFD + lowercase + collapse de espaços. Mantém só letras/dígitos/espaços."""
+    if not isinstance(nome, str):
+        return ""
+    import unicodedata
+    s = unicodedata.normalize("NFD", nome)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return " ".join(s.lower().split())
+
+
+def _tokens_nome_ranking(nome) -> list[str]:
+    """Tokens relevantes do nome (sem acentos, sem conectores PT-BR)."""
+    norm = _normalize_nome_ranking(nome)
+    if not norm:
+        return []
+    return [t for t in norm.split() if t and t not in _RANKING_CONECTORES_NOME]
+
+
+def _match_oficial_por_tokens(nome_ranking: str,
+                              oficiais_tokens: list[tuple[str, set[str]]]) -> str:
+    """Devolve o nome oficial canônico quando o ranking name casa por tokens.
+
+    Regra: todos os tokens relevantes do nome do ranking precisam estar
+    presentes no conjunto de tokens do oficial. Trata abreviações comuns
+    (`Nathan Carloto` ↔ `Nathan Carloto Ferreira Dos Santos`) sem aceitar
+    match só pelo primeiro nome (que seria ambíguo entre 2 oficiais com
+    mesmo primeiro nome). Devolve `""` quando 0 ou >1 oficiais batem."""
+    raw_tokens = _tokens_nome_ranking(nome_ranking)
+    if not raw_tokens:
+        return ""
+    raw_set = set(raw_tokens)
+    matches = [
+        nome_oficial for nome_oficial, off_tokens in oficiais_tokens
+        if raw_set.issubset(off_tokens)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    # Desempate: match exato em todos os tokens (sem extras no oficial).
+    if len(matches) > 1:
+        exatos = [
+            n for n, off_tokens in oficiais_tokens
+            if n in matches and off_tokens == raw_set
+        ]
+        if len(exatos) == 1:
+            return exatos[0]
+    return ""
+
+
+def executivas_ranking_oficiais(
+    df_ranking: pd.DataFrame,
+    df_oficiais: pd.DataFrame,
+) -> pd.DataFrame:
+    """Mantém no ranking só executivas presentes no cadastro oficial ativo.
+
+    Fluxo:
+    1. Tokeniza cada `executiva` do ranking e cada `nome` do cadastro
+       oficial (remove acentos, lowercase, descarta conectores PT-BR).
+    2. Considera match quando todos os tokens do ranking estão contidos
+       nos tokens do oficial — cobre `Nathan Carloto` ↔ `Nathan Carloto
+       Ferreira Dos Santos`, `Leandro Alves` ↔ `Leandro Marcelino Alves`
+       e `Thaís Cadó` ↔ `Thaís Salgado Cadó` (validado em mai/2026).
+    3. Quando 1 oficial bate, sobrescreve `executiva` pelo nome oficial
+       (canônico) — padroniza grafia entre as duas páginas.
+
+    Fallback intencional: se `df_oficiais` vier vazio/None, devolve o
+    ranking SEM filtro. A view chamadora decide se exibe aviso. Isso
+    evita derrubar o dashboard quando a FDW está indisponível.
+
+    Não usa `id_crm` ainda porque a view `bi.vw_dashboard_comercial_
+    executivas_rw` não expõe o ID Zoho da executiva — só o nome
+    resolvido via `zoho_users`. Evolução futura: passar a query para
+    fontes diretas (zoho_deals + zoho_users) expondo o ID e trocar este
+    filtro por INNER JOIN em `id_crm`.
+    """
+    if df_ranking is None or df_ranking.empty:
+        return df_ranking
+    if (df_oficiais is None or df_oficiais.empty
+            or "nome" not in df_oficiais.columns
+            or "executiva" not in df_ranking.columns):
+        return df_ranking
+
+    oficiais_tokens = []
+    for nome in df_oficiais["nome"].dropna().tolist():
+        toks = set(_tokens_nome_ranking(nome))
+        if toks:
+            oficiais_tokens.append((nome, toks))
+    if not oficiais_tokens:
+        return df_ranking
+
+    out = df_ranking.copy()
+    out["_nome_oficial"] = out["executiva"].apply(
+        lambda nome: _match_oficial_por_tokens(nome, oficiais_tokens)
+    )
+    out = out[out["_nome_oficial"] != ""].copy()
+    if out.empty:
+        return out.drop(columns=["_nome_oficial"])
+    out["executiva"] = out["_nome_oficial"]
+    return out.drop(columns=["_nome_oficial"]).reset_index(drop=True)
+
+
+def ranking_dividir_principal_detalhado(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Divide o ranking em `(principal, detalhado)`.
+
+    `principal` segue a ordem de `COLUNAS_PRINCIPAIS_RANKING`, descartando
+    silenciosamente qualquer coluna ausente — a UI não quebra quando a
+    view sofre schema drift. `detalhado` traz `executiva` como 1ª coluna
+    (quando existir) seguida das demais colunas que ficaram de fora da
+    principal, preservando a ordem original do df de entrada."""
+    if df is None or df.empty:
+        empty = pd.DataFrame()
+        return empty, empty
+
+    cols_principais = [c for c in COLUNAS_PRINCIPAIS_RANKING if c in df.columns]
+    df_principal = df[cols_principais].copy() if cols_principais else pd.DataFrame()
+
+    cols_resto = [c for c in df.columns if c not in cols_principais]
+    if "executiva" in df.columns and cols_resto:
+        cols_detalhe = ["executiva"] + [c for c in cols_resto if c != "executiva"]
+    else:
+        cols_detalhe = cols_resto
+    df_detalhado = df[cols_detalhe].copy() if cols_detalhe else pd.DataFrame()
+
+    return df_principal, df_detalhado
+
+
 def executivas_por_time(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "time_vendas" not in df.columns:
         return pd.DataFrame()
