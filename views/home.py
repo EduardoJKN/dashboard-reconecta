@@ -24,7 +24,12 @@ from src.transforms import (
     visao_geral_kpis,
 )
 from src.ui.charts import bar_ranked, receita_vs_meta_mensal
-from src.ui.components import hero_revenue_card, metric_card_v2, section_title
+from src.ui.components import (
+    hero_revenue_card,
+    metric_card_v2,
+    ranking_column_config,
+    section_title,
+)
 from src.ui.page import start_page
 from src.ui.theme import brl, brl_short, int_br, pct
 
@@ -264,31 +269,13 @@ if det_norm is not None and not det_norm.empty:
         det_norm = det_norm.loc[_mask_t].copy()
 
 # ---------------------------------------------------------------------------
-# Ranking enriquecido — base vem da view (executivas_ranking) e a coluna
-# `vencidos` é injetada via detalhe (a view bi.vw_dashboard_comercial_
-# executivas_rw ainda não expõe vencidos — estão lumpadas em agendamentos).
+# Ranking — `vencidos`, `agendamentos` (já líquido de `Vencida`) e todas as
+# demais métricas vêm direto da view `bi.vw_dashboard_comercial_executivas_rw`
+# (atualizada em mai/2026). Não há mais injeção do detalhe — `executivas_
+# ranking` agrega tudo num só groupby. `det_norm` continua sendo carregado
+# acima porque alimenta o painel de detalhe nome-a-nome do gráfico clicável.
 # ---------------------------------------------------------------------------
-ranking_raw = executivas_ranking(df_exec)
-if ranking_raw is None or ranking_raw.empty:
-    ranking_home = ranking_raw
-else:
-    ranking_home = ranking_raw.copy()
-    # Pcts/ticket já vêm calculados de executivas_ranking; aqui só
-    # garantimos a coluna `vencidos`.
-    if (det_norm is not None and not det_norm.empty
-            and "activity_id" in det_norm.columns):
-        _mask_v = vendas_detalhe_mask_por_metrica(
-            det_norm, "vencidos", ctx.data_ini, ctx.data_fim,
-        )
-        _agg_v = (det_norm.loc[_mask_v]
-                  .groupby("closer_filtro", as_index=False)
-                  .agg(vencidos=("activity_id", "nunique")))
-        _agg_v = _agg_v.rename(columns={"closer_filtro": "executiva"})
-        ranking_home = ranking_home.merge(
-            _agg_v, on="executiva", how="left",
-        ).fillna({"vencidos": 0})
-    else:
-        ranking_home["vencidos"] = 0
+ranking_home = executivas_ranking(df_exec)
 
 # ---------------------------------------------------------------------------
 # Filtro pelo time oficial ATIVO de Vendas (fdw_reconecta.executivas_vendas).
@@ -671,27 +658,18 @@ else:
     df_principal_home, df_detalhado_home = ranking_dividir_principal_detalhado(
         ranking_home
     )
-    # Os pcts vêm na escala 0–100 da view (ex.: 53.2258), então o format do
-    # NumberColumn só exibe o sufixo `%` sem multiplicar.
-    _ranking_col_cfg_home = {
-        "pct_comparecimento": st.column_config.NumberColumn(
-            "% Comparecimento", format="%.2f%%"),
-        "pct_conversao": st.column_config.NumberColumn(
-            "% Conversão", format="%.2f%%"),
-        "pct_vendas": st.column_config.NumberColumn(
-            "% Vendas", format="%.2f%%"),
-        "pct_recebimento": st.column_config.NumberColumn(
-            "% Recebimento", format="%.2f%%"),
-    }
     with st.expander("Ver ranking completo (todas as colunas/closers)"):
         st.dataframe(
             df_principal_home,
             use_container_width=True,
             hide_index=True,
-            column_config=_ranking_col_cfg_home,
+            column_config=ranking_column_config(df_principal_home),
         )
     if not df_detalhado_home.empty and len(df_detalhado_home.columns) > 1:
         with st.expander("Ver detalhes complementares do ranking"):
             st.dataframe(
-                df_detalhado_home, use_container_width=True, hide_index=True,
+                df_detalhado_home,
+                use_container_width=True,
+                hide_index=True,
+                column_config=ranking_column_config(df_detalhado_home),
             )

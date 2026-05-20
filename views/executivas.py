@@ -19,7 +19,7 @@ from src.transforms import (
     vendas_normalizar_detalhe,
 )
 from src.ui.charts import bar_ranked, bar_simple, line
-from src.ui.components import metric_card_v2, section_title
+from src.ui.components import metric_card_v2, ranking_column_config, section_title
 from src.ui.page import start_page
 from src.ui.theme import brl, int_br, pct
 
@@ -290,10 +290,11 @@ with tab_rank:
         det_norm = det_norm.loc[_mask_times].copy()
 
     # ------------------------------------------------------------------------
-    # Ranking enriquecido — base vem da view (executivas_ranking) com bucket
-    # do classif aplicado; coluna `vencidos` é injetada via detalhe porque
-    # a view bi.vw_dashboard_comercial_executivas_rw ainda não expõe vencidos
-    # (estão lumpadas em `agendamentos`). Mesmo padrão usado em prevendas.
+    # Ranking — base vem da view (executivas_ranking) com bucket do classif
+    # aplicado. `vencidos` agora vem direto da view (mai/2026) e
+    # `agendamentos` já é LÍQUIDO de `Vencida`, então o bucket selecionado
+    # propaga corretamente sem ajuste extra. `_apply_classif` não toca em
+    # `vencidos` — preservado como veio do groupby.
     # ------------------------------------------------------------------------
     ranking_raw = executivas_ranking(df)
     if ranking_raw.empty:
@@ -316,20 +317,6 @@ with tab_rank:
         else:
             ranking["pct_recebimento"] = 0.0
             ranking["ticket_medio"]    = 0.0
-
-        # Injeta `vencidos` a partir do detalhe (groupby closer_filtro). Match
-        # ranking.executiva == det_norm.closer_filtro — ambos usam
-        # TRIM(first_name||' '||last_name) via zoho_users.
-        if det_norm is not None and not det_norm.empty and "activity_id" in det_norm.columns:
-            _mask_venc = vendas_detalhe_mask_por_metrica(
-                det_norm, "vencidos", ctx.data_ini, ctx.data_fim)
-            _agg_venc = (det_norm.loc[_mask_venc]
-                         .groupby("closer_filtro", as_index=False)
-                         .agg(vencidos=("activity_id", "nunique")))
-            _agg_venc = _agg_venc.rename(columns={"closer_filtro": "executiva"})
-            ranking = ranking.merge(_agg_venc, on="executiva", how="left").fillna({"vencidos": 0})
-        else:
-            ranking["vencidos"] = 0
 
     # ------------------------------------------------------------------------
     # Filtro pelo time oficial ATIVO de Vendas (fdw_reconecta.executivas_vendas).
@@ -718,29 +705,20 @@ with tab_rank:
         # `ranking_dividir_principal_detalhado` em src/transforms.py.
         # ===================================================================
         df_principal, df_detalhado = ranking_dividir_principal_detalhado(ranking)
-        # Os pcts vêm na escala 0–100 da view (ex.: 53.2258), então o format
-        # do NumberColumn só exibe o sufixo `%` sem multiplicar.
-        _ranking_col_cfg = {
-            "pct_comparecimento": st.column_config.NumberColumn(
-                "% Comparecimento", format="%.2f%%"),
-            "pct_conversao": st.column_config.NumberColumn(
-                "% Conversão", format="%.2f%%"),
-            "pct_vendas": st.column_config.NumberColumn(
-                "% Vendas", format="%.2f%%"),
-            "pct_recebimento": st.column_config.NumberColumn(
-                "% Recebimento", format="%.2f%%"),
-        }
         with st.expander("Ver ranking completo (todas as colunas/closers)"):
             st.dataframe(
                 df_principal,
                 use_container_width=True,
                 hide_index=True,
-                column_config=_ranking_col_cfg,
+                column_config=ranking_column_config(df_principal),
             )
         if not df_detalhado.empty and len(df_detalhado.columns) > 1:
             with st.expander("Ver detalhes complementares do ranking"):
                 st.dataframe(
-                    df_detalhado, use_container_width=True, hide_index=True,
+                    df_detalhado,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=ranking_column_config(df_detalhado),
                 )
 
 with tab_time:

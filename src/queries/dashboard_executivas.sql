@@ -14,6 +14,11 @@ SELECT
     pct_comparecimento,
     perdidos,
     cancelados,
+    -- vencidos: a view agora expõe direto. Convenção pós-mai/2026:
+    -- `agendamentos` já vem LÍQUIDO de `Vencida`; o bruto se reconstrói
+    -- via `agendamentos + vencidos`. A coluna entra no ranking como
+    -- complementar (não é re-injetada via detalhe).
+    vencidos,
     novos,
     ascensoes,
     renovacoes,

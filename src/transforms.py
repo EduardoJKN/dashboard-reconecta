@@ -81,6 +81,10 @@ _EXEC_CLASSIF_SUM = [
 _EXEC_SUM = [
     "oportunidades", "agendamentos", "comparecimentos", "vendas",
     "montante", "receita", "perdidos", "cancelados",
+    # vencidos vem direto da view a partir de mai/2026; `agendamentos`
+    # passou a ser líquido (sem status `Vencida`). Não é re-injetado via
+    # detalhe — soma normal por executiva no groupby.
+    "vencidos",
     "novos", "ascensoes", "renovacoes", "indicacoes",
     "lead_in_consultoria_gratuita",
     *_EXEC_CLASSIF_SUM,
@@ -141,7 +145,7 @@ def executivas_por_dia(df: pd.DataFrame) -> pd.DataFrame:
 _RANKING_BASE_COLS = (
     "oportunidades", "agendamentos", "comparecimentos",
     "vendas", "montante", "receita",
-    "perdidos", "cancelados",
+    "perdidos", "cancelados", "vencidos",
     "novos", "ascensoes", "renovacoes", "indicacoes",
     "lead_in_consultoria_gratuita",
     *_EXEC_CLASSIF_SUM,
