@@ -13,8 +13,8 @@ from src.repositories import (
 )
 from src.transforms import (
     delta_pct,
+    executivas_filtrar_time_oficial,
     executivas_ranking,
-    executivas_ranking_oficiais,
     ranking_dividir_principal_detalhado,
     receita_por_mes,
     vendas_detalhe_filtrar_closer,
@@ -74,6 +74,32 @@ except Exception as e:
 
 df_exec = ctx.apply_filters(df_exec_all, col_map)
 
+# ---------------------------------------------------------------------------
+# Filtro pelo TIME OFICIAL ATIVO (fdw_reconecta.executivas_vendas WHERE
+# ativo='y'). Aplicado AQUI, no grão linha-a-linha, ANTES de qualquer
+# `visao_geral_kpis` / `receita_por_mes` / `executivas_ranking` — garante
+# que cards do hero, Receita mensal, Top Closers e tabelas vivam no MESMO
+# universo. Sobrescreve `executiva` pelo nome oficial canônico já aqui,
+# tornando `executivas_ranking_oficiais` no ranking redundante.
+# Aplicado também a `df_exec_prev` para o delta vs período anterior ser
+# apples-to-apples (mesmo universo de pessoas dos dois lados).
+# Fallback silencioso: FDW indisponível → segue inteiro + caption.
+# ---------------------------------------------------------------------------
+try:
+    _df_oficiais_home = get_executivas_oficiais()
+    _falha_oficiais_home = False
+except Exception:
+    _df_oficiais_home = None
+    _falha_oficiais_home = True
+
+if _df_oficiais_home is not None and not _df_oficiais_home.empty:
+    df_exec = executivas_filtrar_time_oficial(df_exec, _df_oficiais_home)
+elif _falha_oficiais_home:
+    st.caption(
+        "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
+        "página exibida sem o filtro do time oficial."
+    )
+
 if df_exec.empty:
     st.warning("Nenhum registro para o filtro atual.")
     st.stop()
@@ -84,6 +110,10 @@ prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias_periodo - 1)
 try:
     df_exec_prev = ctx.refilter(get_executivas(prev_ini, prev_fim), col_map)
+    if _df_oficiais_home is not None and not _df_oficiais_home.empty:
+        df_exec_prev = executivas_filtrar_time_oficial(
+            df_exec_prev, _df_oficiais_home,
+        )
     df_inv_prev = get_investimento_diario(prev_ini, prev_fim)
 except Exception:
     df_exec_prev = df_exec.iloc[0:0]
@@ -277,30 +307,9 @@ if det_norm is not None and not det_norm.empty:
 # ---------------------------------------------------------------------------
 ranking_home = executivas_ranking(df_exec)
 
-# ---------------------------------------------------------------------------
-# Filtro pelo time oficial ATIVO de Vendas (fdw_reconecta.executivas_vendas).
-# Aplicado AQUI — antes do gráfico e das tabelas — para que gráfico, tabela
-# principal e tabela complementar consumam o mesmo universo já enxuto.
-# Fallback silencioso: se a FDW falhar/vier vazia, mantém o ranking inteiro
-# e exibe caption discreto. Evita derrubar a página por falha de fonte
-# externa. Match por nome normalizado (token-based, ver
-# `executivas_ranking_oficiais` em src/transforms.py). Evolução prevista:
-# trocar p/ INNER JOIN por id_crm quando a view expor o ID Zoho.
-# ---------------------------------------------------------------------------
-try:
-    _df_oficiais_home = get_executivas_oficiais()
-    _falha_oficiais_home = False
-except Exception:
-    _df_oficiais_home = None
-    _falha_oficiais_home = True
-
-if _df_oficiais_home is not None and not _df_oficiais_home.empty:
-    ranking_home = executivas_ranking_oficiais(ranking_home, _df_oficiais_home)
-elif _falha_oficiais_home:
-    st.caption(
-        "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
-        "ranking mostrado sem o filtro do time oficial."
-    )
+# Filtro do time oficial JÁ FOI APLICADO no topo da página, no grão linha-a-
+# linha (sobre `df_exec`). Logo `ranking_home` só tem oficiais com nome
+# canônico — não é preciso chamar `executivas_ranking_oficiais` de novo.
 
 # ---------------------------------------------------------------------------
 # Header — label da métrica precisa ser resolvido ANTES das colunas

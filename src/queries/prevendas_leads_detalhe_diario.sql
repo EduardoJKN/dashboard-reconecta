@@ -110,6 +110,8 @@ closer_resolved AS (
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Leonardo Patriota%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Nathan Carloto%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Camile Silveira%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Henrique Gonçalves%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Henrique Goncalves%'
                 THEN 'Time do Marcelo'
             ELSE 'Sem time definido'
         END                                                         AS time_vendas

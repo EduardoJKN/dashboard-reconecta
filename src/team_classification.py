@@ -52,7 +52,7 @@ CLOSER_UNKNOWN_LABEL = "Closer não classificado"
 TIMES_CLOSER: dict[str, list[str]] = {
     "Time Leidianne": ["Hawinne", "Thaís", "Andrezza", "Nathally"],
     "Time Marcelo":   ["Nathan", "Leonardo Melo Patriota", "Leandro Alves",
-                       "Camile Silveira"],
+                       "Camile Silveira", "Henrique Gonçalves"],
 }
 
 TIPOS_SDR: dict[str, list[str]] = {

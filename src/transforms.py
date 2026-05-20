@@ -261,6 +261,54 @@ def _match_oficial_por_tokens(nome_ranking: str,
     return ""
 
 
+def executivas_filtrar_time_oficial(
+    df: pd.DataFrame,
+    df_oficiais: pd.DataFrame,
+) -> pd.DataFrame:
+    """Filtra `df` linha-a-linha — só mantém rows cuja `executiva` pertence
+    ao cadastro oficial ativo do Vendas (`fdw_reconecta.executivas_vendas`).
+
+    Grão de entrada: 1 row por `(data_ref × executiva × time_vendas × …)`,
+    saída de `get_executivas()`. Aplica a mesma regra de tokens usada em
+    `executivas_ranking_oficiais` (subset de tokens normalizados, sem
+    conectores PT-BR) e sobrescreve `executiva` pelo nome OFICIAL canônico
+    já no nível das linhas — assim `executivas_kpis`, `executivas_por_dia`,
+    `executivas_por_time` e `executivas_ranking`, que vão consumir esse
+    `df` depois, operam todos no mesmo universo e com a mesma grafia.
+
+    Depois desse filtro, chamar de novo `executivas_ranking_oficiais` no
+    ranking agregado vira no-op (todo nome já é oficial). Mantida como
+    função pública para casos onde só o ranking pré-agregado existe (ex.:
+    fontes que vêm de outras queries).
+
+    Fallback: `df_oficiais` None/vazio ou sem coluna `nome` → devolve `df`
+    intacto. Caller decide se exibe aviso.
+    """
+    if df is None or df.empty or "executiva" not in df.columns:
+        return df
+    if (df_oficiais is None or df_oficiais.empty
+            or "nome" not in df_oficiais.columns):
+        return df
+
+    oficiais_tokens: list[tuple[str, set[str]]] = []
+    for nome in df_oficiais["nome"].dropna().tolist():
+        toks = set(_tokens_nome_ranking(nome))
+        if toks:
+            oficiais_tokens.append((nome, toks))
+    if not oficiais_tokens:
+        return df
+
+    out = df.copy()
+    out["_nome_oficial"] = out["executiva"].apply(
+        lambda nome: _match_oficial_por_tokens(nome, oficiais_tokens)
+    )
+    out = out[out["_nome_oficial"] != ""].copy()
+    if out.empty:
+        return out.drop(columns=["_nome_oficial"])
+    out["executiva"] = out["_nome_oficial"]
+    return out.drop(columns=["_nome_oficial"]).reset_index(drop=True)
+
+
 def executivas_ranking_oficiais(
     df_ranking: pd.DataFrame,
     df_oficiais: pd.DataFrame,

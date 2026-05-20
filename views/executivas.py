@@ -7,11 +7,11 @@ from src.repositories import (
     get_vendas_leads_detalhe_diario,
 )
 from src.transforms import (
+    executivas_filtrar_time_oficial,
     executivas_kpis,
     executivas_por_dia,
     executivas_por_time,
     executivas_ranking,
-    executivas_ranking_oficiais,
     ranking_dividir_principal_detalhado,
     vendas_detalhe_filtrar_closer,
     vendas_detalhe_filtrar_time,
@@ -103,6 +103,30 @@ except Exception as e:
     st.stop()
 
 df = ctx.apply_filters(df_all, {"times": "time_vendas"})
+
+# ---------------------------------------------------------------------------
+# Filtro pelo TIME OFICIAL ATIVO (fdw_reconecta.executivas_vendas WHERE
+# ativo='y'). Aplicado AQUI, no grão linha-a-linha, ANTES de qualquer
+# `executivas_*(df)` — garante que funil, Resumo do período, ranking, "Por
+# time" e "Evolução" vivam no MESMO universo. Sobrescreve `executiva` pelo
+# nome oficial canônico (Nathan Carloto → Nathan Carloto Ferreira Dos Santos,
+# etc.) já aqui — torna `executivas_ranking_oficiais` no ranking redundante.
+# Fallback silencioso: FDW indisponível → df segue inteiro + caption.
+# ---------------------------------------------------------------------------
+try:
+    _df_oficiais = get_executivas_oficiais()
+    _falha_oficiais = False
+except Exception:
+    _df_oficiais = None
+    _falha_oficiais = True
+
+if _df_oficiais is not None and not _df_oficiais.empty:
+    df = executivas_filtrar_time_oficial(df, _df_oficiais)
+elif _falha_oficiais:
+    st.caption(
+        "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
+        "página exibida sem o filtro do time oficial."
+    )
 
 if df.empty:
     st.warning("Sem dados para o filtro atual.")
@@ -319,31 +343,10 @@ with tab_rank:
             ranking["ticket_medio"]    = 0.0
 
     # ------------------------------------------------------------------------
-    # Filtro pelo time oficial ATIVO de Vendas (fdw_reconecta.executivas_vendas).
-    # Aplicado AQUI — antes do gráfico e das tabelas — para que gráfico,
-    # tabela principal e tabela complementar consumam o mesmo universo já
-    # enxuto. Fallback silencioso: se a FDW falhar/vier vazia, mantém o
-    # ranking inteiro e exibe caption discreto. Match por nome normalizado
-    # (token-based, ver `executivas_ranking_oficiais` em src/transforms.py).
-    # Evolução prevista: trocar por INNER JOIN em id_crm quando a view
-    # expor o ID Zoho da executiva.
-    # ------------------------------------------------------------------------
-    try:
-        _df_oficiais_exec = get_executivas_oficiais()
-        _falha_oficiais_exec = False
-    except Exception:
-        _df_oficiais_exec = None
-        _falha_oficiais_exec = True
-
-    if (ranking is not None and not ranking.empty
-            and _df_oficiais_exec is not None and not _df_oficiais_exec.empty):
-        ranking = executivas_ranking_oficiais(ranking, _df_oficiais_exec)
-    elif _falha_oficiais_exec:
-        st.caption(
-            "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
-            "ranking mostrado sem o filtro do time oficial."
-        )
-
+    # Filtro do time oficial JÁ FOI APLICADO no topo da página, no grão
+    # linha-a-linha (sobre `df`). Logo, `ranking` aqui já só tem oficiais
+    # com nome canônico — não é preciso chamar `executivas_ranking_oficiais`
+    # de novo nem repetir o try/except da FDW.
     # ------------------------------------------------------------------------
     # Header — label da métrica precisa ser resolvido ANTES das colunas
     # (o selectbox vive em col_grafico, mas o título fica acima das duas).
