@@ -183,6 +183,17 @@ WHERE
     -- Todos os resultados: retorna todas as vendas do período sem filtro.
     :item_norm = '__todos__'
 
+    -- Totais vinculados aos leads: vendas com lead atribuído E utm do
+    -- nível preenchido (= universo realmente vinculado dentro do funil).
+    OR (
+        :item_norm = '__vinculados__'
+        AND dal_lead_id IS NOT NULL
+        AND (
+            (:nivel = 'criativo' AND COALESCE(utm_content_norm, '') <> '')
+            OR (:nivel = 'campanha' AND COALESCE(utm_campaign_norm, '') <> '')
+        )
+    )
+
     -- Bucket sintético: vendas sem lead atribuído OU lead sem o utm do nível.
     OR (
         :item_norm IN ('__sem_criativo_identificado__',
@@ -197,6 +208,7 @@ WHERE
     OR (
         :nivel = 'criativo'
         AND :item_norm NOT IN ('__todos__',
+                                '__vinculados__',
                                 '__sem_criativo_identificado__',
                                 '__sem_campanha_identificada__')
         AND utm_content_norm = :item_norm
@@ -205,6 +217,7 @@ WHERE
     OR (
         :nivel = 'campanha'
         AND :item_norm NOT IN ('__todos__',
+                                '__vinculados__',
                                 '__sem_criativo_identificado__',
                                 '__sem_campanha_identificada__')
         AND utm_campaign_norm = :item_norm

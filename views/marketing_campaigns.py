@@ -21,6 +21,11 @@ from src.marketing_queries import (
     get_mkt_paginas_variantes,
 )
 from src.marketing_safe import safe_run
+from src.repositories import (
+    get_executivas,
+    get_investimento_diario,
+    get_leads_visao_geral,
+)
 from src.marketing_transforms import (
     CANAIS_PAGOS,
     agregar_campanhas_por_utm,
@@ -197,14 +202,56 @@ df_camp_funil = safe_run(
     view_label="mkt_campanha_funil",
 )
 
+# Totais OFICIAIS do período — mesma lógica documentada em
+# views/marketing_creatives.py. Cache compartilhado com Visão Geral.
+_df_leads_oficial_camp = safe_run(
+    lambda: get_leads_visao_geral(ctx.data_ini, ctx.data_fim),
+    view_label="leads_visao_geral",
+)
+_leads_totais_oficial_camp = (
+    int(len(_df_leads_oficial_camp))
+    if _df_leads_oficial_camp is not None and not _df_leads_oficial_camp.empty
+    else None
+)
+
+_df_exec_oficial_camp = safe_run(
+    lambda: get_executivas(ctx.data_ini, ctx.data_fim),
+    view_label="dashboard_executivas",
+)
+_vendas_novas_oficial_camp = (
+    int(_df_exec_oficial_camp["vendas"].fillna(0).sum())
+    if (_df_exec_oficial_camp is not None and not _df_exec_oficial_camp.empty
+        and "vendas" in _df_exec_oficial_camp.columns) else None
+)
+
+_df_inv_oficial_camp = safe_run(
+    lambda: get_investimento_diario(ctx.data_ini, ctx.data_fim),
+    view_label="investimento_diario",
+)
+_investimento_oficial_camp = (
+    float(_df_inv_oficial_camp["investimento_total"].fillna(0).sum())
+    if (_df_inv_oficial_camp is not None and not _df_inv_oficial_camp.empty
+        and "investimento_total" in _df_inv_oficial_camp.columns) else None
+)
+
 render_funil_selecionado(
     df_funil=df_camp_funil,
     key_col="campaign_name_norm",
     entity_label="Campanha",
     section_title_text="Funil da campanha selecionada",
     sel_state_key="camp_funil_selecionado",
-    lista_fn=lista_campanhas_funil,
-    kpis_fn=campanha_funil_kpis,
+    lista_fn=lambda df, sb: lista_campanhas_funil(
+        df, sb,
+        leads_totais_oficial=_leads_totais_oficial_camp,
+        vendas_novas_oficial=_vendas_novas_oficial_camp,
+        investimento_oficial=_investimento_oficial_camp,
+    ),
+    kpis_fn=lambda df, sel: campanha_funil_kpis(
+        df, sel,
+        leads_totais_oficial=_leads_totais_oficial_camp,
+        vendas_novas_oficial=_vendas_novas_oficial_camp,
+        investimento_oficial=_investimento_oficial_camp,
+    ),
     etapas_fn=campanha_funil_etapas,
     data_ini=ctx.data_ini,
     data_fim=ctx.data_fim,
@@ -212,26 +259,45 @@ render_funil_selecionado(
     auditoria_state_key="camp_funil_auditoria",
     empty_msg="Sem campanhas com investimento ou leads no período.",
     caption=(
-        "Funil por campanha usa `campaign_name = utm_campaign`. Campanhas "
-        "sem match podem aparecer sem leads atribuídos."
+        "Campanhas usam `utm_campaign` como origem principal. Vendas são "
+        "atribuídas ao lead histórico por e-mail/telefone antes da compra."
     ),
     expander_md=(
-        "- **Match:** `lower(btrim(campaign_name)) = "
-        "  lower(btrim(utm_campaign))`.\n"
-        "- **`campaign_id`** não está populado nos leads — esse é o melhor "
-        "  match disponível hoje (mesma situação do `ad_id` no funil de "
-        "  criativos).\n"
-        "- **Granularidade:** consolidado por `campaign_name`. Múltiplos "
-        "  `campaign_id` do mesmo nome (cópias/CBO) somam mídia mas não "
-        "  inflam leads (utm_campaign é o nome).\n"
-        "- **Lead → deal:** priority match `zoho_id > session_id > email` "
-        "  (mesma regra Visão Geral / Growth / Funil criativos).\n"
-        "- **Agendamentos / Comparecimentos:** leads únicos com activity "
-        "  `Consulta` ou `Indicação` em `zoho_activities` ligada via "
-        "  `what_id = deal_id`. Comparecimento exige "
+        "- **Universo do funil:** `ext_reconecta.leads` no período, com "
+        "  `utm_campaign` definindo a campanha do lead.\n"
+        "- **Match lead → deal (vendas):** prioridade `e-mail` "
+        "  (primário) → `telefone` limpo ≥ 8 dígitos (fallback). "
+        "  `zoho_id` e `session_id` foram REMOVIDOS — operação validou "
+        "  que e-mail é mais confiável.\n"
+        "- **Atribuição cross-período:** a venda fica no período de "
+        "  `data_hora_compra`, mas o lead atribuído pode ter sido criado "
+        "  ANTES. Para cada deal ganho, o sistema busca o lead histórico "
+        "  com `created_at <= data_hora_compra`.\n"
+        "- **Desempate quando >1 lead casa o mesmo deal:**\n"
+        "  1. match por e-mail vence telefone;\n"
+        "  2. lead com origem útil (utm/link_in_bio/social) vence;\n"
+        "  3. aparição mais recente antes da venda;\n"
+        "  4. `lead_id` (determinístico).\n"
+        "- **'Todos os resultados':** totais oficiais do período — leads "
+        "  daily-distinct por e-mail (regra Visão Geral), vendas novas do "
+        "  CRM, investimento total de mídia.\n"
+        "- **'Totais vinculados aos leads':** soma per-campanha do funil "
+        "  — só o que foi de fato vinculado/atribuído (útil pra auditoria "
+        "  vs. universo oficial).\n"
+        "- **Leads / +12 / -12 / Agendamentos / Comparecimentos:** "
+        "  lead-centric, 1 e-mail conta 1× por campanha "
+        "  (`COUNT(DISTINCT email_norm)`).\n"
+        "- **Agendamentos:** atividades `Consulta` ou `Indicação` em "
+        "  `zoho_activities` no período, **excluindo `status_reuniao` "
+        "  vencido** (`COALESCE(status_reuniao,'') NOT ILIKE '%vencid%'`) — "
+        "  alinhado com a regra da Visão Geral comercial.\n"
+        "- **Comparecimentos:** subset dos agendamentos com "
         "  `status_reuniao = 'Concluída'`.\n"
-        "- **Vendas novas:** deals com `stage IN ('Ganho','Fechado Ganho')` "
-        "  e `tipo_venda = 'Novo cliente'`."
+        "- **Vendas novas:** deal-centric — 1 row por deal (sem "
+        "  duplicação), `stage IN ('Ganho','Fechado Ganho')` e "
+        "  `tipo_venda = 'Novo cliente'`.\n"
+        "- **Filtros de e-mail de teste:** `@teste`, `teste@`, `smarts`, "
+        "  `reconecta` removidos do universo de leads em todas as etapas."
     ),
 )
 

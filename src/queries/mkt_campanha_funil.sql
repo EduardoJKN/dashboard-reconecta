@@ -91,6 +91,10 @@ midia_principal AS (
 -- -----------------------------------------------------------------------------
 -- `leads_clean`: base do PERÍODO. Usada para contagens lead-centric
 -- (leads/+12-12-NA/agendamentos/comparecimentos da campanha no período).
+-- A partir de mai/2026 NÃO filtra `utm_campaign IS NOT NULL` — leads sem
+-- utm_campaign viram o bucket sintético `__sem_campanha_identificada__`
+-- via COALESCE em `distinct_email_campanha`. Antes esses leads sumiam do
+-- somatório do funil; agora aparecem como cidadãos próprios.
 leads_clean AS (
     SELECT
         l.id::text                                              AS lead_id,
@@ -99,7 +103,7 @@ leads_clean AS (
         regexp_replace(COALESCE(l.phone_number, ''), '\D', '', 'g') AS phone_clean,
         l.classificado,
         l.created_at,
-        lower(btrim(l.utm_campaign))                            AS utm_campaign_norm
+        NULLIF(lower(btrim(l.utm_campaign)), '')                AS utm_campaign_norm
     FROM ext_reconecta.leads l
     WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
       AND l.email IS NOT NULL
@@ -108,8 +112,6 @@ leads_clean AS (
       AND lower(l.email) NOT LIKE 'teste@%'
       AND lower(l.email) NOT LIKE '%smarts%'
       AND lower(l.email) NOT LIKE '%reconecta%'
-      AND l.utm_campaign IS NOT NULL
-      AND btrim(l.utm_campaign) <> ''
 ),
 -- `leads_atribuicao_vendas`: base CROSS-PERÍODO (até :data_fim como
 -- pré-filtro de performance; restrição precisa `l.created_at <= d.data_hora_compra`
@@ -149,9 +151,14 @@ leads_atribuicao_vendas AS (
       AND lower(l.email) NOT LIKE '%reconecta%'
 ),
 -- 1 linha por (utm_campaign_norm, e-mail) — period-distinct. Permite que o
--- mesmo e-mail conte 1× em CADA campanha onde apareceu.
+-- mesmo e-mail conte 1× em CADA campanha onde apareceu. Leads sem
+-- utm_campaign caem no bucket `__sem_campanha_identificada__` via COALESCE
+-- (leads_clean já entrega utm_campaign_norm como NULL quando ausente).
 distinct_email_campanha AS (
-    SELECT DISTINCT utm_campaign_norm, email_norm
+    SELECT DISTINCT
+        COALESCE(utm_campaign_norm, '__sem_campanha_identificada__')
+                                                            AS utm_campaign_norm,
+        email_norm
     FROM leads_clean
 ),
 -- Última classificação POR E-MAIL no período (regra global, igual à
@@ -239,6 +246,12 @@ leads_with_deal AS (
 --    `deals_ganhos` (deal-centric, sem inflar por múltiplas atividades).
 -- -----------------------------------------------------------------------------
 activities_in_window AS (
+    -- Exclui atividades com `status_reuniao` vencido (qualquer variação
+    -- de grafia). Alinha com a regra da view bi.vw_dashboard_comercial_
+    -- executivas_rw pós-mai/2026: `agendamentos` é líquido de Vencida.
+    -- `status_reuniao = NULL` passa (defensivo). Comparecimento exige
+    -- 'Concluída', então vencidos já estariam fora do compar — o filtro
+    -- pesa só em `agendamentos`.
     SELECT
         lwd.email_norm,
         za.id            AS activity_id,
@@ -248,6 +261,7 @@ activities_in_window AS (
     WHERE lwd.deal_id IS NOT NULL
       AND za.activity_type IN ('Consulta', 'Indicação')
       AND za.start_datetime::date BETWEEN :data_ini AND :data_fim
+      AND COALESCE(za.status_reuniao, '') NOT ILIKE '%vencid%'
 ),
 agend_compar_por_campanha AS (
     SELECT
