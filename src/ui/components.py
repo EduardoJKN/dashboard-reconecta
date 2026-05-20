@@ -5,9 +5,62 @@ import html
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+import pandas as pd
 import streamlit as st
 
 from .theme import GLOBAL_CSS
+
+
+# ---------------------------------------------------------------------------
+# Column config — tabelas de ranking (Time de Vendas → Visão Geral e
+# Executivas & Times). Compartilhado entre as duas páginas para garantir
+# consistência visual e evitar drift. As colunas % vêm da view já na
+# escala 0–100, então o format só anexa o sufixo `%` (não multiplica).
+# Moeda fica sem casas decimais por preferência do dashboard atual.
+# ---------------------------------------------------------------------------
+
+_RANKING_MOEDA_LABELS: dict[str, str] = {
+    "montante":           "Montante",
+    "receita":            "Receita",
+    "ticket_medio":       "Ticket médio",
+    "montante_mais_12":   "Montante +12",
+    "montante_menos_12":  "Montante -12",
+    "montante_nao_atua":  "Montante Não atua",
+    "receita_mais_12":    "Receita +12",
+    "receita_menos_12":   "Receita -12",
+    "receita_nao_atua":   "Receita Não atua",
+}
+
+_RANKING_PCT_LABELS: dict[str, str] = {
+    "pct_comparecimento": "% Comparecimento",
+    "pct_conversao":      "% Conversão",
+    "pct_vendas":         "% Vendas",
+    "pct_recebimento":    "% Recebimento",
+    "pct_agendamento":    "% Agendamento",
+}
+
+
+def ranking_column_config(df: pd.DataFrame) -> dict:
+    """`column_config` p/ um df de ranking (principal ou complementar).
+
+    Devolve só configs das colunas presentes no df — passar o dict pelo
+    `st.dataframe(..., column_config=...)` em tabelas que não têm todas
+    essas colunas não gera warning.
+
+    - Moeda: `R$ %.0f` (sem casas decimais, padrão do dashboard).
+    - Percentual: `%.2f%%` (valores já vêm na escala 0–100, sem
+      multiplicação).
+    """
+    if df is None or getattr(df, "empty", True):
+        return {}
+    cfg: dict = {}
+    for col, label in _RANKING_MOEDA_LABELS.items():
+        if col in df.columns:
+            cfg[col] = st.column_config.NumberColumn(label, format="R$ %.0f")
+    for col, label in _RANKING_PCT_LABELS.items():
+        if col in df.columns:
+            cfg[col] = st.column_config.NumberColumn(label, format="%.2f%%")
+    return cfg
 
 
 # ---------------------------------------------------------------------------
