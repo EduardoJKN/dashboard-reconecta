@@ -97,6 +97,69 @@ def get_leads_visao_geral(data_ini: date, data_fim: date) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo One Page (Pré-vendas por fonte)…")
+def get_one_page_prevendas_por_fonte(data_ini: date,
+                                     data_fim: date) -> pd.DataFrame:
+    """Série diária por FONTE de Pré-vendas (regra `origem_final` Looker).
+
+    1 row por (data_ref, fonte ∈ {'Inbound','Fábrica','Outbound'}).
+    Substitui a quebra INBOUND/SS via `tipo_sdr` nos cards específicos
+    da One Page (Consultas hoje IN/SS, Comparec IN/SS, Agend ±12 IN/SS).
+
+    Não substitui o consolidado de Pré-vendas (esse continua via
+    `get_prevendas_overview_diario` + `prevendas_overview_kpis`). A soma
+    INBOUND + Fábrica + Outbound bate com o consolidado porque ambos
+    descartam activities órfãs (`what_id` sem deal pareado).
+
+    Colunas: data_ref, fonte, oportunidades, agendamentos_criados,
+    agendamentos (líquido), agendamentos_vencidos, ±12 buckets,
+    *_ate_hoje variants (só start_datetime <= CURRENT_DATE),
+    perc_agendamentos_mais_12, comparecimentos, comparecimentos_ate_hoje,
+    perc_comparecimento, perc_comparecimento_ate_hoje, vendas,
+    montante, receita.
+
+    Validado abr/2026: Fábrica 132 / Inbound 383 / Outbound 3 (= 518
+    agend líquidos = consolidado prev_dia).
+    """
+    df = run_sql_file(
+        "one_page_prevendas_por_fonte.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty and "data_ref" in df.columns:
+        df["data_ref"] = pd.to_datetime(df["data_ref"])
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo One Page (regra legada)…")
+def get_one_page_legacy_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Série diária da One Page seguindo a regra LEGADA do Looker.
+
+    Diferente de `get_mkt_visao_geral_diario` em duas dimensões:
+      1. "Aplicações" vem de `fdw_reconecta.typeform_aplicacoes`
+         (e-mail único/dia), NÃO de `ext_reconecta.leads.classificado`.
+      2. "Investimento" vem de `fdw_reconecta.anuncios` excluindo
+         campanhas `REL_02*`, NÃO de `bi.vw_investimento_diario`.
+         (Diferença típica de R$ 10–20 vs o total geral — corresponde
+         ao Google Ads, que a fdw da Meta não cobre.)
+
+    Colunas devolvidas (1 row por data_ref):
+      data_ref · novos_leads · novas_aplicacoes ·
+      aplicacoes_mais_12 · aplicacoes_menos_12 · aplicacoes_nao_atua ·
+      agendamentos · emails_com_agendamento ·
+      aplicacoes_com_agendamento · aplicacoes_*_com_agendamento (+12/-12/nao_atua) ·
+      investimento
+
+    Validado abr/2026: novos_leads=854, novas_aplicacoes=701,
+    aplicacoes_+12=233, -12=392, nao_atua=77, agendamentos=510,
+    investimento R$ 102.185,30.
+    """
+    df = run_sql_file(
+        "one_page_legacy_diario.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty and "data_ref" in df.columns:
+        df["data_ref"] = pd.to_datetime(df["data_ref"])
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo média móvel de vendas…")
 def get_media_movel_vendas() -> float:
     """Média móvel de vendas ganhas — sempre relativa a CURRENT_DATE.

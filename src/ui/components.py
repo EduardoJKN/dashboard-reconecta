@@ -40,7 +40,7 @@ _RANKING_PCT_LABELS: dict[str, str] = {
 }
 
 
-def ranking_column_config(df: pd.DataFrame) -> dict:
+def ranking_column_config(df: pd.DataFrame, pin_executiva: bool = False) -> dict:
     """`column_config` p/ um df de ranking (principal ou complementar).
 
     Devolve só configs das colunas presentes no df — passar o dict pelo
@@ -50,10 +50,15 @@ def ranking_column_config(df: pd.DataFrame) -> dict:
     - Moeda: `R$ %.0f` (sem casas decimais, padrão do dashboard).
     - Percentual: `%.2f%%` (valores já vêm na escala 0–100, sem
       multiplicação).
+    - `pin_executiva=True` fixa a coluna `executiva` à esquerda — usar
+      na tabela detalhada, onde o scroll horizontal esconde o nome da
+      closer.
     """
     if df is None or getattr(df, "empty", True):
         return {}
     cfg: dict = {}
+    if pin_executiva and "executiva" in df.columns:
+        cfg["executiva"] = st.column_config.Column(pinned=True)
     for col, label in _RANKING_MOEDA_LABELS.items():
         if col in df.columns:
             cfg[col] = st.column_config.NumberColumn(label, format="R$ %.0f")

@@ -222,6 +222,23 @@ _investimento_oficial = (
         and "investimento_total" in _df_inv_oficial.columns) else None
 )
 
+# Caption diagnóstica — sinaliza quando algum total oficial não carregou.
+# Sem isso, 'Todos os resultados' cai pra soma do df sem aviso, e a
+# operação não consegue distinguir "está certo" de "está em fallback".
+_oficiais_status_cri = [
+    ("leads",       _leads_totais_oficial),
+    ("vendas",      _vendas_novas_oficial),
+    ("investimento", _investimento_oficial),
+]
+_oficiais_faltando_cri = [k for k, v in _oficiais_status_cri if v is None]
+if _oficiais_faltando_cri:
+    st.caption(
+        "⚠ Fonte oficial indisponível para: "
+        + ", ".join(f"`{k}`" for k in _oficiais_faltando_cri)
+        + ". 'Todos os resultados' está em modo soma do df (= 'Totais "
+        "vinculados aos leads')."
+    )
+
 render_funil_selecionado(
     df_funil=df_cri_funil,
     key_col="ad_name_norm",

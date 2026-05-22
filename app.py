@@ -41,6 +41,11 @@ with st.sidebar:
 # Marketing → Pré-vendas → Vendas
 # -----------------------------------------------------------------------------
 pages = {
+    # Item independente, sem cabeçalho de seção (chave vazia). Fica acima
+    # dos blocos de Marketing/Pré-vendas/Vendas — visão executiva pro CEO.
+    "": [
+        st.Page("views/one_page.py", title="One Page"),
+    ],
     "Time de Marketing": [
         st.Page("views/marketing_overview.py",  title="Visão Geral Marketing"),
         st.Page("views/marketing_campaigns.py", title="Campanhas"),

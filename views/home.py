@@ -680,5 +680,5 @@ else:
                 df_detalhado_home,
                 use_container_width=True,
                 hide_index=True,
-                column_config=ranking_column_config(df_detalhado_home),
+                column_config=ranking_column_config(df_detalhado_home, pin_executiva=True),
             )

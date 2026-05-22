@@ -721,7 +721,7 @@ with tab_rank:
                     df_detalhado,
                     use_container_width=True,
                     hide_index=True,
-                    column_config=ranking_column_config(df_detalhado),
+                    column_config=ranking_column_config(df_detalhado, pin_executiva=True),
                 )
 
 with tab_time:

@@ -234,6 +234,23 @@ _investimento_oficial_camp = (
         and "investimento_total" in _df_inv_oficial_camp.columns) else None
 )
 
+# Caption diagnóstica — sinaliza quando algum total oficial não carregou.
+# Sem isso, 'Todos os resultados' cai pra soma do df sem aviso, e a
+# operação não consegue distinguir "está certo" de "está em fallback".
+_oficiais_status_camp = [
+    ("leads",       _leads_totais_oficial_camp),
+    ("vendas",      _vendas_novas_oficial_camp),
+    ("investimento", _investimento_oficial_camp),
+]
+_oficiais_faltando_camp = [k for k, v in _oficiais_status_camp if v is None]
+if _oficiais_faltando_camp:
+    st.caption(
+        "⚠ Fonte oficial indisponível para: "
+        + ", ".join(f"`{k}`" for k in _oficiais_faltando_camp)
+        + ". 'Todos os resultados' está em modo soma do df (= 'Totais "
+        "vinculados aos leads')."
+    )
+
 render_funil_selecionado(
     df_funil=df_camp_funil,
     key_col="campaign_name_norm",
