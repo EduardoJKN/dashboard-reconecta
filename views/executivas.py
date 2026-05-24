@@ -713,7 +713,7 @@ with tab_rank:
                 df_principal,
                 use_container_width=True,
                 hide_index=True,
-                column_config=ranking_column_config(df_principal),
+                column_config=ranking_column_config(df_principal, pin_executiva=True),
             )
         if not df_detalhado.empty and len(df_detalhado.columns) > 1:
             with st.expander("Ver detalhes complementares do ranking"):

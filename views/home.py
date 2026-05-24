@@ -672,7 +672,7 @@ else:
             df_principal_home,
             use_container_width=True,
             hide_index=True,
-            column_config=ranking_column_config(df_principal_home),
+            column_config=ranking_column_config(df_principal_home, pin_executiva=True),
         )
     if not df_detalhado_home.empty and len(df_detalhado_home.columns) > 1:
         with st.expander("Ver detalhes complementares do ranking"):
