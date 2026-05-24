@@ -172,7 +172,7 @@ with st.expander("Detalhamento diário (tabela completa)"):
     st.dataframe(
         tabela, use_container_width=True, hide_index=True,
         column_config={
-            "data_ref":            st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+            "data_ref":            st.column_config.DateColumn("Data", format="DD/MM/YYYY", pinned=True),
             "investimento_total":  st.column_config.NumberColumn("Investimento", format="R$ %.2f"),
             "receita":             st.column_config.NumberColumn("Receita realizada", format="R$ %.0f"),
             "receita_projetada":   st.column_config.NumberColumn("Receita projetada", format="R$ %.0f"),
