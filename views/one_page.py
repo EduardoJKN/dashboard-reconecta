@@ -99,9 +99,11 @@ def _sum(df: pd.DataFrame, col: str) -> float:
 
 _OP_CARD_CSS = """
 <style>
-/* Layout central — label/valor/hint empilhados e centrados.
-   Delta vira anotação no canto top-right (position: absolute), sem
-   competir com o label nem ocupar coluna na .op-head. */
+/* Layout central — header(label + delta) / valor / hint / badges empilhados.
+   Antes o delta era position: absolute no canto direito, mas em cards
+   compactos com label médio/longo (ex.: "NOVOS" + "↑ 12,3%") o badge
+   atropelava o título. Solução: linha flex de cabeçalho com label e
+   delta lado a lado — clearance natural, sem padding "mágico". */
 .op-card {
     background: var(--color-card);
     border: 1px solid var(--color-border);
@@ -129,21 +131,29 @@ _OP_CARD_CSS = """
     min-height: 50px;
     gap: 1px;
 }
+/* Cabeçalho — label + delta inline. min-width:0 nos filhos garante que
+   o ellipsis do label funcione mesmo quando o delta consome largura. */
+.op-head {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+}
 .op-label {
     color: var(--color-muted);
     font-size: 0.6rem;
     font-weight: 600;
     letter-spacing: 1.4px;
     text-transform: uppercase;
-    /* padding lateral reserva espaço pro delta absoluto no canto */
-    padding: 0 22px;
-    max-width: 100%;
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.op-card.compact .op-label { font-size: 0.56rem; letter-spacing: 1.1px; padding: 0 18px; }
-.op-card.hero    .op-label { font-size: 0.66rem; padding: 0 26px; }
+.op-card.compact .op-label { font-size: 0.56rem; letter-spacing: 1.1px; }
+.op-card.hero    .op-label { font-size: 0.66rem; }
 .op-value {
     color: var(--color-text);
     font-size: 1.22rem;
@@ -155,20 +165,18 @@ _OP_CARD_CSS = """
 .op-card.hero    .op-value { font-size: 1.7rem; margin-top: 4px; }
 .op-card.compact .op-value { font-size: 1.0rem; font-weight: 600; margin-top: 1px; }
 .op-value.accent { color: var(--color-gold); }
-/* Delta — anotação leve no canto, sem pílula colorida pesada */
+/* Delta — anotação leve ao lado do label (não mais absolute) */
 .op-delta {
-    position: absolute;
-    top: 6px;
-    right: 9px;
     font-size: 0.56rem;
     font-weight: 500;
     font-variant-numeric: tabular-nums;
-    background: transparent;
-    padding: 0;
     letter-spacing: 0.2px;
     opacity: 0.78;
     white-space: nowrap;
+    flex: 0 0 auto;
 }
+.op-card.compact .op-delta { font-size: 0.5rem; }
+.op-card.hero    .op-delta { font-size: 0.6rem; }
 .op-delta.up   { color: var(--color-green); }
 .op-delta.down { color: var(--color-red); }
 .op-delta.flat { color: var(--color-text-subtle); opacity: 0.55; }
@@ -196,6 +204,10 @@ _OP_CARD_CSS = """
     gap: 4px 10px;
     width: 100%;
 }
+/* Badge único — centraliza em coluna full ao invés de ocupar só a esquerda
+   da grid de 2 colunas (usado por % Comp. nos cards Comp. INB/SS e por
+   % Conversão no card Novos). */
+.op-badges.op-badges-single { grid-template-columns: 1fr; }
 .op-badge {
     display: flex;
     flex-direction: column;
@@ -229,6 +241,47 @@ _OP_CARD_CSS = """
 .op-card.hero .op-badges { margin-top: 10px; padding-top: 10px; gap: 5px 14px; }
 .op-card.hero .op-badge-label { font-size: 0.54rem; }
 .op-card.hero .op-badge-value { font-size: 0.95rem; }
+
+/* Sub-stats dentro de um badge — usados pra detalhar Agend. ±12 IN/SS
+   acoplados em Cons. INBOUND/SS (volume no destaque, % e custo logo
+   abaixo). Visual mais discreto que o valor principal do badge. */
+.op-badge-extras {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dotted var(--color-border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+}
+.op-badge-extra {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+}
+.op-badge-extra-label {
+    color: var(--color-text-subtle);
+    font-size: 0.5rem;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    opacity: 0.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+.op-badge-extra-value {
+    color: var(--color-text);
+    font-size: 0.68rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
 
 /* Toggle discreto do hero de Marketing — segmented_control compactado */
 [data-testid="stSegmentedControl"] { margin: 0 0 6px 0; }
@@ -276,15 +329,18 @@ def one_page_metric_card(
     accent: bool = False,
     hero: bool = False,
     compact: bool = False,
-    badges: list[tuple[str, str]] | None = None,
+    badges: list[tuple] | None = None,
 ) -> None:
     """Card compacto da One Page. `hero` e `compact` são mutuamente
     exclusivos visualmente — se ambos True, `hero` vence (atalho seguro
     pra evitar bugs de chamada).
 
-    `badges` recebe lista de `(label, value)` e renderiza mini-
-    indicadores em sub-grid no rodapé — usado pra grudar % Agendamento
-    e Custo/Apl. aos cards de Aplicações ±12 (padrão Looker).
+    `badges` aceita duas formas de tupla:
+      - `(label, value)`                       → badge simples (1 linha)
+      - `(label, value, [(slabel, svalue),…])` → badge com sub-stats
+                                                  listadas abaixo do valor
+    Sub-stats são usadas pra detalhar Agend. ±12 IN/SS dentro de
+    Cons. INBOUND/SS (volume + % por consulta + custo por consulta).
     """
     classes = ["op-card"]
     if hero:
@@ -297,27 +353,57 @@ def one_page_metric_card(
         cls, txt = _op_fmt_delta(delta_pct)
         delta_html = f'<span class="op-delta {cls}">{html.escape(txt)}</span>'
 
+    # Cabeçalho — label e delta em flex row. Delta omitido (não só
+    # invisível) quando ausente, pra preservar centralização perfeita
+    # do label nos cards sem comparação.
+    head_html = (
+        f'<div class="op-head">'
+        f'<div class="op-label">{html.escape(label)}</div>'
+        f'{delta_html}'
+        f'</div>'
+    )
+
     hint_html = (f'<div class="op-hint">{html.escape(hint)}</div>'
                  if hint else "")
 
     badges_html = ""
     if badges:
-        items = "".join(
-            f'<div class="op-badge">'
-            f'<span class="op-badge-label">{html.escape(b_lbl)}</span>'
-            f'<span class="op-badge-value">{html.escape(str(b_val))}</span>'
-            f'</div>'
-            for b_lbl, b_val in badges
-        )
-        badges_html = f'<div class="op-badges">{items}</div>'
+        items_parts = []
+        for b in badges:
+            b_lbl, b_val = b[0], b[1]
+            extras = b[2] if len(b) > 2 else None
+            extras_html = ""
+            if extras:
+                extras_items = "".join(
+                    f'<div class="op-badge-extra">'
+                    f'<span class="op-badge-extra-label">'
+                    f'{html.escape(el)}</span>'
+                    f'<span class="op-badge-extra-value">'
+                    f'{html.escape(str(ev))}</span>'
+                    f'</div>'
+                    for el, ev in extras
+                )
+                extras_html = (
+                    f'<div class="op-badge-extras">{extras_items}</div>'
+                )
+            items_parts.append(
+                f'<div class="op-badge">'
+                f'<span class="op-badge-label">{html.escape(b_lbl)}</span>'
+                f'<span class="op-badge-value">'
+                f'{html.escape(str(b_val))}</span>'
+                f'{extras_html}'
+                f'</div>'
+            )
+        items = "".join(items_parts)
+        badges_cls = "op-badges"
+        if len(badges) == 1:
+            badges_cls += " op-badges-single"
+        badges_html = f'<div class="{badges_cls}">{items}</div>'
 
     val_cls = "op-value accent" if accent else "op-value"
-    # Delta é absoluto no canto do card — fora do fluxo do label/valor/hint
-    # para não ocupar coluna e deixar o conteúdo principal centralizado.
     st.markdown(
         f'<div class="{" ".join(classes)}">'
-        f'{delta_html}'
-        f'<div class="op-label">{html.escape(label)}</div>'
+        f'{head_html}'
         f'<div class="{val_cls}">{html.escape(str(value))}</div>'
         f'{hint_html}'
         f'{badges_html}'
@@ -1020,110 +1106,149 @@ with col_mkt:
 
 # -----------------------------------------------------------------------------
 # Coluna central — Pré-vendas (INBOUND = fonte 'Inbound' / SS = fonte 'Fábrica')
-# Estrutura Looker — leitura em colunas:
+# Estrutura Looker — cards compostos (a quebra -12/+12 e a taxa de
+# comparecimento ficam acopladas ao card "pai" como badges, evitando
+# cards soltos que duplicam a hierarquia da informação):
 #   L1: Agendamentos (hero, largo)
-#   L2: Cons. INBOUND       | Cons. SS
-#   L3: Agend. -12 IN       | Agend. +12 IN   ← bloco Inbound, -12/+12
-#   L4: Agend. -12 SS       | Agend. +12 SS   ← bloco SS,      -12/+12
-#   L5: Comp. INBOUND       | Comp. SS
-#   L6: % Comparecimento (full-width)
-# Regra rígida: -12 sempre na esquerda, +12 sempre na direita; cards de
-# ±12 ficam diretamente abaixo das Consultas.
+#   L2: Cons. INBOUND  (badges: Agend. -12 IN | Agend. +12 IN)
+#     | Cons. SS       (badges: Agend. -12 SS | Agend. +12 SS)
+#   L3: Comp. INBOUND  (badge: % Comp. Inbound)
+#     | Comp. SS       (badge: % Comp. SS)
+# Regra rígida: -12 sempre na esquerda, +12 sempre na direita.
 # -----------------------------------------------------------------------------
 with col_prev:
     section_title("Pré-vendas", "agendamentos por fonte")
 
-    # L1 — Agendamentos consolidado (hero, full-width)
+    # L1 — Agendamentos consolidado (hero, full-width) com Custo /
+    # Agendamento acoplado (investimento legado da query Looker / total
+    # de agendamentos exibidos no período).
     one_page_metric_card(
         "Agendamentos",
         int_br(ag_exib),
         hint="líquidos (exibidos)",
         accent=True,
         hero=True,
+        badges=[
+            ("Custo / Agendamento",
+             brl(_safe_div(k_apl["investimento"], ag_exib), casas=2)),
+        ],
     )
 
-    # L2 — Consultas (Inbound | SS)
+    # L2 — Consultas (Inbound | SS) com quebra ±12 acoplada como badges.
+    # Cada badge ±12 carrega sub-stats (% por consulta + custo por
+    # consulta) — % usa o total de consultas da própria fonte como
+    # denominador; custo usa o investimento legado k_apl["investimento"]
+    # (mesma base do Custo / Agendamento do hero).
+    inv_total = k_apl["investimento"]
+    inb_tot   = inb["agendamentos"]
+    ss_tot    = ss["agendamentos"]
     r = st.columns(2, gap="small")
     with r[0]:
         one_page_metric_card(
             "Cons. INBOUND",
-            int_br(inb["agendamentos"]),
+            int_br(inb_tot),
             hint="agendamentos Inbound",
+            badges=[
+                ("Agend. -12 IN",
+                 int_br(inb["agendamentos_menos_12"]),
+                 [
+                     ("% Cons.",
+                      pct(_safe_div(inb["agendamentos_menos_12"],
+                                    inb_tot) * 100)),
+                     ("Custo / Cons.",
+                      brl(_safe_div(inv_total,
+                                    inb["agendamentos_menos_12"]),
+                          casas=2)),
+                 ]),
+                ("Agend. +12 IN",
+                 int_br(inb["agendamentos_mais_12"]),
+                 [
+                     ("% Cons.",
+                      pct(_safe_div(inb["agendamentos_mais_12"],
+                                    inb_tot) * 100)),
+                     ("Custo / Cons.",
+                      brl(_safe_div(inv_total,
+                                    inb["agendamentos_mais_12"]),
+                          casas=2)),
+                 ]),
+            ],
         )
     with r[1]:
         one_page_metric_card(
             "Cons. SS",
-            int_br(ss["agendamentos"]),
+            int_br(ss_tot),
             hint="agendamentos Fábrica",
+            badges=[
+                ("Agend. -12 SS",
+                 int_br(ss["agendamentos_menos_12"]),
+                 [
+                     ("% Cons.",
+                      pct(_safe_div(ss["agendamentos_menos_12"],
+                                    ss_tot) * 100)),
+                     ("Custo / Cons.",
+                      brl(_safe_div(inv_total,
+                                    ss["agendamentos_menos_12"]),
+                          casas=2)),
+                 ]),
+                ("Agend. +12 SS",
+                 int_br(ss["agendamentos_mais_12"]),
+                 [
+                     ("% Cons.",
+                      pct(_safe_div(ss["agendamentos_mais_12"],
+                                    ss_tot) * 100)),
+                     ("Custo / Cons.",
+                      brl(_safe_div(inv_total,
+                                    ss["agendamentos_mais_12"]),
+                          casas=2)),
+                 ]),
+            ],
         )
 
-    # L3 — Inbound ±12 (-12 esquerda | +12 direita)
-    r = st.columns(2, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Agend. -12 IN",
-            int_br(inb["agendamentos_menos_12"]),
-            compact=True,
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Agend. +12 IN",
-            int_br(inb["agendamentos_mais_12"]),
-            accent=True,
-            compact=True,
-        )
-
-    # L4 — SS ±12 (-12 esquerda | +12 direita)
-    r = st.columns(2, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Agend. -12 SS",
-            int_br(ss["agendamentos_menos_12"]),
-            compact=True,
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Agend. +12 SS",
-            int_br(ss["agendamentos_mais_12"]),
-            accent=True,
-            compact=True,
-        )
-
-    # L5 — Comparecimentos (Inbound | SS)
+    # L3 — Comparecimentos (Inbound | SS) com % próprio acoplado como badge
+    # (substitui o antigo card "% Comparecimento" geral, full-width).
     r = st.columns(2, gap="small")
     with r[0]:
         one_page_metric_card(
             "Comp. INBOUND",
             int_br(inb["comparecimentos"]),
             hint="comparecimentos Inbound",
+            badges=[
+                ("% Comp. Inbound",
+                 pct(_safe_div(inb["comparecimentos"],
+                               inb["agendamentos"]) * 100)),
+            ],
         )
     with r[1]:
         one_page_metric_card(
             "Comp. SS",
             int_br(ss["comparecimentos"]),
             hint="comparecimentos Fábrica",
+            badges=[
+                ("% Comp. SS",
+                 pct(_safe_div(ss["comparecimentos"],
+                               ss["agendamentos"]) * 100)),
+            ],
         )
-
-    # L6 — % Comparecimento (full-width)
-    one_page_metric_card(
-        "% Comparecimento",
-        pct(k_prev.get("taxa_comparecimento", 0.0)),
-        hint="comparecimentos / agendamentos",
-    )
 
 # -----------------------------------------------------------------------------
 # Coluna direita — Vendas / Financeiro
 # Estrutura Looker:
-#   L1 (4 cards): Novos · Ascensões · Renovações · Indicações
-#   L2 (2 cards): Receita / Vendido · Investido   (hero)
+#   L1 (4 cards): Novos (badge: % Conversão = novos / comparecimentos) ·
+#                 Ascensões · Renovações · Indicações
+#   L2 (2 cards): Montante (hero accent) · Investido (hero)
 #   L3 (3 cards): CPA · Média móvel · Ticket médio
-#   L4 extra:     Montante (compact, full-width)
-# Média móvel virou card próprio (antes era foot text inline).
+#   L4 extra:     Receita / Vendido (compact, full-width)
+# Montante virou o destaque financeiro principal; Receita / Vendido ficou
+# como métrica secundária no rodapé.
 # -----------------------------------------------------------------------------
 with col_vendas:
     section_title("Vendas / Financeiro", "meta proporcional ao período")
 
-    # L1 — breakdown de Vendas (4 cards)
+    # L1 — breakdown de Vendas (4 cards). % Conversão acoplado a Novos
+    # (vendas novas / comparecimentos do período — base k_prev).
+    pct_conversao = _safe_div(
+        k_vendas["novos"], k_prev.get("comparecimentos", 0)
+    ) * 100
     r = st.columns(4, gap="small")
     with r[0]:
         one_page_metric_card(
@@ -1132,6 +1257,7 @@ with col_vendas:
             delta_pct=delta_pct(k_vendas["novos"], k_vendas_prev["novos"]),
             accent=True,
             compact=True,
+            badges=[("% Conversão", pct(pct_conversao))],
         )
     with r[1]:
         one_page_metric_card(
@@ -1158,18 +1284,18 @@ with col_vendas:
             compact=True,
         )
 
-    # L2 — Receita | Investido (2 cards hero)
-    receita_hint = (
-        f"meta {brl_short(k_vendas['meta'])} · "
-        f"{pct(k_vendas['pct_atingimento'])} atingido"
-    )
+    # L2 — Montante | Investido (2 cards hero). Montante é o destaque
+    # principal (accent). Hint usa `pct_recebimento` (receita / montante)
+    # — descreve quanto do montante já virou caixa, sem invadir a
+    # narrativa de "meta de receita" que pertence ao card Receita / Vendido.
     r = st.columns(2, gap="small")
     with r[0]:
         one_page_metric_card(
-            "Receita / Vendido",
-            brl(k_vendas["receita"]),
-            delta_pct=delta_pct(k_vendas["receita"], k_vendas_prev["receita"]),
-            hint=receita_hint,
+            "Montante",
+            brl(k_vendas["montante"]),
+            delta_pct=delta_pct(k_vendas["montante"],
+                                k_vendas_prev["montante"]),
+            hint=f"recebimento {pct(k_vendas['pct_recebimento'])}",
             accent=True,
             hero=True,
         )
@@ -1212,14 +1338,19 @@ with col_vendas:
             accent=True,
         )
 
-    # L4 — Montante (full-width, compact — junto da área financeira sem
-    # competir visualmente com Receita/Investido)
+    # L4 — Receita / Vendido (full-width, compact — métrica secundária no
+    # rodapé da área financeira). Meta + atingimento descrevem a receita
+    # (pct_atingimento = receita / meta), por isso o hint da meta vive
+    # aqui e não no card de Montante.
+    receita_hint = (
+        f"meta {brl_short(k_vendas['meta'])} · "
+        f"{pct(k_vendas['pct_atingimento'])} atingido"
+    )
     one_page_metric_card(
-        "Montante",
-        brl(k_vendas["montante"]),
-        delta_pct=delta_pct(k_vendas["montante"],
-                            k_vendas_prev["montante"]),
-        hint=f"recebimento {pct(k_vendas['pct_recebimento'])}",
+        "Receita / Vendido",
+        brl(k_vendas["receita"]),
+        delta_pct=delta_pct(k_vendas["receita"], k_vendas_prev["receita"]),
+        hint=receita_hint,
         compact=True,
     )
 
