@@ -102,16 +102,30 @@ except Exception as e:
     st.error(f"Falha ao consultar: {e}")
     st.stop()
 
-df = ctx.apply_filters(df_all, {"times": "time_vendas"})
+df_bruto = ctx.apply_filters(df_all, {"times": "time_vendas"})
 
 # ---------------------------------------------------------------------------
-# Filtro pelo TIME OFICIAL ATIVO (fdw_reconecta.executivas_vendas WHERE
-# ativo='y'). Aplicado AQUI, no grão linha-a-linha, ANTES de qualquer
-# `executivas_*(df)` — garante que funil, Resumo do período, ranking, "Por
-# time" e "Evolução" vivam no MESMO universo. Sobrescreve `executiva` pelo
-# nome oficial canônico (Nathan Carloto → Nathan Carloto Ferreira Dos Santos,
-# etc.) já aqui — torna `executivas_ranking_oficiais` no ranking redundante.
-# Fallback silencioso: FDW indisponível → df segue inteiro + caption.
+# Duas bases coexistem nesta página (mesmo padrão da Visão Geral):
+#
+#   `df_bruto`     → todas as linhas da view depois de aplicar SÓ os
+#                    filtros globais do header (Times / Período). Inclui
+#                    closers que saíram do time no meio do período — as
+#                    vendas deles continuam sendo vendas reais do mês e
+#                    devem aparecer no Resumo do período e no Funil
+#                    (KPIs gerais da página).
+#
+#   `df_filtrado`  → bruto + `executivas_filtrar_time_oficial`
+#                    (`fdw_reconecta.executivas_vendas WHERE ativo='y'`).
+#                    Sobrescreve `executiva` pelo nome canônico (Nathan
+#                    Carloto → Nathan Carloto Ferreira Dos Santos, etc.).
+#                    Alimenta análises por pessoa/time atual:
+#                    Top Closers, "Por time" e "Evolução".
+#
+# Quando o usuário aplica Times no header, `apply_filters` já roda antes
+# do split — a seleção propaga pros dois ramos.
+#
+# Fallback silencioso: FDW indisponível → `df_filtrado` cai pro bruto e
+# caption avisa que os RANKINGS estão sem o filtro do time oficial.
 # ---------------------------------------------------------------------------
 try:
     _df_oficiais = get_executivas_oficiais()
@@ -121,14 +135,16 @@ except Exception:
     _falha_oficiais = True
 
 if _df_oficiais is not None and not _df_oficiais.empty:
-    df = executivas_filtrar_time_oficial(df, _df_oficiais)
-elif _falha_oficiais:
-    st.caption(
-        "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
-        "página exibida sem o filtro do time oficial."
-    )
+    df_filtrado = executivas_filtrar_time_oficial(df_bruto, _df_oficiais)
+else:
+    df_filtrado = df_bruto
+    if _falha_oficiais:
+        st.caption(
+            "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
+            "rankings exibidos sem o filtro do time oficial."
+        )
 
-if df.empty:
+if df_bruto.empty:
     st.warning("Sem dados para o filtro atual.")
     st.stop()
 
@@ -151,7 +167,7 @@ tem_fin = cmap["montante"] is not None
 # ---------------------------------------------------------------------------
 # Totais do bucket selecionado + pcts recalculados
 # ---------------------------------------------------------------------------
-k = executivas_kpis(df)
+k = executivas_kpis(df_bruto)
 
 opor_v = float(k.get(cmap["oportunidades"], 0) or 0)
 agen_v = float(k.get(cmap["agendamentos"], 0)  or 0)
@@ -302,8 +318,8 @@ with tab_rank:
     det_norm = vendas_normalizar_detalhe(df_detalhe)
 
     # Replica filtro global de Times no detalhe (o filtro global do header
-    # já filtra `df`, mas não toca em `df_detalhe`). Usa o helper canônico
-    # com OR entre múltiplas seleções.
+    # já filtra `df_bruto`/`df_filtrado`, mas não toca em `df_detalhe`).
+    # Usa o helper canônico com OR entre múltiplas seleções.
     _times_sel_global = list(ctx.selections.get("times") or [])
     if (det_norm is not None and not det_norm.empty
             and _times_sel_global
@@ -320,7 +336,7 @@ with tab_rank:
     # propaga corretamente sem ajuste extra. `_apply_classif` não toca em
     # `vencidos` — preservado como veio do groupby.
     # ------------------------------------------------------------------------
-    ranking_raw = executivas_ranking(df)
+    ranking_raw = executivas_ranking(df_filtrado)
     if ranking_raw.empty:
         ranking = ranking_raw
     else:
@@ -344,9 +360,9 @@ with tab_rank:
 
     # ------------------------------------------------------------------------
     # Filtro do time oficial JÁ FOI APLICADO no topo da página, no grão
-    # linha-a-linha (sobre `df`). Logo, `ranking` aqui já só tem oficiais
-    # com nome canônico — não é preciso chamar `executivas_ranking_oficiais`
-    # de novo nem repetir o try/except da FDW.
+    # linha-a-linha (sobre `df_filtrado`). Logo, `ranking` aqui já só tem
+    # oficiais com nome canônico — não é preciso chamar
+    # `executivas_ranking_oficiais` de novo nem repetir o try/except da FDW.
     # ------------------------------------------------------------------------
     # Header — label da métrica precisa ser resolvido ANTES das colunas
     # (o selectbox vive em col_grafico, mas o título fica acima das duas).
@@ -725,7 +741,7 @@ with tab_rank:
                 )
 
 with tab_time:
-    por_time_raw = executivas_por_time(df)
+    por_time_raw = executivas_por_time(df_filtrado)
     if por_time_raw.empty:
         st.info("Sem dados de time no filtro atual.")
     else:
@@ -768,7 +784,7 @@ with tab_time:
             st.dataframe(por_time, use_container_width=True, hide_index=True)
 
 with tab_temp:
-    diario_raw = executivas_por_dia(df)
+    diario_raw = executivas_por_dia(df_filtrado)
     diario = _apply_classif(diario_raw, cmap)
     section_title(f"Funil diário (absolutos) · {classif_sel}")
     st.plotly_chart(
