@@ -289,6 +289,14 @@ def _fmt_delta(delta_pct: float | None) -> tuple[str, str]:
     return cls, f"{arrow} {abs(delta_pct):.1f}%".replace(".", ",")
 
 
+_ORIGEM_CHIP_CLS = {
+    "VSL":        "vsl",
+    "SE":         "se",
+    "AG":         "ag",
+    "Sem origem": "sem-origem",
+}
+
+
 def metric_card_v2(
     label: str,
     value: str,
@@ -296,12 +304,22 @@ def metric_card_v2(
     hint: str | None = None,
     accent: bool = False,
     breakdown: list[tuple[str, str]] | None = None,
+    origens: dict | None = None,
 ) -> None:
     """Card Looker-style:
     - header: label (esq.) + delta pill opcional (dir.)
     - valor grande
     - hint pequeno (opcional)
     - breakdown estruturado (opcional)
+    - origens (opcional): bloco "Por origem" com chips coloridos +
+      linha muted. Estrutura esperada:
+        {
+            "title": "Por origem",
+            "chips": [("VSL", "3"), ("SE", "1"), ("AG", "0")],
+            "muted": ("Sem origem", "1.038"),   # opcional
+        }
+      Cada chip ganha classe CSS .vsl / .se / .ag por label conhecido;
+      valores '—' ou '0' recebem .empty pra atenuar visualmente.
     """
     delta_html = ""
     if delta_pct is not None:
@@ -320,6 +338,54 @@ def metric_card_v2(
         )
         break_html = f'<div class="mcard-break">{rows}</div>'
 
+    origens_html = ""
+    if origens:
+        title  = origens.get("title", "Por origem")
+        chips  = origens.get("chips") or []
+        muted  = origens.get("muted")
+
+        chip_html_parts = []
+        for chip_lbl, chip_val in chips:
+            chip_cls = _ORIGEM_CHIP_CLS.get(chip_lbl, "")
+            # "vazio": valor "—" (denom zero) ou "0" exato. Não atenua
+            # quando há algum dígito > 0 ou aparece percentual não-nulo.
+            stripped = str(chip_val).strip()
+            is_empty = (
+                stripped in ("—", "-", "0")
+                or stripped.startswith("0 ")
+                or stripped.startswith("0/")
+                or stripped.startswith("0,0%")
+            )
+            extra = " empty" if is_empty else ""
+            chip_html_parts.append(
+                f'<span class="mcard-origens-chip {chip_cls}{extra}">'
+                f'<span class="lbl">{html.escape(chip_lbl)}</span>'
+                f'<span class="val">{html.escape(stripped)}</span>'
+                f'</span>'
+            )
+        chips_html = (
+            f'<div class="mcard-origens-chips">{"".join(chip_html_parts)}</div>'
+            if chip_html_parts else ""
+        )
+
+        muted_html = ""
+        if muted:
+            m_lbl, m_val = muted
+            muted_html = (
+                f'<div class="mcard-origens-muted">'
+                f'<span class="lbl">{html.escape(m_lbl)}</span>'
+                f'<span class="val">{html.escape(str(m_val))}</span>'
+                f'</div>'
+            )
+
+        origens_html = (
+            f'<div class="mcard-origens">'
+            f'<span class="mcard-origens-title">{html.escape(title)}</span>'
+            f'{chips_html}'
+            f'{muted_html}'
+            f'</div>'
+        )
+
     val_cls = "mcard-value accent" if accent else "mcard-value"
     st.markdown(
         f'<div class="mcard">'
@@ -330,6 +396,7 @@ def metric_card_v2(
         f'<div class="{val_cls}">{html.escape(str(value))}</div>'
         f'{hint_html}'
         f'{break_html}'
+        f'{origens_html}'
         f'</div>',
         unsafe_allow_html=True,
     )

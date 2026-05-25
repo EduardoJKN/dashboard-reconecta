@@ -127,6 +127,20 @@ deal_classif AS (
                                )
     GROUP BY dr.deal_id
 ),
+leads_funil AS (
+    -- Funil de origem por deal (mesma técnica de
+    -- prevendas_leads_detalhe_diario.sql). DISTINCT ON (zoho_id) escolhe
+    -- a entrada mais recente, evitando fan-out no JOIN com deal_attrs.
+    -- `ext_reconecta.leads.funil_origem` foi ativada em 25/05/2026 —
+    -- entradas anteriores caem em 'Sem origem'.
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text                                              AS lead_zoho_id,
+        COALESCE(NULLIF(btrim(l.funil_origem), ''), 'Sem origem')    AS funil_origem
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+    ORDER BY l.zoho_id::text, l.timestamp DESC NULLS LAST, l.id DESC
+),
 sdr_via_activity AS (
     -- SDR primário do deal = activity.prevendas mais recente de qualquer
     -- atividade Consulta/Indicação desse deal.
@@ -140,8 +154,9 @@ sdr_via_activity AS (
     ORDER BY a.what_id, a.created_time DESC NULLS LAST, a.id DESC
 ),
 deal_attrs AS (
-    -- Para cada deal relevante: SDR canônico + bucket + flags de pertença
-    -- aos universos. Único ponto onde resolvemos SDR e classif.
+    -- Para cada deal relevante: SDR canônico + bucket + funil_origem +
+    -- flags de pertença aos universos. Único ponto onde resolvemos SDR,
+    -- classif e funil_origem.
     SELECT
         dr.deal_id,
         COALESCE(
@@ -155,6 +170,7 @@ deal_attrs AS (
             WHEN COALESCE(dc.tem_nao_atua, FALSE) THEN 'Não atua'
             ELSE 'Sem classif'
         END                                     AS classif_bucket,
+        COALESCE(lf.funil_origem, 'Sem origem') AS funil_origem,
         (dr.deal_id IN (SELECT deal_id FROM deals_periodo))        AS is_oport,
         (dr.deal_id IN (SELECT deal_id FROM deals_ganhos_periodo)) AS is_venda
     FROM deals_relevantes dr
@@ -162,6 +178,7 @@ deal_attrs AS (
     LEFT JOIN sdr_via_activity  sva ON sva.deal_id = dr.deal_id
     LEFT JOIN zoho_deals        d   ON d.id::text  = dr.deal_id
     LEFT JOIN zoho_users        u   ON u.id::text  = d.sdr_ss::text
+    LEFT JOIN leads_funil       lf  ON lf.lead_zoho_id = dr.deal_id
 ),
 agend_por_deal AS (
     -- 1 row por (deal_id, activity_id) — base para contar agendamentos
@@ -175,10 +192,11 @@ agend_por_deal AS (
 SELECT
     da.sdr,
     da.classif_bucket,
+    da.funil_origem,
     COUNT(DISTINCT da.deal_id) FILTER (WHERE da.is_oport)::bigint AS oportunidades,
     COUNT(DISTINCT apd.activity_id)::bigint                       AS agendamentos,
     COUNT(DISTINCT da.deal_id) FILTER (WHERE da.is_venda)::bigint AS vendas
 FROM deal_attrs da
 LEFT JOIN agend_por_deal apd ON apd.deal_id = da.deal_id
-GROUP BY da.sdr, da.classif_bucket
-ORDER BY da.sdr, da.classif_bucket;
+GROUP BY da.sdr, da.classif_bucket, da.funil_origem
+ORDER BY da.sdr, da.classif_bucket, da.funil_origem;

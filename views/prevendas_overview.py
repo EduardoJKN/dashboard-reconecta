@@ -26,6 +26,7 @@ from src.repositories import (
     get_prevendas_cohort_agendamentos,
     get_prevendas_cohort_leads,
     get_prevendas_leads_detalhe_diario,
+    get_prevendas_leads_por_origem,
     get_prevendas_oportunidades_sdr,
     get_prevendas_overview_diario,
     get_prevendas_por_sdr,
@@ -52,6 +53,16 @@ try:
 except Exception as e:
     st.error(f"Falha ao consultar Pré-vendas: {e}")
     st.stop()
+
+# Leads quebrados por funil_origem (daily-distinct, mesma regra do card
+# "Leads totais"). Alimenta o breakdown acoplado ao card. Falha silenciosa:
+# se a query nova quebrar, breakdown some sem derrubar a página.
+try:
+    df_leads_origem = get_prevendas_leads_por_origem(
+        ctx.data_ini, ctx.data_fim
+    )
+except Exception:
+    df_leads_origem = pd.DataFrame()
 
 # Recortes de classificação do card "Leads totais" — mesma fonte/regra da
 # Visão Geral Marketing (mkt_visao_geral_periodo.sql, period-distinct por
@@ -113,8 +124,116 @@ agendamentos_brutos = int(k["agendamentos"])
 agendamentos_vencidos = int(k.get("vencidas", 0))
 agendamentos_exibidos = int(k.get("agendamentos_exibidos",
                                   max(agendamentos_brutos - agendamentos_vencidos, 0)))
-k_funil = dict(k)
-k_funil["agendamentos"] = agendamentos_exibidos
+# `k_funil` original ficava aqui pra alimentar o Funil de pré-vendas;
+# agora o Funil usa `k_funil_origem` (computado mais abaixo, depois do
+# filtro de Funil de Origem). Mantemos só o `k` pros cards do Resumo.
+
+# ---------------------------------------------------------------------------
+# Breakdown por funil_origem acoplado aos cards "Leads totais" e
+# "Agendamentos criados" do Resumo do período.
+#
+# Regra de exibição:
+#   - Ordem fixa: VSL, SE, AG, <outras alfabéticas>, Sem origem.
+#   - Só exibe origens com leads > 0 no período (esconde linhas zeradas).
+#   - Conversão usa leads como denominador (origens sem leads ⇒ skip,
+#     evita divisão por zero e linhas inúteis).
+#
+# Quando o usuário aplica SDR/Tipo SDR no header, o breakdown de leads
+# segue mostrando o total geral (leads não são atribuíveis a SDR — mesma
+# regra do hint atual do card); o breakdown de agendamentos respeita o
+# filtro de SDR aplicando mask sobre o detalhe normalizado.
+# ---------------------------------------------------------------------------
+leads_origem_map: dict[str, int] = {}
+if df_leads_origem is not None and not df_leads_origem.empty:
+    leads_origem_map = {
+        str(r["funil_origem"]): int(r["leads"] or 0)
+        for _, r in df_leads_origem.iterrows()
+    }
+
+
+def _ag_criados_por_origem(df_norm,
+                           sdr_sel: list,
+                           tipo_sdr_sel: list,
+                           di, dfim) -> dict[str, int]:
+    """COUNT(DISTINCT activity_id) das atividades criadas no período,
+    agrupado por funil_origem. Respeita filtros globais de SDR/Tipo SDR."""
+    if df_norm is None or df_norm.empty:
+        return {}
+    sub = df_norm
+    if sdr_sel:
+        sub = sub[sub["sdr_filtro"].isin(sdr_sel)]
+    if tipo_sdr_sel and "tipo_sdr_filtro" in sub.columns:
+        sub = sub[sub["tipo_sdr_filtro"].isin(tipo_sdr_sel)]
+    ini_ts = pd.Timestamp(di)
+    fim_ts = pd.Timestamp(dfim)
+    mask = (
+        (sub["tipo_registro_base_filtro"] == "Atividade")
+        & sub["data_criacao"].notna()
+        & sub["data_criacao"].between(ini_ts, fim_ts, inclusive="both")
+    )
+    sub = sub.loc[mask]
+    if sub.empty or "activity_id" not in sub.columns:
+        return {}
+    sub = sub.drop_duplicates(subset=["activity_id"])
+    return sub.groupby("funil_origem_filtro").size().astype(int).to_dict()
+
+
+ag_criados_origem_map = _ag_criados_por_origem(
+    df_det_norm_global,
+    sdr_sel_global, tipo_sdr_sel_global,
+    ctx.data_ini, ctx.data_fim,
+)
+
+_CHIPS_PRIORIDADE = ("VSL", "SE", "AG")
+
+
+def _origens_block_leads(leads_map: dict[str, int]) -> dict | None:
+    """Bloco 'Por origem' para o card Leads totais. Sempre renderiza
+    VSL/SE/AG como chips (mostra 0 quando não houve leads); 'Sem origem'
+    cai numa linha muted abaixo pra não dominar visualmente o card
+    enquanto a coluna ainda está sendo populada (jan/26 → mai/26 vivem
+    quase todos em 'Sem origem'). Devolve None quando não há dado nenhum."""
+    if not leads_map:
+        return None
+    chips = [(o, int_br(int(leads_map.get(o, 0))))
+             for o in _CHIPS_PRIORIDADE]
+    muted = None
+    if leads_map.get("Sem origem", 0) > 0:
+        muted = ("Sem origem", int_br(int(leads_map["Sem origem"])))
+    return {"title": "Por origem", "chips": chips, "muted": muted}
+
+
+def _origens_block_conv(leads_map: dict[str, int],
+                        ag_map: dict[str, int]) -> dict | None:
+    """Bloco 'Conv. por origem' para o card Agendamentos criados. Chips
+    fixos VSL/SE/AG mostrando a % de conversão lead→agendamento (com
+    '—' quando o denominador é zero); 'Sem origem' fica na linha muted
+    abaixo. Devolve None quando não há dado nenhum."""
+    if not leads_map and not ag_map:
+        return None
+
+    def _conv_str(label: str) -> str:
+        leads_o = leads_map.get(label, 0)
+        if leads_o <= 0:
+            return "—"
+        ag_o = ag_map.get(label, 0)
+        return pct(ag_o / leads_o * 100.0)
+
+    chips = [(o, _conv_str(o)) for o in _CHIPS_PRIORIDADE]
+    muted = None
+    leads_so = leads_map.get("Sem origem", 0)
+    ag_so    = ag_map.get("Sem origem", 0)
+    if leads_so > 0:
+        muted = (
+            "Sem origem",
+            f"{int_br(ag_so)}/{int_br(leads_so)} · {pct(ag_so / leads_so * 100.0)}",
+        )
+    return {"title": "Conv. por origem", "chips": chips, "muted": muted}
+
+
+origens_block_leads = _origens_block_leads(leads_origem_map)
+origens_block_conv  = _origens_block_conv(leads_origem_map,
+                                          ag_criados_origem_map)
 
 # ---------------------------------------------------------------------------
 # Resumo do período
@@ -154,11 +273,16 @@ with c0:
         "Leads totais",
         int_br(k["leads"]),
         hint=leads_hint,
+        origens=origens_block_leads,
     )
 with c1:
-    metric_card_v2("Agendamentos criados", int_br(k["agendamentos_criados"]),
-                   hint="zoho_activities.created_time::date · status_reuniao IS NOT NULL",
-                   accent=True)
+    metric_card_v2(
+        "Agendamentos criados",
+        int_br(k["agendamentos_criados"]),
+        hint="zoho_activities.created_time::date · status_reuniao IS NOT NULL",
+        accent=True,
+        origens=origens_block_conv,
+    )
 with c2:
     metric_card_v2(
         "Agendamentos",
@@ -199,12 +323,88 @@ with r2c4:
                    hint="montante ÷ vendas")
 
 # ---------------------------------------------------------------------------
+# Filtro local de Funil de Origem (VSL / SE / AG / Sem origem).
+# Afeta Funil, Tendência diária e Indicadores por Pré-vendas. Cards do
+# Resumo seguem com o total do período (sem filtro de origem) — o filtro
+# desce a partir daqui. Coluna `funil_origem` ativada em 25/05/2026 em
+# `ext_reconecta.leads`; entradas anteriores caem em 'Sem origem'.
+# ---------------------------------------------------------------------------
+if (df_det_norm_global is not None
+        and not df_det_norm_global.empty
+        and "funil_origem_filtro" in df_det_norm_global.columns):
+    # Ordem fixa (VSL/SE/AG primeiro, 'Sem origem' por último) — sem
+    # depender do data-driven sort, pra UX previsível conforme novos
+    # códigos surgirem (entram em ordem alfabética antes de 'Sem origem').
+    _origens_vistas = (
+        df_det_norm_global["funil_origem_filtro"]
+        .dropna().astype(str).unique().tolist()
+    )
+    _ord_prio = ["VSL", "SE", "AG"]
+    _outras   = sorted(o for o in _origens_vistas
+                       if o not in _ord_prio and o != "Sem origem")
+    _sem_orig = ["Sem origem"] if "Sem origem" in _origens_vistas else []
+    opcoes_funil_origem = (
+        [o for o in _ord_prio if o in _origens_vistas]
+        + _outras
+        + _sem_orig
+    )
+else:
+    opcoes_funil_origem = []
+
+funil_origem_sel = st.multiselect(
+    "Funil de Origem (afeta Funil, Tendência diária e Indicadores por "
+    "Pré-vendas)",
+    options=opcoes_funil_origem,
+    default=[],
+    placeholder="Todos",
+    key="prevendas_overview_funil_origem_local",
+    help="Filtra leads pelo `funil_origem` em `ext_reconecta.leads`. "
+         "Cards do Resumo do período seguem com o total geral.",
+)
+funil_origem_ativo = bool(funil_origem_sel)
+
+# Recompõe o diário aplicando o filtro de funil (preserva os filtros
+# globais de SDR/Tipo SDR). Quando nenhum filtro local de origem está
+# ativo, mantém `df_diario_view` original (computado no topo da página).
+if funil_origem_ativo and df_det_norm_global is not None and not df_det_norm_global.empty:
+    df_diario_view_funil = prevendas_diario_filtrado_por_sdr(
+        df_det_norm_global,
+        df_diario,
+        sdr_sel_global,
+        tipo_sdr_sel_global,
+        ctx.data_ini,
+        ctx.data_fim,
+        funis_origem_filtro=funil_origem_sel,
+    )
+else:
+    df_diario_view_funil = df_diario_view
+
+k_origem = prevendas_overview_kpis(df_diario_view_funil)
+_ag_brutos_o   = int(k_origem["agendamentos"])
+_ag_vencidos_o = int(k_origem.get("vencidas", 0))
+_ag_exibidos_o = int(k_origem.get(
+    "agendamentos_exibidos",
+    max(_ag_brutos_o - _ag_vencidos_o, 0),
+))
+k_funil_origem = dict(k_origem)
+k_funil_origem["agendamentos"] = _ag_exibidos_o
+
+if funil_origem_ativo:
+    st.caption(
+        "🔎 Filtro de origem aplicado: "
+        + ", ".join(funil_origem_sel)
+        + ". Funil, Tendência diária e Indicadores por Pré-vendas "
+        "abaixo respeitam essa seleção; o Resumo do período no topo "
+        "continua mostrando o total geral."
+    )
+
+# ---------------------------------------------------------------------------
 # Funil — 4 etapas
 # ---------------------------------------------------------------------------
 section_title("Funil de pré-vendas",
               "agendamentos criados → agendamentos → comparecimentos → vendas")
 
-labels, values = prevendas_funil_etapas(k_funil)
+labels, values = prevendas_funil_etapas(k_funil_origem)
 if all(v == 0 for v in values):
     st.info("Sem dados no período.")
 else:
@@ -219,10 +419,10 @@ else:
 section_title("Tendência diária",
               "agendamentos criados × agendamentos × comparecimentos")
 
-if df_diario_view.empty:
+if df_diario_view_funil.empty:
     st.info("Sem dados diários no período.")
 else:
-    df_diario_plot = df_diario_view.copy()
+    df_diario_plot = df_diario_view_funil.copy()
     if {"agendamentos", "vencidas"}.issubset(df_diario_plot.columns):
         df_diario_plot["agendamentos_liquidos"] = (
             df_diario_plot["agendamentos"].fillna(0)
@@ -605,6 +805,7 @@ with col_detalhe:
                     ("classificacao_filtro",    "Classificação"),
                     ("status_filtro",           "Status reunião"),
                     ("origem_fonte",            "Origem/fonte"),
+                    ("funil_origem_filtro",     "Funil de Origem"),
                     ("data_agendamento",        "Data agendamento"),
                     ("closer_filtro",           "Closer"),
                 ]
@@ -646,6 +847,7 @@ with col_detalhe:
                         ("classificacao_crm_filtro", "Classif. (CRM)"),
                         ("status_filtro", "Status reunião"),
                         ("origem_fonte", "Origem/fonte"),
+                        ("funil_origem_filtro", "Funil de Origem"),
                         ("data_criacao", "Data de criação"),
                         ("data_agendamento", "Data do agendamento"),
                         ("data_venda", "Data da venda"),
@@ -738,6 +940,12 @@ else:
         lambda nome: _canonical_official_name(nome, official_names)
     )
     df_oport = df_oport[df_oport["sdr_oficial"] != ""].copy()
+
+    # Filtro de Funil de Origem (mesmo seletor que afeta Funil/Tendência).
+    # Coluna `funil_origem` vem do GROUP BY da query —
+    # `prevendas_oportunidades_sdr.sql` agrega por (sdr × classif × funil).
+    if funil_origem_ativo and "funil_origem" in df_oport.columns:
+        df_oport = df_oport[df_oport["funil_origem"].isin(funil_origem_sel)]
 
     if df_oport.empty:
         st.info(
@@ -1025,9 +1233,21 @@ with st.expander("Ver dados do período (diário, semanal ou mensal)"):
             opcoes_tipo_sdr_local = sorted(
                 df_det_norm_full["tipo_sdr_filtro"].dropna().astype(str).unique().tolist()
             )
+            _origens_local = (
+                df_det_norm_full["funil_origem_filtro"]
+                .dropna().astype(str).unique().tolist()
+                if "funil_origem_filtro" in df_det_norm_full.columns else []
+            )
+            opcoes_origem_local = (
+                [o for o in ("VSL", "SE", "AG") if o in _origens_local]
+                + sorted(o for o in _origens_local
+                         if o not in ("VSL", "SE", "AG", "Sem origem"))
+                + (["Sem origem"] if "Sem origem" in _origens_local else [])
+            )
         else:
             opcoes_sdr_local = []
             opcoes_tipo_sdr_local = []
+            opcoes_origem_local = []
 
         with f_sdr:
             sdrs_sel_local = st.multiselect(
@@ -1046,7 +1266,19 @@ with st.expander("Ver dados do período (diário, semanal ou mensal)"):
                 key="prevendas_overview_tabela_tipo_sdr",
             )
 
-        filtro_local_ativo = bool(sdrs_sel_local or tipos_sel_local)
+        # Filtro local de Funil de Origem — desacopla do filtro global da
+        # seção (Funil/Tendência/Indicadores) pra permitir cruzes
+        # diferentes nesta tabela.
+        origens_sel_local = st.multiselect(
+            "Funil de Origem (filtra só esta tabela)",
+            options=opcoes_origem_local,
+            default=[],
+            placeholder="Todos",
+            key="prevendas_overview_tabela_funil_origem",
+        )
+
+        filtro_local_ativo = bool(sdrs_sel_local or tipos_sel_local
+                                  or origens_sel_local)
         if filtro_local_ativo and df_det_norm_full is not None and not df_det_norm_full.empty:
             # Filtros locais desacoplam dos globais — base é o df_diario
             # PURO, com filtro local aplicado.
@@ -1057,14 +1289,15 @@ with st.expander("Ver dados do período (diário, semanal ou mensal)"):
                 tipos_sel_local,
                 ctx.data_ini,
                 ctx.data_fim,
+                funis_origem_filtro=origens_sel_local,
             )
             st.caption(
                 "⚙ Filtro local ativo (desacopla dos filtros globais do header) · "
                 "**Leads / Leads +12 / Leads -12 não são afetados** pelos filtros "
-                "de SDR/Tipo SDR (no momento do form ainda não há SDR atribuído "
-                "ao lead). As demais métricas — Agendamentos, Comparecimentos, "
-                "Vendas, Montante, Receita, Vencidas — refletem apenas o(s) "
-                "SDR/Tipo SDR selecionado(s) aqui."
+                "de SDR/Tipo SDR/Funil de Origem (no momento do form ainda não há "
+                "SDR nem origem atribuída ao lead). As demais métricas — "
+                "Agendamentos, Comparecimentos, Vendas, Montante, Receita, Vencidas — "
+                "refletem apenas o(s) SDR/Tipo SDR/Funil de Origem selecionado(s) aqui."
             )
         else:
             # Sem filtro local → respeita os filtros globais do header.
@@ -1223,6 +1456,13 @@ with st.expander("Ver leads/agendamentos detalhados"):
             .str.strip()
             .replace("", "Sem status")
         )
+        tabela_det["funil_origem_filtro"] = (
+            _series_or_default("funil_origem", "Sem origem")
+            .fillna("Sem origem")
+            .astype(str)
+            .str.strip()
+            .replace("", "Sem origem")
+        )
         tabela_det["nome_cliente_view"] = (
             _series_or_default("nome_cliente", "")
             .fillna("")
@@ -1272,6 +1512,13 @@ with st.expander("Ver leads/agendamentos detalhados"):
         opcoes_sdr = sorted(tabela_det["sdr_filtro"].drop_duplicates().tolist())
         opcoes_closer = sorted(tabela_det["closer_filtro"].drop_duplicates().tolist())
         opcoes_status = sorted(tabela_det["status_filtro"].drop_duplicates().tolist())
+        _origens_det = tabela_det["funil_origem_filtro"].drop_duplicates().tolist()
+        opcoes_funil_origem_det = (
+            [o for o in ("VSL", "SE", "AG") if o in _origens_det]
+            + sorted(o for o in _origens_det
+                     if o not in ("VSL", "SE", "AG", "Sem origem"))
+            + (["Sem origem"] if "Sem origem" in _origens_det else [])
+        )
         opcoes_tipos_registro = [
             "Agendamentos criados",
             "Agendamentos",
@@ -1329,7 +1576,7 @@ with st.expander("Ver leads/agendamentos detalhados"):
                 key="prevendas_overview_detalhe_status",
             )
 
-        f7, f8 = st.columns(2)
+        f7, f8, f9 = st.columns(3)
         with f7:
             sdr_sel = st.multiselect(
                 "SDR",
@@ -1344,6 +1591,13 @@ with st.expander("Ver leads/agendamentos detalhados"):
                 default=[],
                 key="prevendas_overview_detalhe_closer",
             )
+        with f9:
+            funil_origem_det_sel = st.multiselect(
+                "Funil de Origem",
+                options=opcoes_funil_origem_det,
+                default=[],
+                key="prevendas_overview_detalhe_funil_origem",
+            )
 
         base_mask = pd.Series(True, index=tabela_det.index)
         if classif_sel:
@@ -1354,6 +1608,8 @@ with st.expander("Ver leads/agendamentos detalhados"):
             base_mask &= tabela_det["closer_filtro"].isin(closer_sel)
         if status_sel:
             base_mask &= tabela_det["status_filtro"].isin(status_sel)
+        if funil_origem_det_sel:
+            base_mask &= tabela_det["funil_origem_filtro"].isin(funil_origem_det_sel)
 
         mask_data_agendamento = _date_mask(
             tabela_det["data_agendamento"], data_agendamento_sel, datas_agendamento
@@ -1476,6 +1732,7 @@ with st.expander("Ver leads/agendamentos detalhados"):
             ("classificacao_crm_filtro", "Classif. (CRM)"),
             ("status_filtro", "Status reunião"),
             ("origem_fonte", "Origem/fonte"),
+            ("funil_origem_filtro", "Funil de Origem"),
             ("sdr_filtro", "SDR"),
             ("closer_filtro", "Closer"),
             ("montante", "Montante"),

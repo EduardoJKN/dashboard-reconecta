@@ -67,6 +67,20 @@ WITH base_dados AS (
               )
           )
 ),
+leads_funil AS (
+    -- Funil de origem por deal. `ext_reconecta.leads.funil_origem` foi
+    -- ativada em 25/05/2026 — entradas anteriores caem em 'Sem origem'.
+    -- DISTINCT ON (zoho_id) escolhe a entrada mais recente quando o mesmo
+    -- deal tem múltiplos leads, evitando fan-out ao juntar com activities
+    -- e vendas. Critério de empate: timestamp DESC, depois id DESC.
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text                                              AS lead_zoho_id,
+        COALESCE(NULLIF(btrim(l.funil_origem), ''), 'Sem origem')    AS funil_origem
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+    ORDER BY l.zoho_id::text, l.timestamp DESC NULLS LAST, l.id DESC
+),
 acts AS (
     SELECT
         a.id::text AS activity_id,
@@ -130,6 +144,7 @@ activity_rows AS (
         b.classificacao_crm AS classificacao_crm,
         a.status_reuniao,
         b.origem_fonte,
+        COALESCE(lf.funil_origem, 'Sem origem')                     AS funil_origem,
         COALESCE(
             NULLIF(btrim(a.prevendas), ''),
             NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
@@ -148,6 +163,8 @@ activity_rows AS (
            ON u.id::text = b.sdr_ss_id
     LEFT JOIN closer_resolved cr
            ON cr.closer_id = b.closer_id
+    LEFT JOIN leads_funil lf
+           ON lf.lead_zoho_id = b.deal_id
 ),
 sales_base AS (
     SELECT DISTINCT ON (b.deal_id)
@@ -158,6 +175,7 @@ sales_base AS (
         b.classificado AS classificacao,
         b.classificacao_crm AS classificacao_crm,
         b.origem_fonte,
+        COALESCE(lf.funil_origem, 'Sem origem')                     AS funil_origem,
         COALESCE(
             NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
             'Sem SDR'
@@ -173,6 +191,8 @@ sales_base AS (
            ON u.id::text = b.sdr_ss_id
     LEFT JOIN closer_resolved cr
            ON cr.closer_id = b.closer_id
+    LEFT JOIN leads_funil lf
+           ON lf.lead_zoho_id = b.deal_id
     WHERE b.stage = 'Ganho'
       AND b.tipo_venda = 'Novo cliente'
       AND b.data_venda BETWEEN :data_ini AND :data_fim
@@ -191,6 +211,7 @@ sales_rows AS (
         sb.classificacao_crm,
         NULL::text AS status_reuniao,
         sb.origem_fonte,
+        sb.funil_origem,
         sb.sdr,
         sb.closer,
         sb.time_vendas,
@@ -213,6 +234,7 @@ final_rows AS (
         classificacao_crm,
         status_reuniao,
         origem_fonte,
+        funil_origem,
         sdr,
         closer,
         time_vendas,
@@ -236,6 +258,7 @@ final_rows AS (
         classificacao_crm,
         status_reuniao,
         origem_fonte,
+        funil_origem,
         sdr,
         closer,
         time_vendas,
@@ -249,6 +272,9 @@ final_rows AS (
 -- (mesma regra de classificação por time da view
 -- bi.vw_dashboard_comercial_executivas_rw). Pré-vendas não consome —
 -- propaga silenciosamente, sem quebrar consumidores existentes.
+-- `funil_origem` (25/05/2026): origem do lead em ext_reconecta.leads
+-- (VSL/SE/AG/…). Vazio/null → 'Sem origem'. Alimenta o filtro de Funil
+-- de Origem na Visão Geral Pré-vendas.
 SELECT
     tipo_registro_base,
     data_agendamento,
@@ -261,6 +287,7 @@ SELECT
     classificacao_crm,
     status_reuniao,
     origem_fonte,
+    funil_origem,
     sdr,
     closer,
     time_vendas,

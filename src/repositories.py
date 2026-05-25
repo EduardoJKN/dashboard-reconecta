@@ -187,6 +187,16 @@ def get_prevendas_overview_diario(data_ini: date, data_fim: date) -> pd.DataFram
     return df
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo leads por funil de origem…")
+def get_prevendas_leads_por_origem(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Leads do período (daily-distinct por email) quebrados por
+    funil_origem. Soma bate com o card 'Leads totais' da Visão Geral
+    Pré-vendas. Ver `prevendas_leads_por_origem.sql`."""
+    return run_sql_file(
+        "prevendas_leads_por_origem.sql", _date_params(data_ini, data_fim)
+    )
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (detalhe diário)…")
 def get_prevendas_leads_detalhe_diario(data_ini: date,
                                        data_fim: date) -> pd.DataFrame:

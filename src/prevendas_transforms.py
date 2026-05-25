@@ -504,6 +504,14 @@ def prevendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
         _series_or_default("status_reuniao", "")
         .fillna("").astype(str).str.strip().replace("", "Sem status")
     )
+    # funil_origem (25/05/2026): coluna VSL/SE/AG/… vinda de
+    # ext_reconecta.leads. Mesmo o SQL já aplicar COALESCE/NULLIF, normaliza
+    # aqui pra blindar contra cargas históricas antes do detalhe ganhar a
+    # coluna (KeyError) e contra strings vazias residuais.
+    out["funil_origem_filtro"] = (
+        _series_or_default("funil_origem", "Sem origem")
+        .fillna("Sem origem").astype(str).str.strip().replace("", "Sem origem")
+    )
     out["nome_cliente_view"] = (
         _series_or_default("nome_cliente", "")
         .fillna("").astype(str).str.strip()
@@ -534,16 +542,19 @@ def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
                                       sdrs_filtro: list[str],
                                       tipos_sdr_filtro: list[str],
                                       data_ini,
-                                      data_fim) -> pd.DataFrame:
+                                      data_fim,
+                                      funis_origem_filtro: list[str] | None = None,
+                                      ) -> pd.DataFrame:
     """Recompõe a série diária aplicando filtros locais de SDR/Tipo SDR.
 
-    Usado pelo expander "Ver dados do período" — só essa tabela é
-    reconstruída; o resto da página segue com `df_diario` original.
+    Usado pelo expander "Ver dados do período" e também pela seção Funil
+    + Tendência diária quando o filtro de Funil de Origem está ativo.
+    O resto da página segue com `df_diario` original.
 
     Regra:
       - Leads / Leads +12 / Leads -12 → preservados do df_diario (sem
-        filtro). SDR não é atribuível ao lead cru (a atribuição entra
-        depois, na activity ou no deal).
+        filtro de SDR ou funil). SDR/funil não são atribuíveis ao lead
+        cru (a atribuição entra depois, na activity ou no deal).
       - Demais métricas → recalculadas do df_detalhe filtrado, com:
             * dedup por activity_id (agendamentos / comparecimentos /
               vencidas e seus recortes +12);
@@ -551,6 +562,10 @@ def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
       - Datas fora do período (ctx) ignoradas; datas extras introduzidas
         pelo detalhe filtrado (ex.: activity num dia que não teve lead)
         são acrescentadas no shape final.
+
+    `funis_origem_filtro`: lista opcional de funis_origem (VSL/SE/AG/…
+    ou 'Sem origem'). Quando vazio/None → todos. Filtra pela coluna
+    `funil_origem_filtro` do detalhe normalizado.
     """
     if (df_detalhe_norm is None or df_detalhe_norm.empty
             or df_diario is None or df_diario.empty):
@@ -562,6 +577,9 @@ def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
     if (tipos_sdr_filtro
             and "tipo_sdr_filtro" in df.columns):
         df = df[df["tipo_sdr_filtro"].isin(tipos_sdr_filtro)]
+    if (funis_origem_filtro
+            and "funil_origem_filtro" in df.columns):
+        df = df[df["funil_origem_filtro"].isin(funis_origem_filtro)]
 
     ini = pd.Timestamp(data_ini)
     fim = pd.Timestamp(data_fim)

@@ -538,6 +538,76 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 .mcard-break-row .k {{ color: var(--color-text-subtle); }}
 .mcard-break-row .v {{ color: var(--color-text); font-variant-numeric: tabular-nums; font-weight: 500; }}
 
+/* ----- Origens (chips coloridos por funil_origem) ----------------------
+   Bloco secundário do card que mostra a quebra por funil de origem
+   (VSL/SE/AG/Sem origem). Chips inline pras 3 origens priorizadas;
+   linha muted pra "Sem origem" quando existe, evitando que ela domine
+   a tipografia do card (no caso atual representa quase 100% dos leads). */
+.mcard-origens {{
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}}
+.mcard-origens-title {{
+  color: var(--color-text-subtle);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  opacity: 0.75;
+}}
+.mcard-origens-chips {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: baseline;
+}}
+.mcard-origens-chip {{
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--color-border);
+  font-size: 0.72rem;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}}
+.mcard-origens-chip .lbl {{
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--color-text-subtle);
+}}
+.mcard-origens-chip .val {{
+  font-weight: 600;
+  color: var(--color-text);
+}}
+/* Tonalidade sutil por origem — só a borda + label colorido, valor neutro */
+.mcard-origens-chip.vsl {{ border-color: rgba(124,58,237,0.45); }}
+.mcard-origens-chip.vsl .lbl {{ color: #c4b5fd; }}
+.mcard-origens-chip.se  {{ border-color: rgba(37,99,235,0.45); }}
+.mcard-origens-chip.se  .lbl {{ color: #93c5fd; }}
+.mcard-origens-chip.ag  {{ border-color: rgba(245,158,11,0.45); }}
+.mcard-origens-chip.ag  .lbl {{ color: #fcd34d; }}
+/* Chip "vazio" (val = '—' ou '0'): atenua mais pra não competir */
+.mcard-origens-chip.empty {{ opacity: 0.55; }}
+.mcard-origens-muted {{
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.66rem;
+  color: var(--color-text-subtle);
+  opacity: 0.7;
+  padding-top: 1px;
+}}
+.mcard-origens-muted .lbl {{ letter-spacing: 0.4px; font-weight: 600; }}
+.mcard-origens-muted .val {{ font-variant-numeric: tabular-nums; font-weight: 500; }}
+
 /* ----- hero financial (Receita com barra/meta/status — slim, não dominante) ----- */
 .hero-fin {{
   background: var(--color-card);
