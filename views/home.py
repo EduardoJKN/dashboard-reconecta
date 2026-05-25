@@ -72,18 +72,35 @@ except Exception as e:
     st.warning(f"Falha ao consultar média móvel de vendas: {e}")
     media_movel_val = None
 
-df_exec = ctx.apply_filters(df_exec_all, col_map)
+df_exec_bruto = ctx.apply_filters(df_exec_all, col_map)
 
 # ---------------------------------------------------------------------------
-# Filtro pelo TIME OFICIAL ATIVO (fdw_reconecta.executivas_vendas WHERE
-# ativo='y'). Aplicado AQUI, no grão linha-a-linha, ANTES de qualquer
-# `visao_geral_kpis` / `receita_por_mes` / `executivas_ranking` — garante
-# que cards do hero, Receita mensal, Top Closers e tabelas vivam no MESMO
-# universo. Sobrescreve `executiva` pelo nome oficial canônico já aqui,
-# tornando `executivas_ranking_oficiais` no ranking redundante.
-# Aplicado também a `df_exec_prev` para o delta vs período anterior ser
-# apples-to-apples (mesmo universo de pessoas dos dois lados).
-# Fallback silencioso: FDW indisponível → segue inteiro + caption.
+# Duas bases coexistem nesta página:
+#
+#   `df_exec_bruto`     → todas as linhas da view, depois de aplicar SÓ os
+#                         filtros globais do header (Closer / Times /
+#                         Período). Inclui closers que saíram do time no
+#                         meio do período — as vendas deles continuam
+#                         sendo vendas reais do mês e devem aparecer nos
+#                         KPIs gerais (Receita, Montante, Vendas Novas,
+#                         Ticket, Conversão Global) e na Receita mensal.
+#                         Casa com o número do Looker / One Page.
+#
+#   `df_exec_filtrado`  → bruto + `executivas_filtrar_time_oficial`
+#                         (cadastro `fdw_reconecta.executivas_vendas WHERE
+#                         ativo='y'`). Usado em rankings, Top Closers e
+#                         tabelas onde a análise é por pessoa do time
+#                         atual. Sobrescreve `executiva` pelo nome
+#                         oficial canônico — depois disso, chamar
+#                         `executivas_ranking_oficiais` no ranking vira
+#                         no-op.
+#
+# Quando o usuário aplica Closer/Times no header, `apply_filters` já
+# atua antes dos dois ramos — portanto o filtro do usuário propaga
+# tanto pros KPIs quanto pros rankings.
+#
+# Fallback silencioso: FDW indisponível → `df_exec_filtrado` fica igual
+# ao bruto e exibe caption avisando o ranking sem filtro de time oficial.
 # ---------------------------------------------------------------------------
 try:
     _df_oficiais_home = get_executivas_oficiais()
@@ -93,30 +110,41 @@ except Exception:
     _falha_oficiais_home = True
 
 if _df_oficiais_home is not None and not _df_oficiais_home.empty:
-    df_exec = executivas_filtrar_time_oficial(df_exec, _df_oficiais_home)
-elif _falha_oficiais_home:
-    st.caption(
-        "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
-        "página exibida sem o filtro do time oficial."
+    df_exec_filtrado = executivas_filtrar_time_oficial(
+        df_exec_bruto, _df_oficiais_home,
     )
+else:
+    df_exec_filtrado = df_exec_bruto
+    if _falha_oficiais_home:
+        st.caption(
+            "⚠ Não foi possível ler `fdw_reconecta.executivas_vendas` — "
+            "rankings exibidos sem o filtro do time oficial."
+        )
 
-if df_exec.empty:
+if df_exec_bruto.empty:
     st.warning("Nenhum registro para o filtro atual.")
     st.stop()
 
-# Período anterior (mesmo tamanho) para os deltas
+# Período anterior (mesmo tamanho) para os deltas. Mantém as duas
+# bases pareadas (apples-to-apples): KPIs comparam bruto×bruto,
+# rankings comparam filtrado×filtrado.
 dias_periodo = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias_periodo - 1)
 try:
-    df_exec_prev = ctx.refilter(get_executivas(prev_ini, prev_fim), col_map)
+    df_exec_prev_bruto = ctx.refilter(
+        get_executivas(prev_ini, prev_fim), col_map,
+    )
     if _df_oficiais_home is not None and not _df_oficiais_home.empty:
-        df_exec_prev = executivas_filtrar_time_oficial(
-            df_exec_prev, _df_oficiais_home,
+        df_exec_prev_filtrado = executivas_filtrar_time_oficial(
+            df_exec_prev_bruto, _df_oficiais_home,
         )
+    else:
+        df_exec_prev_filtrado = df_exec_prev_bruto
     df_inv_prev = get_investimento_diario(prev_ini, prev_fim)
 except Exception:
-    df_exec_prev = df_exec.iloc[0:0]
+    df_exec_prev_bruto    = df_exec_bruto.iloc[0:0]
+    df_exec_prev_filtrado = df_exec_filtrado.iloc[0:0]
     df_inv_prev = df_inv_all.iloc[0:0]
 
 # Leads do período anterior (para delta) — mesmo refilter que o atual
@@ -128,8 +156,8 @@ try:
 except Exception:
     df_leads_prev_all = None
 
-k = visao_geral_kpis(df_exec, df_inv_all)
-kp = visao_geral_kpis(df_exec_prev, df_inv_prev)
+k = visao_geral_kpis(df_exec_bruto, df_inv_all)
+kp = visao_geral_kpis(df_exec_prev_bruto, df_inv_prev)
 
 # ---------------------------------------------------------------------------
 # Bloco financeiro
@@ -222,7 +250,7 @@ with s4:
 # Receita mensal — full width (header padronizado via section_title)
 # ---------------------------------------------------------------------------
 section_title("Receita mensal", "vs meta · variação mês a mês")
-mensal = receita_por_mes(df_exec)
+mensal = receita_por_mes(df_exec_bruto)
 if mensal.empty:
     st.info("Sem dados mensais no período selecionado.")
 else:
@@ -305,11 +333,12 @@ if det_norm is not None and not det_norm.empty:
 # ranking` agrega tudo num só groupby. `det_norm` continua sendo carregado
 # acima porque alimenta o painel de detalhe nome-a-nome do gráfico clicável.
 # ---------------------------------------------------------------------------
-ranking_home = executivas_ranking(df_exec)
+ranking_home = executivas_ranking(df_exec_filtrado)
 
-# Filtro do time oficial JÁ FOI APLICADO no topo da página, no grão linha-a-
-# linha (sobre `df_exec`). Logo `ranking_home` só tem oficiais com nome
-# canônico — não é preciso chamar `executivas_ranking_oficiais` de novo.
+# Filtro do time oficial JÁ FOI APLICADO no topo da página, no grão
+# linha-a-linha (sobre `df_exec_filtrado`). Logo `ranking_home` só tem
+# oficiais com nome canônico — não é preciso chamar
+# `executivas_ranking_oficiais` de novo.
 
 # ---------------------------------------------------------------------------
 # Header — label da métrica precisa ser resolvido ANTES das colunas
