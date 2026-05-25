@@ -144,96 +144,176 @@ agendamentos_exibidos = int(k.get("agendamentos_exibidos",
 # filtro de SDR aplicando mask sobre o detalhe normalizado.
 # ---------------------------------------------------------------------------
 leads_origem_map: dict[str, int] = {}
+leads_mais12_origem_map: dict[str, int] = {}
 if df_leads_origem is not None and not df_leads_origem.empty:
     leads_origem_map = {
         str(r["funil_origem"]): int(r["leads"] or 0)
         for _, r in df_leads_origem.iterrows()
     }
+    if "leads_mais_12" in df_leads_origem.columns:
+        leads_mais12_origem_map = {
+            str(r["funil_origem"]): int(r["leads_mais_12"] or 0)
+            for _, r in df_leads_origem.iterrows()
+        }
+
+# Detalhe normalizado já filtrado pelos filtros globais SDR/Tipo SDR.
+# Reaproveitado por todos os mapas de origem abaixo — alinha as
+# quebras com o universo dos cards do Resumo.
+if df_det_norm_global is None or df_det_norm_global.empty:
+    _df_det_para_origens = (
+        df_det_norm_global if df_det_norm_global is not None else pd.DataFrame()
+    )
+else:
+    _df_det_para_origens = df_det_norm_global
+    if sdr_sel_global:
+        _df_det_para_origens = _df_det_para_origens[
+            _df_det_para_origens["sdr_filtro"].isin(sdr_sel_global)
+        ]
+    if (tipo_sdr_sel_global
+            and "tipo_sdr_filtro" in _df_det_para_origens.columns):
+        _df_det_para_origens = _df_det_para_origens[
+            _df_det_para_origens["tipo_sdr_filtro"].isin(tipo_sdr_sel_global)
+        ]
 
 
-def _ag_criados_por_origem(df_norm,
-                           sdr_sel: list,
-                           tipo_sdr_sel: list,
-                           di, dfim) -> dict[str, int]:
-    """COUNT(DISTINCT activity_id) das atividades criadas no período,
-    agrupado por funil_origem. Respeita filtros globais de SDR/Tipo SDR."""
+def _por_origem(df_norm: pd.DataFrame,
+                mask: pd.Series,
+                unidade_col: str) -> dict[str, int]:
+    """COUNT(DISTINCT <unidade>) no detalhe normalizado, agrupado por
+    funil_origem_filtro. `mask` é uma Series booleana sobre `df_norm`."""
     if df_norm is None or df_norm.empty:
         return {}
-    sub = df_norm
-    if sdr_sel:
-        sub = sub[sub["sdr_filtro"].isin(sdr_sel)]
-    if tipo_sdr_sel and "tipo_sdr_filtro" in sub.columns:
-        sub = sub[sub["tipo_sdr_filtro"].isin(tipo_sdr_sel)]
-    ini_ts = pd.Timestamp(di)
-    fim_ts = pd.Timestamp(dfim)
-    mask = (
-        (sub["tipo_registro_base_filtro"] == "Atividade")
-        & sub["data_criacao"].notna()
-        & sub["data_criacao"].between(ini_ts, fim_ts, inclusive="both")
-    )
-    sub = sub.loc[mask]
-    if sub.empty or "activity_id" not in sub.columns:
+    sub = df_norm.loc[mask]
+    if sub.empty or unidade_col not in sub.columns:
         return {}
-    sub = sub.drop_duplicates(subset=["activity_id"])
+    sub = sub.drop_duplicates(subset=[unidade_col])
     return sub.groupby("funil_origem_filtro").size().astype(int).to_dict()
 
 
-ag_criados_origem_map = _ag_criados_por_origem(
-    df_det_norm_global,
-    sdr_sel_global, tipo_sdr_sel_global,
-    ctx.data_ini, ctx.data_fim,
-)
+# Máscaras-base do detalhe (atividade / venda / janela de datas)
+if not _df_det_para_origens.empty:
+    _ini_ts = pd.Timestamp(ctx.data_ini)
+    _fim_ts = pd.Timestamp(ctx.data_fim)
+    _det = _df_det_para_origens
+    _is_ativ = _det["tipo_registro_base_filtro"] == "Atividade"
+    _is_vend = _det["tipo_registro_base_filtro"] == "Venda"
+    _em_cria = (
+        _det["data_criacao"].notna()
+        & _det["data_criacao"].between(_ini_ts, _fim_ts, inclusive="both")
+    )
+    _em_agen = (
+        _det["data_agendamento"].notna()
+        & _det["data_agendamento"].between(_ini_ts, _fim_ts, inclusive="both")
+    )
+    _em_vend = (
+        _det["data_venda"].notna()
+        & _det["data_venda"].between(_ini_ts, _fim_ts, inclusive="both")
+    )
+    _is_concl   = _det["status_filtro"].isin(["Concluída", "Concluído"])
+    _is_venc    = _det["status_filtro"] == "Vencida"
+    _is_mais_12 = (
+        (_det.get("classificacao_crm_filtro",
+                  pd.Series("", index=_det.index)) == "Atua +12")
+        | (_det["classificacao_filtro"] == "Atua +12")
+    )
+
+    # Agendamentos criados (data_criacao no período)
+    ag_criados_origem_map = _por_origem(
+        _det, _is_ativ & _em_cria, "activity_id",
+    )
+    # Agendamentos bruto + vencidos (data_agendamento no período)
+    _ag_bruto_origem  = _por_origem(_det, _is_ativ & _em_agen, "activity_id")
+    _ag_venc_origem   = _por_origem(_det, _is_ativ & _em_agen & _is_venc, "activity_id")
+    # Agendamentos exibidos = bruto − vencidos (por origem, sem ficar negativo)
+    ag_exibidos_origem_map = {
+        o: max(_ag_bruto_origem.get(o, 0) - _ag_venc_origem.get(o, 0), 0)
+        for o in set(_ag_bruto_origem) | set(_ag_venc_origem)
+    }
+    ag_mais12_origem_map = _por_origem(
+        _det, _is_ativ & _em_agen & _is_mais_12, "activity_id",
+    )
+    comp_origem_map = _por_origem(
+        _det, _is_ativ & _em_agen & _is_concl, "activity_id",
+    )
+    vendas_origem_map = _por_origem(
+        _det, _is_vend & _em_vend, "deal_id",
+    )
+else:
+    ag_criados_origem_map  = {}
+    ag_exibidos_origem_map = {}
+    ag_mais12_origem_map   = {}
+    comp_origem_map        = {}
+    vendas_origem_map      = {}
 
 _CHIPS_PRIORIDADE = ("VSL", "SE", "AG")
 
 
-def _origens_block_leads(leads_map: dict[str, int]) -> dict | None:
-    """Bloco 'Por origem' para o card Leads totais. Sempre renderiza
-    VSL/SE/AG como chips (mostra 0 quando não houve leads); 'Sem origem'
-    cai numa linha muted abaixo pra não dominar visualmente o card
-    enquanto a coluna ainda está sendo populada (jan/26 → mai/26 vivem
-    quase todos em 'Sem origem'). Devolve None quando não há dado nenhum."""
-    if not leads_map:
+def _origens_block_volume(qtd_map: dict[str, int],
+                          title: str = "Por origem") -> dict | None:
+    """Bloco de chips de VOLUME (Leads totais). Mostra valor absoluto
+    por origem; 'Sem origem' cai na linha muted abaixo."""
+    if not qtd_map:
         return None
-    chips = [(o, int_br(int(leads_map.get(o, 0))))
+    chips = [(o, int_br(int(qtd_map.get(o, 0))))
              for o in _CHIPS_PRIORIDADE]
     muted = None
-    if leads_map.get("Sem origem", 0) > 0:
-        muted = ("Sem origem", int_br(int(leads_map["Sem origem"])))
-    return {"title": "Por origem", "chips": chips, "muted": muted}
+    if qtd_map.get("Sem origem", 0) > 0:
+        muted = ("Sem origem", int_br(int(qtd_map["Sem origem"])))
+    return {"title": title, "chips": chips, "muted": muted}
 
 
-def _origens_block_conv(leads_map: dict[str, int],
-                        ag_map: dict[str, int]) -> dict | None:
-    """Bloco 'Conv. por origem' para o card Agendamentos criados. Chips
-    fixos VSL/SE/AG mostrando a % de conversão lead→agendamento (com
-    '—' quando o denominador é zero); 'Sem origem' fica na linha muted
-    abaixo. Devolve None quando não há dado nenhum."""
-    if not leads_map and not ag_map:
+def _origens_block_pct(num_map: dict[str, int],
+                       den_map: dict[str, int],
+                       title: str) -> dict | None:
+    """Bloco de chips de CONVERSÃO (num / den) por origem. `—` quando o
+    denominador da origem é zero, `0,0%` quando há denominador mas zero
+    numerador. 'Sem origem' aparece como linha muted formatada
+    'N/D · %' (ou apenas '—' quando D=0). Devolve None se ambos os
+    mapas estiverem vazios."""
+    if not num_map and not den_map:
         return None
 
     def _conv_str(label: str) -> str:
-        leads_o = leads_map.get(label, 0)
-        if leads_o <= 0:
+        d = den_map.get(label, 0)
+        if d <= 0:
             return "—"
-        ag_o = ag_map.get(label, 0)
-        return pct(ag_o / leads_o * 100.0)
+        return pct(num_map.get(label, 0) / d * 100.0)
 
     chips = [(o, _conv_str(o)) for o in _CHIPS_PRIORIDADE]
     muted = None
-    leads_so = leads_map.get("Sem origem", 0)
-    ag_so    = ag_map.get("Sem origem", 0)
-    if leads_so > 0:
+    d_so = den_map.get("Sem origem", 0)
+    n_so = num_map.get("Sem origem", 0)
+    if d_so > 0:
         muted = (
             "Sem origem",
-            f"{int_br(ag_so)}/{int_br(leads_so)} · {pct(ag_so / leads_so * 100.0)}",
+            f"{int_br(n_so)}/{int_br(d_so)} · {pct(n_so / d_so * 100.0)}",
         )
-    return {"title": "Conv. por origem", "chips": chips, "muted": muted}
+    return {"title": title, "chips": chips, "muted": muted}
 
 
-origens_block_leads = _origens_block_leads(leads_origem_map)
-origens_block_conv  = _origens_block_conv(leads_origem_map,
-                                          ag_criados_origem_map)
+origens_block_leads        = _origens_block_volume(
+    leads_origem_map, title="Por origem"
+)
+origens_block_ag_criados   = _origens_block_pct(
+    ag_criados_origem_map,  leads_origem_map,
+    title="Conv. lead → ag. criado",
+)
+origens_block_ag_exibidos  = _origens_block_pct(
+    ag_exibidos_origem_map, leads_origem_map,
+    title="Conv. lead → agendamento",
+)
+origens_block_ag_mais_12   = _origens_block_pct(
+    ag_mais12_origem_map,   leads_mais12_origem_map,
+    title="Conv. lead +12 → ag. +12",
+)
+origens_block_comp         = _origens_block_pct(
+    comp_origem_map,        ag_exibidos_origem_map,
+    title="Conv. ag. → compar.",
+)
+origens_block_vendas       = _origens_block_pct(
+    vendas_origem_map,      ag_exibidos_origem_map,
+    title="Conv. ag. → venda",
+)
 
 # ---------------------------------------------------------------------------
 # Resumo do período
@@ -281,7 +361,7 @@ with c1:
         int_br(k["agendamentos_criados"]),
         hint="zoho_activities.created_time::date · status_reuniao IS NOT NULL",
         accent=True,
-        origens=origens_block_conv,
+        origens=origens_block_ag_criados,
     )
 with c2:
     metric_card_v2(
@@ -292,16 +372,29 @@ with c2:
             f"Vencidos removidos: {int_br(agendamentos_vencidos)} · "
             f"Exibido: {int_br(agendamentos_exibidos)}"
         ),
+        origens=origens_block_ag_exibidos,
     )
 with c3:
-    metric_card_v2("Agendamentos +12", int_br(k["agendamentos_mais_12"]),
-                   hint="classificado = 'Atua +12' via ext_reconecta.leads")
+    metric_card_v2(
+        "Agendamentos +12",
+        int_br(k["agendamentos_mais_12"]),
+        hint="classificado = 'Atua +12' via ext_reconecta.leads",
+        origens=origens_block_ag_mais_12,
+    )
 with c4:
-    metric_card_v2("Comparecimentos", int_br(k["comparecimentos"]),
-                   hint="status_reuniao IN ('Concluída','Concluído')")
+    metric_card_v2(
+        "Comparecimentos",
+        int_br(k["comparecimentos"]),
+        hint="status_reuniao IN ('Concluída','Concluído')",
+        origens=origens_block_comp,
+    )
 with c5:
-    metric_card_v2("Vendas", int_br(k["vendas"]),
-                   hint="zoho_deals.stage = 'Ganho' · tipo_venda = 'Novo cliente'")
+    metric_card_v2(
+        "Vendas",
+        int_br(k["vendas"]),
+        hint="zoho_deals.stage = 'Ganho' · tipo_venda = 'Novo cliente'",
+        origens=origens_block_vendas,
+    )
 
 # Linha 2 — financeiro / eficiência
 r2c1, r2c2, r2c3, r2c4 = st.columns(4, gap="small")
