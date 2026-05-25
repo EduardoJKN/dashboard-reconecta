@@ -58,24 +58,42 @@ deals_clean AS (
     FROM zoho_deals d
 ),
 -- ---------------------------------------------------------------------------
--- 2) Classificação +12/-12 via ext_reconecta.leads (BOOL_OR por deal).
---    Mesma regra de `prevendas_overview_diario.sql:147-157`.
+-- 2) Classificação +12/-12 via ext_reconecta.leads — REGRA HÍBRIDA.
+--
+-- `ext_reconecta.leads` é DEDUPLICADO por `zoho_id` (mesma técnica que
+-- prevendas_leads_detalhe_diario.sql / prevendas_leads_por_origem.sql):
+-- `DISTINCT ON (zoho_id) ORDER BY zoho_id, timestamp DESC, id DESC` —
+-- pega a versão MAIS RECENTE da classificação. Antes (BOOL_OR sem dedup)
+-- bastava qualquer row antiga marcar 'Atua +12' pro deal contar; isso
+-- inflava +12/-12 em ~1-5 unid em mai/2026.
+--
+-- A flag final preserva as 3 colunas CRM (`lead_classification` /
+-- `qualificacao` / `classificado_cal`) OR a `classificado` da row
+-- deduplicada — assim Fábrica/SS (que raramente popula ext.leads) continua
+-- sendo classificada via CRM, ao contrário do Looker puro (que zera SS).
 -- ---------------------------------------------------------------------------
+ext_leads_dedup AS (
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS ext_classif
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
+),
 leads_classif AS (
     SELECT
         d.deal_id,
-        BOOL_OR(l.classificado = 'Atua +12') AS tem_ext_mais_12,
-        BOOL_OR(l.classificado = 'Atua -12') AS tem_ext_menos_12
+        (ed.ext_classif = 'Atua +12') AS tem_ext_mais_12,
+        (ed.ext_classif = 'Atua -12') AS tem_ext_menos_12
     FROM deals_clean d
-    LEFT JOIN ext_reconecta.leads l
-           ON d.deal_id::text = l.zoho_id::text
-          AND l.email IS NOT NULL
-          AND btrim(l.email) <> ''
-          AND lower(l.email) NOT LIKE '%@teste%'
-          AND lower(l.email) NOT LIKE 'teste@%'
-          AND lower(l.email) NOT LIKE '%smarts%'
-          AND lower(l.email) NOT LIKE '%reconecta%'
-    GROUP BY d.deal_id
+    LEFT JOIN ext_leads_dedup ed ON ed.deal_id = d.deal_id::text
 ),
 deal_flags AS (
     SELECT

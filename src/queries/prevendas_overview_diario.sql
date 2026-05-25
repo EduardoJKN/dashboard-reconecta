@@ -69,6 +69,22 @@ leads_diario AS (
     FROM leads_dia_email
     GROUP BY data_ref
 ),
+-- ext.leads DEDUPLICADO por zoho_id — mesma técnica das demais SQLs
+-- (prevendas_leads_detalhe_diario.sql, prevendas_leads_por_origem.sql,
+-- one_page_prevendas_por_fonte.sql). Antes o LEFT JOIN sem dedup criava
+-- fan-out (mesmo deal × N rows ext.leads) e o `classificado` antigo
+-- bastava pra inflar +12/-12 via COUNT(DISTINCT) FILTER. Hoje pega só
+-- a linha MAIS RECENTE — saneamento de 1-5 unidades em mai/2026 sem
+-- alterar a regra das 3 colunas CRM.
+ext_leads_dedup AS (
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS classificado
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
+),
 base_dados AS (
     SELECT
         d.id AS deal_id,
@@ -93,15 +109,15 @@ base_dados AS (
                      ',', '.'
                  )::numeric
         END AS receita,
-        l.classificado,
+        eld.classificado,
         -- 3 fontes de classificação direto do deal. Todas no Zoho (CRM),
-        -- editáveis pela gestoria depois que o lead entra. Replicadas nas
-        -- N linhas do fan-out sem variação (são do deal).
+        -- editáveis pela gestoria depois que o lead entra. Sem fan-out
+        -- agora que ext.leads vem deduplicado via ext_leads_dedup.
         d.lead_classification,
         d.qualificacao,
         d.classificado_cal
     FROM zoho_deals d
-    LEFT JOIN ext_reconecta.leads l ON d.id::text = l.zoho_id::text
+    LEFT JOIN ext_leads_dedup eld ON d.id::text = eld.deal_id
 ),
 acts AS (
     SELECT
@@ -125,15 +141,13 @@ acts AS (
           OR a.start_datetime::date BETWEEN :data_ini AND :data_fim
       )
 ),
--- ⚠ Fan-out tratado abaixo: o LEFT JOIN com `ext_reconecta.leads` em
--- `base_dados` multiplica a mesma activity em N linhas quando o mesmo
--- `zoho_id` aparece N vezes em `ext_reconecta.leads` (mesmo lead com
--- múltiplas submissões/recadastros). Em mai/2026 isso inflava
--- agendamentos 279→247, comparecimentos 113→102, +12 74→65, vencidas
--- 8→7. Cada agendamento é uma reunião única (1 activity), então a
--- regra correta é COUNT(DISTINCT activity_id), e os FILTER usam o mesmo
--- DISTINCT pra não dupla-contar quando o deal tem múltiplas linhas-lead
--- com a mesma classificação ou status.
+-- O fan-out histórico (mesma activity replicada em N linhas pelo LEFT
+-- JOIN com ext_reconecta.leads) foi eliminado na origem ao trocar o
+-- JOIN por `ext_leads_dedup` — 1 row por zoho_id, sempre a mais recente.
+-- COUNT(DISTINCT activity_id) segue sendo a regra correta (idempotente
+-- aqui, mantida por hábito e por defesa contra eventuais fontes futuras).
+-- A `classificado` ext.leads usada nos FILTER de +12 abaixo é a versão
+-- atual do lead, não mais "qualquer versão histórica".
 agendamentos_criados_diario AS (
     SELECT
         data_criacao_ref AS data_ref,

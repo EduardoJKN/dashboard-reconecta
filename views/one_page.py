@@ -59,7 +59,20 @@ from src.ui.components import (
     section_title,
 )
 from src.ui.page import start_page
-from src.ui.theme import PALETTE, brl, brl_short, int_br, pct
+from src.ui.theme import PALETTE, brl as _brl_global, int_br, pct as _pct_global
+
+
+# Padronização de formatação da One Page: dinheiro com centavos
+# (`R$ 116.841,00`) e percentual com 2 casas (`58,44%`). Sobrescrevemos
+# `brl`/`pct` SÓ neste módulo (não vaza pra outras páginas) ajustando o
+# default de `casas`. Chamadas que passam `casas=N` explicitamente
+# continuam funcionando — o wrapper só altera o default.
+def brl(v, casas: int = 2) -> str:
+    return _brl_global(v, casas=casas)
+
+
+def pct(v, casas: int = 2) -> str:
+    return _pct_global(v, casas=casas)
 
 # =============================================================================
 # Helpers locais — específicos da One Page. Mantidos aqui (não em
@@ -1135,6 +1148,21 @@ with col_prev:
     )
 
     # L2 — Consultas (Inbound | SS) com quebra ±12 acoplada como badges.
+    #
+    # Origem dos números ±12 acoplados:
+    #   - Fonte: `one_page_prevendas_por_fonte.sql` (1 row por fonte/dia,
+    #     agregada em Python pelo helper `_prev_por_fonte`).
+    #   - LÍQUIDO: o SQL já aplica `FILTER (WHERE status_reuniao <> 'Vencida')`
+    #     em `agendamentos_mais_12` / `agendamentos_menos_12` — vencidos
+    #     NÃO entram nestes cards. Mesma regra do hero "Agendamentos".
+    #   - Classificação: regra COMBINADA das 4 fontes (espelha
+    #     prevendas_overview_diario.sql): `lead_classification` OR
+    #     `qualificacao` OR `classificado_cal` (CRM) OR
+    #     `ext_reconecta.leads.classificado`.
+    #   - Fonte INBOUND/SS: `zoho_deals.fonte_de_lead` com CASE no SQL —
+    #     'Fábrica de Contatos' → SS; demais (Inbound, Reagendamento,
+    #     Follow-up, NULL) → INBOUND. ('Outbound' fica fora dos cards.)
+    #
     # Cada badge ±12 carrega sub-stats (% por consulta + custo por
     # consulta) — % usa o total de consultas da própria fonte como
     # denominador; custo usa o investimento legado k_apl["investimento"]
@@ -1343,7 +1371,7 @@ with col_vendas:
     # (pct_atingimento = receita / meta), por isso o hint da meta vive
     # aqui e não no card de Montante.
     receita_hint = (
-        f"meta {brl_short(k_vendas['meta'])} · "
+        f"meta {brl(k_vendas['meta'])} · "
         f"{pct(k_vendas['pct_atingimento'])} atingido"
     )
     one_page_metric_card(

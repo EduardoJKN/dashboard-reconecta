@@ -89,43 +89,57 @@ deals_relevantes AS (
     UNION
     SELECT deal_id FROM deals_ganhos_periodo
 ),
+-- ext.leads DEDUPLICADO por zoho_id — mesma técnica das demais SQLs
+-- de Pré-vendas. Antes o LEFT JOIN com BOOL_OR dependia de QUALQUER
+-- versão histórica do lead ter `classificado='Atua +12'`; agora vale
+-- só a versão MAIS RECENTE. As 3 colunas CRM seguem combinadas no OR
+-- abaixo (regra híbrida).
+ext_leads_dedup AS (
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS ext_classif
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND (
+          l.email IS NULL
+          OR (
+              btrim(l.email) <> ''
+              AND lower(l.email) NOT LIKE '%@teste%'
+              AND lower(l.email) NOT LIKE 'teste@%'
+              AND lower(l.email) NOT LIKE '%smarts%'
+              AND lower(l.email) NOT LIKE '%reconecta%'
+          )
+      )
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
+),
 deal_classif AS (
-    -- bool_or das 4 fontes por deal. Mesma regra dos cards.
+    -- OR das 4 fontes por deal (3 CRM + ext.classificado dedupado).
+    -- Sem fan-out: ext.leads vem 1 row por zoho_id, então o bool_or
+    -- nas 3 fontes CRM é trivial (1 row em zoho_deals por deal).
     SELECT
         dr.deal_id,
-        bool_or(
+        (
             d.lead_classification = 'Atua +12'
             OR d.qualificacao     = 'Atua +12'
             OR d.classificado_cal = 'Atua +12'
-            OR l.classificado     = 'Atua +12'
+            OR eld.ext_classif    = 'Atua +12'
         )                                       AS tem_mais_12,
-        bool_or(
+        (
             d.lead_classification = 'Atua -12'
             OR d.qualificacao     = 'Atua -12'
             OR d.classificado_cal = 'Atua -12'
-            OR l.classificado     = 'Atua -12'
+            OR eld.ext_classif    = 'Atua -12'
         )                                       AS tem_menos_12,
-        bool_or(
+        (
             d.lead_classification = 'Não atua'
             OR d.qualificacao     = 'Não atua'
             OR d.classificado_cal = 'Não atua'
-            OR l.classificado     = 'Não atua'
+            OR eld.ext_classif    = 'Não atua'
         )                                       AS tem_nao_atua
     FROM deals_relevantes dr
     JOIN zoho_deals d           ON d.id::text = dr.deal_id
-    LEFT JOIN ext_reconecta.leads l
-                                ON d.id::text = l.zoho_id::text
-                               AND (
-                                   l.email IS NULL
-                                   OR (
-                                       btrim(l.email) <> ''
-                                       AND lower(l.email) NOT LIKE '%@teste%'
-                                       AND lower(l.email) NOT LIKE 'teste@%'
-                                       AND lower(l.email) NOT LIKE '%smarts%'
-                                       AND lower(l.email) NOT LIKE '%reconecta%'
-                                   )
-                               )
-    GROUP BY dr.deal_id
+    LEFT JOIN ext_leads_dedup eld ON eld.deal_id = d.id::text
 ),
 leads_funil AS (
     -- Funil de origem por deal (mesma técnica de
