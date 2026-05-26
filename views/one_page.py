@@ -1294,7 +1294,6 @@ with col_mkt:
             "Aplicações",
             int_br(k_apl["aplicacoes"]),
             delta_pct=delta_pct(k_apl["aplicacoes"], k_apl_prev["aplicacoes"]),
-            hint="typeform",
             accent=True,
             hero=True,
             badges=[
@@ -1351,7 +1350,7 @@ with col_prev:
     one_page_metric_card(
         "Agendamentos",
         int_br(ag_exib),
-        hint="líquidos (exibidos)",
+        hint=f"vencidos: {int_br(ag_venc)}",
         accent=True,
         hero=True,
         badges=[

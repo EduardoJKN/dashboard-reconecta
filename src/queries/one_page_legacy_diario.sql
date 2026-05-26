@@ -22,10 +22,14 @@
 --   -12  : ('atua -12', 'atua-12', '-12')
 --   Não atua: ('não atua', 'nao atua')
 --
--- Cruzamento "Aplicação com Agendamento":
---   match exato (data, email_norm) entre `aplicacoes_dia_email` e
---   `acts_emails`. Significa: aplicação enviada no mesmo dia em que o
---   SDR/closer criou a activity de Consulta/Indicação para aquele e-mail.
+-- Cruzamento "Aplicação com Agendamento" (REGRA REVISADA):
+--   jornada `aplicação.email → leads.email → leads.zoho_id → deal.id
+--   → activity.what_id`. Aplicação no período + esse deal teve algum
+--   agendamento em qualquer momento (sem exigir mesmo dia, e sem
+--   restringir o agendamento ao período). Substitui a versão antiga
+--   que casava `aplicacao.email = deal.email` no MESMO dia — frágil
+--   a divergência de e-mail e perdia casos de aplicação→agendamento
+--   com defasagem temporal. Ver CTE `apl_com_ag` abaixo.
 --
 -- Filtro de e-mails internos/testes alinhado com o resto do projeto
 -- (`%@teste%`, `teste@%`, `%smarts%`, `%reconecta%`) — aplicado em ambas
@@ -130,8 +134,56 @@ agendamentos_dia AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- Aplicação × Agendamento — match (data, email_norm).
+-- Aplicação × Agendamento — REGRA REVISADA: jornada
+-- aplicação → lead → deal → agendamento, via `leads.zoho_id`.
+--
+-- Mudança vs versão anterior (match direto `aplicacao.email = deal.email`
+-- exigindo data igual):
+--   • robustez a divergência de e-mail entre aplicação e deal (lead
+--     corrige o e-mail no Zoho, mas a aplicação no Typeform mantém o
+--     original — antes esses casos eram perdidos);
+--   • captura jornada completa — `Opção A` confirmada com user:
+--     agendamento pode ter sido marcado DEPOIS do fim do período da
+--     One Page e ainda assim contar. A pergunta respondida é:
+--     "Das aplicações DO PERÍODO, quantas viraram agendamento (em
+--     qualquer momento)?"
+--
+-- Dedupe da ponte email → zoho_id: versão MAIS RECENTE por e-mail
+-- (`ORDER BY timestamp DESC NULLS LAST, id DESC`) — mesmo padrão usado
+-- em outras SQLs do projeto (vd. `one_page_prevendas_por_fonte.sql`).
 -- ---------------------------------------------------------------------------
+
+-- Ponte e-mail → zoho_id via `ext_reconecta.leads`, dedup pela versão
+-- mais recente. Filtros de e-mail de teste idênticos ao resto da SQL.
+leads_email_zoho AS (
+    SELECT DISTINCT ON (lower(btrim(l.email)))
+        lower(btrim(l.email))   AS email_norm,
+        l.zoho_id::text         AS deal_id
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    ORDER BY lower(btrim(l.email)),
+             l."timestamp" DESC NULLS LAST,
+             l.id DESC
+),
+-- Deals que tiveram pelo menos 1 activity de Consulta/Indicação em
+-- qualquer momento. SEM filtro de data (Opção A) — captura jornada
+-- completa mesmo que o agendamento tenha sido marcado depois do
+-- fim do período. Mesmo critério de `activity_type` usado em
+-- `one_page_prevendas_por_fonte.sql` e `prevendas_overview_diario.sql`.
+deals_com_agendamento AS (
+    SELECT DISTINCT zd.id::text AS deal_id
+    FROM zoho_activities a
+    JOIN zoho_deals zd ON zd.id = a.what_id
+    WHERE a.activity_type IN ('Consulta', 'Indicação')
+),
+-- Match final aplicação → lead → deal → agendamento.
 apl_com_ag AS (
     SELECT
         ad.data,
@@ -143,7 +195,8 @@ apl_com_ag AS (
         COUNT(DISTINCT ad.email_norm) FILTER (WHERE ad.tem_nao_atua)::bigint
                                                                          AS aplicacoes_nao_atua_com_agendamento
     FROM aplicacoes_dia_email ad
-    JOIN acts_emails ae USING (data, email_norm)
+    JOIN leads_email_zoho      lez USING (email_norm)
+    JOIN deals_com_agendamento dca USING (deal_id)
     GROUP BY ad.data
 ),
 
