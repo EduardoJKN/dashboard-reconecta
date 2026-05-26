@@ -107,7 +107,7 @@ def _sum(df: pd.DataFrame, col: str) -> float:
 #               Investido, Ticket médio)
 #   - compact → padding/altura ainda menores (cards de apoio: ±12, CPA,
 #               Ascensões, Renovações, Indicações, custos)
-#   - default → intermediário (Leads, % Apl/Leads, %s, Cons./Comp., etc.)
+#   - default → intermediário (Leads, % Apl/Leads, %s, Agend./Comp., etc.)
 #
 # CSS é escopado via `:has(.op-card)` — só apertam o gap as linhas
 # que contém card OP, charts/tabelas abaixo ficam intactos.
@@ -263,7 +263,7 @@ _OP_CARD_CSS = """
 .op-card.hero .op-badge-value { font-size: 0.95rem; }
 
 /* Sub-stats dentro de um badge — usados pra detalhar Agend. ±12 IN/SS
-   acoplados em Cons. INBOUND/SS (volume no destaque, % e custo logo
+   acoplados em Agend. INBOUND/SS (volume no destaque, % e custo logo
    abaixo). Visual mais discreto que o valor principal do badge. */
 .op-badge-extras {
     margin-top: 4px;
@@ -414,7 +414,7 @@ def one_page_metric_card(
       - `(label, value, [(slabel, svalue),…])` → badge com sub-stats
                                                   listadas abaixo do valor
     Sub-stats são usadas pra detalhar Agend. ±12 IN/SS dentro de
-    Cons. INBOUND/SS (volume + % por consulta + custo por consulta).
+    Agend. INBOUND/SS (volume + % por agendamento + custo por agendamento).
     """
     classes = ["op-card"]
     if hero:
@@ -1287,8 +1287,8 @@ with col_mkt:
 # comparecimento ficam acopladas ao card "pai" como badges, evitando
 # cards soltos que duplicam a hierarquia da informação):
 #   L1: Agendamentos (hero, largo)
-#   L2: Cons. INBOUND  (badges: Agend. -12 IN | Agend. +12 IN)
-#     | Cons. SS       (badges: Agend. -12 SS | Agend. +12 SS)
+#   L2: Agend. INBOUND  (badges: Agend. -12 IN | Agend. +12 IN)
+#     | Agend. SS       (badges: Agend. -12 SS | Agend. +12 SS)
 #   L3: Comp. INBOUND  (badge: % Comp. Inbound)
 #     | Comp. SS       (badge: % Comp. SS)
 # Regra rígida: -12 sempre na esquerda, +12 sempre na direita.
@@ -1337,17 +1337,17 @@ with col_prev:
     r = st.columns(2, gap="small")
     with r[0]:
         one_page_metric_card(
-            "Cons. INBOUND",
+            "Agend. INBOUND",
             int_br(inb_tot),
             hint="agendamentos Inbound",
             badges=[
                 ("Agend. -12 IN",
                  int_br(inb["agendamentos_menos_12"]),
                  [
-                     ("% Cons.",
+                     ("% Agend.",
                       pct(_safe_div(inb["agendamentos_menos_12"],
                                     inb_tot) * 100)),
-                     ("Custo / Cons.",
+                     ("Custo / Ag.",
                       brl(_safe_div(inv_total,
                                     inb["agendamentos_menos_12"]),
                           casas=2)),
@@ -1355,10 +1355,10 @@ with col_prev:
                 ("Agend. +12 IN",
                  int_br(inb["agendamentos_mais_12"]),
                  [
-                     ("% Cons.",
+                     ("% Agend.",
                       pct(_safe_div(inb["agendamentos_mais_12"],
                                     inb_tot) * 100)),
-                     ("Custo / Cons.",
+                     ("Custo / Ag.",
                       brl(_safe_div(inv_total,
                                     inb["agendamentos_mais_12"]),
                           casas=2)),
@@ -1367,17 +1367,17 @@ with col_prev:
         )
     with r[1]:
         one_page_metric_card(
-            "Cons. SS",
+            "Agend. SS",
             int_br(ss_tot),
             hint="agendamentos Fábrica",
             badges=[
                 ("Agend. -12 SS",
                  int_br(ss["agendamentos_menos_12"]),
                  [
-                     ("% Cons.",
+                     ("% Agend.",
                       pct(_safe_div(ss["agendamentos_menos_12"],
                                     ss_tot) * 100)),
-                     ("Custo / Cons.",
+                     ("Custo / Ag.",
                       brl(_safe_div(inv_total,
                                     ss["agendamentos_menos_12"]),
                           casas=2)),
@@ -1385,10 +1385,10 @@ with col_prev:
                 ("Agend. +12 SS",
                  int_br(ss["agendamentos_mais_12"]),
                  [
-                     ("% Cons.",
+                     ("% Agend.",
                       pct(_safe_div(ss["agendamentos_mais_12"],
                                     ss_tot) * 100)),
-                     ("Custo / Cons.",
+                     ("Custo / Ag.",
                       brl(_safe_div(inv_total,
                                     ss["agendamentos_mais_12"]),
                           casas=2)),
