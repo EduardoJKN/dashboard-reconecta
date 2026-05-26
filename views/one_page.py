@@ -57,12 +57,18 @@ from src.ui.charts import (
     annotate_adaptive,
     style_temporal,
 )
+from src.ui.op_themes import (
+    apply_one_page_theme,
+    op_chart_apply_theme,
+    op_theme_color,
+    render_theme_selector,
+)
 from src.ui.components import (
     ranking_column_config,
     section_title,
 )
 from src.ui.page import start_page
-from src.ui.theme import PALETTE, brl as _brl_global, int_br, pct as _pct_global
+from src.ui.theme import brl as _brl_global, int_br, pct as _pct_global
 
 
 # Padronização de formatação da One Page: dinheiro com centavos
@@ -138,7 +144,7 @@ _OP_CARD_CSS = """
 }
 .op-card:hover { border-color: var(--color-border-strong); }
 .op-card.hero {
-    padding: 14px 16px;
+    padding: 12px 16px;
     min-height: 86px;
     border-color: var(--color-border-strong);
 }
@@ -202,15 +208,15 @@ _OP_CARD_CSS = """
 .op-delta.flat { color: var(--color-text-subtle); opacity: 0.55; }
 .op-hint {
     color: var(--color-text-subtle);
-    font-size: 0.6rem;
+    font-size: 0.55rem;
     margin-top: 1px;
-    opacity: 0.7;
+    opacity: 0.6;
     max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.op-card.compact .op-hint { font-size: 0.56rem; }
+.op-card.compact .op-hint { font-size: 0.52rem; }
 
 /* Mini-indicadores associados — sub-grid no rodapé do card. Usado pra
    "grudar" % Agendamento e Custo/Aplicação ao card de Aplicações (e ±12).
@@ -316,11 +322,30 @@ _OP_CARD_CSS = """
 /* Densidade — apenas blocos que contém cards OP. Charts/tabelas
    abaixo do KPI block usam seu próprio espaçamento (gap="large"). */
 [data-testid="stHorizontalBlock"]:has(.op-card) {
-    gap: 0.55rem !important;
+    gap: 0.7rem !important;
     margin-bottom: 6px;
 }
+/* Base — irmãos genéricos dentro de uma coluna ficam próximos (0.4rem).
+   Hierarquia diferenciada vem via margin-top nos seletores abaixo. */
 [data-testid="stColumn"]:has(.op-card) [data-testid="stVerticalBlock"] {
     gap: 0.4rem !important;
+}
+/* Hero → primeiro bloco de filhos. Quando um stElementContainer com
+   `.op-card.hero` (pai standalone, full-width) é seguido por um
+   stHorizontalBlock contendo cards, adiciona ar extra pra separar
+   visualmente o pai do seu agrupamento de filhos. Total efetivo: gap
+   base 0.4rem + 0.45rem = ~0.85rem. */
+[data-testid="stElementContainer"]:has(.op-card.hero)
+    + [data-testid="stHorizontalBlock"]:has(.op-card) {
+    margin-top: 0.45rem !important;
+}
+/* Bloco → bloco irmão. Quando dois stHorizontalBlocks de cards estão
+   adjacentes na mesma coluna (ex.: Agend. row → Comp. row), ar
+   intermediário pra sinalizar que são grupos distintos sem distanciar
+   demais. Total efetivo: 0.4 + 0.3 = 0.7rem. */
+[data-testid="stHorizontalBlock"]:has(.op-card)
+    + [data-testid="stHorizontalBlock"]:has(.op-card) {
+    margin-top: 0.3rem !important;
 }
 /* Section title mais apertado só no topo (antes do KPI grid). Aplica
    global porque é classe própria — fica natural na página inteira. */
@@ -403,11 +428,18 @@ def one_page_metric_card(
     accent: bool = False,
     hero: bool = False,
     compact: bool = False,
+    wine_accent: bool = False,
     badges: list[tuple] | None = None,
 ) -> None:
     """Card compacto da One Page. `hero` e `compact` são mutuamente
     exclusivos visualmente — se ambos True, `hero` vence (atalho seguro
     pra evitar bugs de chamada).
+
+    `wine_accent=True` adiciona a classe CSS `wine-accent` ao card.
+    No tema Reconecta Dark é no-op visual; no tema Looker Legacy ganha
+    uma borda topo vinho (`--color-wine`). Reservado pros cards
+    financeiros principais (Montante, Investido) — visual de "destaque
+    executivo" alinhado ao Looker classic.
 
     `badges` aceita duas formas de tupla:
       - `(label, value)`                       → badge simples (1 linha)
@@ -421,6 +453,8 @@ def one_page_metric_card(
         classes.append("hero")
     elif compact:
         classes.append("compact")
+    if wine_accent:
+        classes.append("wine-accent")
 
     delta_html = ""
     if delta_pct is not None:
@@ -1109,6 +1143,21 @@ ctx = start_page(
     subtitle="Visão executiva consolidada — Marketing × Pré-vendas × Vendas",
 )
 
+# Seletor de tema (PoC) — linha compacta logo abaixo do header, com o
+# selectbox alinhado à direita via `st.columns`. Versão anterior usava
+# `position: fixed` pra pinar no canto superior direito, mas isso
+# sobrepunha os controles nativos do Streamlit (Deploy/menu) tornando
+# o widget difícil de clicar. Trade-off aceito: ~40px de espaço
+# vertical extra abaixo do header, em troca de clicabilidade garantida.
+# `label_visibility="collapsed"` + tooltip `help` mantêm o visual
+# discreto. `apply_one_page_theme()` é chamada IMEDIATAMENTE depois pra
+# que as `--color-*` overrides já estejam vigentes quando os cards/
+# gráficos forem renderizados.
+_, _th_r = st.columns([6, 1], gap="small")
+with _th_r:
+    render_theme_selector()
+apply_one_page_theme()
+
 # =============================================================================
 # Carga
 # =============================================================================
@@ -1198,7 +1247,7 @@ ag_exib  = int(k_prev.get("agendamentos_exibidos", max(ag_bruto - ag_venc, 0)))
 # Idempotente (re-injeção a cada rerun apenas redefine as regras).
 st.markdown(_OP_CARD_CSS, unsafe_allow_html=True)
 
-col_mkt, col_prev, col_vendas = st.columns([1.0, 1.05, 1.0], gap="small")
+col_mkt, col_prev, col_vendas = st.columns([1.0, 1.05, 1.0], gap="medium")
 
 # -----------------------------------------------------------------------------
 # Coluna esquerda — Marketing / Aplicações
@@ -1490,6 +1539,7 @@ with col_vendas:
             hint=f"recebimento {pct(k_vendas['pct_recebimento'])}",
             accent=True,
             hero=True,
+            wine_accent=True,
         )
     with r[1]:
         one_page_metric_card(
@@ -1499,6 +1549,7 @@ with col_vendas:
                                 k_vendas_prev["investimento"]),
             hint=f"{int_br(k_vendas['dias'])} dias",
             hero=True,
+            wine_accent=True,
         )
 
     # L3 — CPA | Média móvel | Ticket médio (3 cards)
@@ -1562,11 +1613,13 @@ with g_left:
     else:
         # Specs por trace: (nome, coluna, cor, dash, espessura, tamanho marker).
         # Formatter compartilhado (int_br) — todas as séries são contagens.
+        # Cores lidas do tema ativo (`op_theme_color`) — substitui PALETTE
+        # direto pra acompanhar troca de tema.
         _traces = [
-            ("Leads",      "leads_totais",        PALETTE["gold"],        None,   2.5, 5),
-            ("Aplicações", "aplicacoes",          PALETTE["wine_light"],  None,   2.5, 5),
-            ("Apl. +12",   "aplicacoes_mais_12",  "#1D4ED8",              "dash", 2.0, 4),
-            ("Apl. -12",   "aplicacoes_menos_12", "#7C3AED",              "dot",  2.0, 4),
+            ("Leads",      "leads_totais",        op_theme_color("gold"),       None,   2.5, 5),
+            ("Aplicações", "aplicacoes",          op_theme_color("wine_light"), None,   2.5, 5),
+            ("Apl. +12",   "aplicacoes_mais_12",  op_theme_color("plus_12"),    "dash", 2.0, 4),
+            ("Apl. -12",   "aplicacoes_menos_12", op_theme_color("minus_12"),   "dot",  2.0, 4),
         ]
         fig = go.Figure()
         for name, col, color, dash, w, msz in _traces:
@@ -1579,7 +1632,7 @@ with g_left:
                 mode="lines+markers+text",
                 text=annotate_adaptive(series, int_br),
                 textposition="top center",
-                textfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+                textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
                 cliponaxis=False,
                 line=dict(color=color, width=w, dash=dash),
                 marker=dict(size=msz),
@@ -1587,6 +1640,7 @@ with g_left:
         fig.update_layout(**_base_layout(height=320, unified=True))
         _style_axes(fig)
         style_temporal(fig)
+        op_chart_apply_theme(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 # ---- 2. Investimento por dia (mesma base do CPL: anuncios sem REL_02*) ----
@@ -1606,20 +1660,21 @@ with g_right:
             x=df_inv_one["data_ref"], y=inv_series,
             name="Investimento",
             fill="tozeroy",
-            line=dict(color=PALETTE["gold"], width=2.5),
-            fillcolor="rgba(201,168,76,0.18)",
+            line=dict(color=op_theme_color("gold"), width=2.5),
+            fillcolor=op_theme_color("gold_fill"),
             mode="lines+markers+text",
             marker=dict(size=5),
             customdata=[[v] for v in fmt_inv],
             hovertemplate="%{customdata[0]}<extra></extra>",
             text=annotate_adaptive(inv_series, brl),
             textposition="top center",
-            textfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+            textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
             cliponaxis=False,
         ))
         fig.update_layout(**_base_layout(height=280, unified=True))
         _style_axes(fig, money_axis="y")
         style_temporal(fig)
+        op_chart_apply_theme(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 g_left2, g_right2 = st.columns(2, gap="large")
@@ -1639,9 +1694,9 @@ with g_left2:
             df_pd["agendamentos"] - df_pd["agendamentos_mais_12"]
         ).clip(lower=0)
         _traces = [
-            ("Agendamentos",     "agendamentos",                PALETTE["gold"], None,   2.5, 5),
-            ("Ag. +12",          "agendamentos_mais_12",        "#1D4ED8",       "dash", 2.0, 4),
-            ("Ag. -12 (aprox.)", "agendamentos_menos_12_aprox", "#7C3AED",       "dot",  2.0, 4),
+            ("Agendamentos",     "agendamentos",                op_theme_color("gold"),     None,   2.5, 5),
+            ("Ag. +12",          "agendamentos_mais_12",        op_theme_color("plus_12"),  "dash", 2.0, 4),
+            ("Ag. -12 (aprox.)", "agendamentos_menos_12_aprox", op_theme_color("minus_12"), "dot",  2.0, 4),
         ]
         fig = go.Figure()
         for name, col, color, dash, w, msz in _traces:
@@ -1654,7 +1709,7 @@ with g_left2:
                 mode="lines+markers+text",
                 text=annotate_adaptive(series, int_br),
                 textposition="top center",
-                textfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+                textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
                 cliponaxis=False,
                 line=dict(color=color, width=w, dash=dash),
                 marker=dict(size=msz),
@@ -1662,6 +1717,7 @@ with g_left2:
         fig.update_layout(**_base_layout(height=320, unified=True))
         _style_axes(fig)
         style_temporal(fig)
+        op_chart_apply_theme(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 # ---- 4. Volumes (ag/comp/vendas) -------------------------------------------
@@ -1679,9 +1735,9 @@ with g_right2:
                   .fillna(0)
                   .sort_values("data_ref"))
         _traces = [
-            ("Agendamentos", "agendamentos",     PALETTE["gold"],       None,   2.5, 5),
-            ("Comparec.",    "comparecimentos",  PALETTE["wine_light"], None,   2.5, 5),
-            ("Vendas",       "vendas",           PALETTE["green"],      "dot",  2.5, 5),
+            ("Agendamentos", "agendamentos",     op_theme_color("gold"),       None,  2.5, 5),
+            ("Comparec.",    "comparecimentos",  op_theme_color("wine_light"), None,  2.5, 5),
+            ("Vendas",       "vendas",           op_theme_color("green"),      "dot", 2.5, 5),
         ]
         fig = go.Figure()
         for name, col, color, dash, w, msz in _traces:
@@ -1694,7 +1750,7 @@ with g_right2:
                 mode="lines+markers+text",
                 text=annotate_adaptive(series, int_br),
                 textposition="top center",
-                textfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+                textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
                 cliponaxis=False,
                 line=dict(color=color, width=w, dash=dash),
                 marker=dict(size=msz),
@@ -1702,6 +1758,7 @@ with g_right2:
         fig.update_layout(**_base_layout(height=320, unified=True))
         _style_axes(fig)
         style_temporal(fig)
+        op_chart_apply_theme(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 # =============================================================================
