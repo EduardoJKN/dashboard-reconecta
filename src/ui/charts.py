@@ -103,6 +103,147 @@ def last_point_text(values, formatter=None) -> list[str]:
     return [""] * (n - 1) + [text]
 
 
+def annotate_extremes(values, formatter=None) -> list[str]:
+    """`text` array para Scatter com rótulos no ÚLTIMO ponto e no maior
+    valor da série (deduplicado se coincidirem). Demais pontos ficam sem
+    rótulo — leitura limpa sem poluir o gráfico.
+
+    Útil pra séries temporais onde queremos sinalizar o estado atual e o
+    pico do período sem anotação em cada marker.
+
+    `formatter` default = inteiro BR (`1.234`). Passe `brl`/`pct` quando
+    a métrica for monetária/percentual.
+    """
+    if values is None:
+        return []
+    try:
+        seq = list(values)
+    except TypeError:
+        return []
+    n = len(seq)
+    if n == 0:
+        return []
+    if formatter is None:
+        formatter = lambda v: f"{float(v):,.0f}".replace(",", ".")
+    # Filtra pontos válidos (descarta None/NaN)
+    valid = []
+    for i, v in enumerate(seq):
+        if v is None:
+            continue
+        try:
+            if isinstance(v, float) and v != v:  # NaN
+                continue
+        except Exception:
+            continue
+        valid.append((i, v))
+    if not valid:
+        return [""] * n
+    out = [""] * n
+    last_i, last_v = valid[-1]
+    out[last_i] = formatter(last_v)
+    max_i, max_v = max(valid, key=lambda kv: kv[1])
+    if max_i != last_i:
+        out[max_i] = formatter(max_v)
+    return out
+
+
+def annotate_adaptive(values, formatter=None,
+                      max_all: int = 7,
+                      max_mid: int = 15) -> list[str]:
+    """`text` array adaptativo ao tamanho da série:
+
+      • até `max_all` pontos válidos (default 7) → rótulo em CADA ponto
+        (períodos curtos, ex.: 1 semana, lê valor direto sem precisar
+         do hover).
+      • entre `max_all + 1` e `max_mid` (default 8–15) → rótulos em
+        pontos ALTERNADOS (pares no array), com garantia explícita
+        do último ponto e do máximo da série.
+      • acima de `max_mid` → comportamento de `annotate_extremes` (só
+        último + máximo, evita poluição em períodos longos).
+
+    NaN/None ignorados (não consomem slot de rótulo).
+
+    Usado nos gráficos da One Page → adapta automaticamente ao período
+    selecionado pelo usuário. Pra séries secundárias que queiram ser
+    mais conservadoras, basta passar `max_all=0` (nunca anota todos)
+    ou `max_mid=0` (sempre cai no modo "extremos").
+    """
+    if values is None:
+        return []
+    try:
+        seq = list(values)
+    except TypeError:
+        return []
+    n = len(seq)
+    if n == 0:
+        return []
+    if formatter is None:
+        formatter = lambda v: f"{float(v):,.0f}".replace(",", ".")
+    valid = []
+    for i, v in enumerate(seq):
+        if v is None:
+            continue
+        try:
+            if isinstance(v, float) and v != v:
+                continue
+        except Exception:
+            continue
+        valid.append((i, v))
+    if not valid:
+        return [""] * n
+
+    n_valid = len(valid)
+    out = [""] * n
+
+    if n_valid <= max_all:
+        for i, v in valid:
+            out[i] = formatter(v)
+        return out
+
+    if n_valid <= max_mid:
+        # Pontos alternados (pares no array `valid`, índice 0, 2, 4…).
+        for j in range(0, n_valid, 2):
+            i, v = valid[j]
+            out[i] = formatter(v)
+        # Garante último + máximo, mesmo que não tenham caído no slot par.
+        last_i, last_v = valid[-1]
+        out[last_i] = formatter(last_v)
+        max_i, max_v = max(valid, key=lambda kv: kv[1])
+        if not out[max_i]:
+            out[max_i] = formatter(max_v)
+        return out
+
+    # Períodos longos: só extremos
+    last_i, last_v = valid[-1]
+    out[last_i] = formatter(last_v)
+    max_i, max_v = max(valid, key=lambda kv: kv[1])
+    if max_i != last_i:
+        out[max_i] = formatter(max_v)
+    return out
+
+
+def style_temporal(fig: go.Figure, x_date: bool = True) -> go.Figure:
+    """Defaults visuais p/ gráficos temporais com legenda horizontal abaixo:
+    margem inferior maior pra não atropelar tick labels com a legenda, e
+    formato BR no eixo X (`%d/%m` no tick, `%d/%m/%Y` no hover). Os dois
+    formatos de data são ignorados pelo Plotly quando o eixo não é de
+    datas, então é seguro aplicar genericamente.
+    """
+    fig.update_layout(
+        margin=dict(l=12, r=12, t=24, b=72),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=-0.32,
+            xanchor="left", x=0,
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color=PALETTE["text_subtle"], size=11),
+        ),
+    )
+    if x_date:
+        fig.update_xaxes(tickformat="%d/%m", hoverformat="%d/%m/%Y")
+    return fig
+
+
 def _fig(**kwargs) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(**_base_layout(**kwargs))

@@ -13,16 +13,16 @@ MVP — opção pelo CEO:
     e investimento vem de `fdw_reconecta.anuncios` (REL_02* excluído).
     Esse investimento pode diferir em ~R$ 10–20 de
     `bi.vw_investimento_diario` (Google Ads não está na fdw da Meta).
-  - Tabela "Por Fonte de Lead" mostra só as colunas confiáveis hoje.
-    Agendamentos / Comparecimentos / %Conversão / %Venda /
-    %Comparecimento por canal ficam no backlog (precisa atribuir
-    activities/deals por canal — não existe view nem chave de match).
+  - Tabela "Indicadores - Fonte de Lead" usa
+    `one_page_prevendas_por_fonte.sql` (mesma base dos cards
+    INBOUND/SS): Agendamentos líquidos, +12/-12 combinados,
+    Comparecimento, Montante, Receita e percentuais derivados.
 
 Fontes:
   - get_one_page_legacy_diario                          (Marketing One Page)
   - get_executivas / get_investimento_diario            (Vendas)
   - get_media_movel_vendas                              (Vendas)
-  - get_mkt_visao_geral_kpis_canal                      (tabela "Por Fonte")
+  - get_one_page_prevendas_por_fonte                    (tabela Fonte)
   - get_prevendas_overview_diario / _por_sdr / _sdr_closer (Pré-vendas)
 
 Performance via `@st.cache_data(ttl=600)` em todos os repositories.
@@ -36,8 +36,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.marketing_queries import get_mkt_visao_geral_kpis_canal
-from src.marketing_safe import safe_run
 from src.prevendas_transforms import prevendas_overview_kpis
 from src.repositories import (
     get_executivas,
@@ -53,7 +51,12 @@ from src.transforms import (
     executivas_ranking,
     visao_geral_kpis,
 )
-from src.ui.charts import _base_layout, _style_axes, area
+from src.ui.charts import (
+    _base_layout,
+    _style_axes,
+    annotate_adaptive,
+    style_temporal,
+)
 from src.ui.components import (
     ranking_column_config,
     section_title,
@@ -144,13 +147,13 @@ _OP_CARD_CSS = """
     min-height: 50px;
     gap: 1px;
 }
-/* Cabeçalho — label + delta inline. min-width:0 nos filhos garante que
-   o ellipsis do label funcione mesmo quando o delta consome largura. */
+/* Cabeçalho — label + delta inline. `gap: 8px` (era 6) garante respiro
+   entre o título e o badge de variação, evitando que ele "cole" no label. */
 .op-head {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
     min-width: 0;
 }
@@ -174,11 +177,15 @@ _OP_CARD_CSS = """
     line-height: 1.1;
     font-variant-numeric: tabular-nums;
     margin-top: 2px;
+    /* Mantém o valor numa única linha — evita quebrar `R$ 934.000,00`
+       em "R$" / "934.000,00" em colunas estreitas (Montante hero). */
+    white-space: nowrap;
 }
 .op-card.hero    .op-value { font-size: 1.7rem; margin-top: 4px; }
 .op-card.compact .op-value { font-size: 1.0rem; font-weight: 600; margin-top: 1px; }
 .op-value.accent { color: var(--color-gold); }
-/* Delta — anotação leve ao lado do label (não mais absolute) */
+/* Delta — anotação leve ao lado do label (texto colorido sem pílula
+   chamativa). Versão executiva sutil; cores up/down/flat dão o sinal. */
 .op-delta {
     font-size: 0.56rem;
     font-weight: 500;
@@ -318,6 +325,60 @@ _OP_CARD_CSS = """
 /* Section title mais apertado só no topo (antes do KPI grid). Aplica
    global porque é classe própria — fica natural na página inteira. */
 .sec-title { margin: 10px 0 6px 0; padding-bottom: 4px; }
+
+/* Linha-rodapé "Total do período" — usada APENAS abaixo da tabela
+   "Por SDR × Closer" (que tem `height=420` com scroll interno).
+   Renderizada como grid pra que cada valor caia aproximadamente
+   embaixo da coluna correspondente do `st.dataframe` acima. Pixel-
+   perfect é impossível (Glide DataGrid é um canvas com larguras
+   internas dinâmicas, fora do alcance do DOM); o ajuste é via
+   proporções em `fr` no `--cols`, calibradas pelo conteúdo médio
+   de cada coluna da tabela.
+
+   PALETA: cores hardcoded do tema dark DEFAULT do Streamlit (Glide
+   DataGrid), NÃO da paleta marrom da Reconecta. O dataframe renderiza
+   num canvas isolado que ignora nossos `--color-*` — se usássemos
+   `--color-card` (#161311) aqui o rodapé ficaria mais quente que as
+   linhas do dataframe (#0E1117), parecendo card separado. Mantendo
+   essas constantes alinhadas com o Streamlit default, o rodapé se
+   funde visualmente à tabela. Se a Reconecta um dia tematizar o
+   dataframe via `.streamlit/config.toml`, atualizar estas constantes
+   pra acompanhar.
+
+   Nas outras 2 tabelas (Fonte de Lead, Por Executiva) o total segue
+   como última linha dentro do próprio dataframe — são curtas, não
+   precisam dessa duplicação. */
+.op-foot-row {
+    background: #0E1117;                      /* = Streamlit dark bg */
+    border: 1px solid #262730;                /* = Streamlit secondaryBg */
+    border-top: 0;
+    border-radius: 0 0 10px 10px;             /* casa com radius do stDataFrame */
+    margin: -8px 0 16px 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: var(--cols);
+    align-items: stretch;
+}
+.op-foot-cell {
+    padding: 9px 10px;
+    border-right: 1px solid rgba(255, 255, 255, 0.05);  /* separador sutil */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: #FAFAFA;                           /* = Streamlit textColor */
+    min-width: 0;
+}
+.op-foot-cell:last-child { border-right: 0; }
+.op-foot-cell.label  { font-weight: 700; text-align: left; }
+.op-foot-cell.left   { text-align: left; }
+.op-foot-cell.num    { text-align: right; }
+/* `accent` mantido como classe pra não quebrar o caller, mas sem
+   destaque visual — Total não pinta valores em dourado, fica com
+   a mesma cor das demais células. */
+.op-foot-cell.accent { color: #FAFAFA; }
 </style>
 """
 
@@ -423,6 +484,76 @@ def one_page_metric_card(
         f'</div>',
         unsafe_allow_html=True,
     )
+
+
+def _render_total_row(cells: list[tuple], weights: list[float]) -> None:
+    """Linha-rodapé alinhada por CSS Grid, colada ao bottom do
+    `st.dataframe` da tabela "Por SDR × Closer".
+
+    Existe pra que o usuário enxergue o Total sem precisar rolar o
+    scroll interno da tabela (altura=420). Não tenta replicar a largura
+    exata das colunas do Glide DataGrid (impossível: as larguras vivem
+    no canvas e não vazam pro DOM). O alinhamento é aproximado, via
+    proporções em `fr` calibradas pelo conteúdo médio de cada coluna —
+    fica visualmente próximo do "embaixo da coluna" pra leitura
+    executiva.
+
+    `cells`  — lista de `(texto, kind)`; kind ∈
+                 {"label", "txt", "num", "accent"}.
+    `weights` — lista de pesos em `fr`, MESMO comprimento de `cells`.
+    """
+    if not cells or len(cells) != len(weights):
+        return
+    tpl = " ".join(f"{w}fr" for w in weights)
+    parts = []
+    for text, kind in cells:
+        classes = ["op-foot-cell"]
+        if kind == "label":
+            classes.append("label")
+        elif kind == "txt":
+            classes.append("left")
+        elif kind == "accent":
+            classes.append("num")
+            classes.append("accent")
+        else:  # "num"
+            classes.append("num")
+        parts.append(
+            f'<div class="{" ".join(classes)}">{html.escape(str(text))}</div>'
+        )
+    st.markdown(
+        f'<div class="op-foot-row" style="--cols:{tpl};">'
+        f'{"".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _br_format_table(df: pd.DataFrame,
+                     money_cols: tuple = (),
+                     int_cols: tuple = (),
+                     pct_cols: tuple = ()) -> pd.DataFrame:
+    """Pré-formata colunas numéricas como strings BR usando os helpers
+    locais (`brl`, `int_br`, `pct`).
+
+    Necessário porque `st.column_config.NumberColumn` em Streamlit 1.56
+    só aceita format printf-style (US) ou preset `"localized"` (depende
+    do locale do browser do usuário — não-determinístico). Pré-formatar
+    em string garante saída `R$ 934.000,00` / `67,25%` / `1.234` para
+    todos os browsers. Trade-off: a coluna formatada vira `object`/str,
+    perde sort numérico no header — sort fica alfabético.
+
+    Aceita NaN/None: `brl` e `int_br` devolvem "—" nesses casos.
+    """
+    out = df.copy()
+    for c in money_cols:
+        if c in out.columns:
+            out[c] = out[c].apply(brl)
+    for c in int_cols:
+        if c in out.columns:
+            out[c] = out[c].apply(int_br)
+    for c in pct_cols:
+        if c in out.columns:
+            out[c] = out[c].apply(pct)
+    return out
 
 
 def _aplicacoes_kpis(df_one: pd.DataFrame) -> dict:
@@ -538,82 +669,122 @@ def _df_evolucao_aplicacoes(df_one: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _tabela_por_fonte(df_kpc: pd.DataFrame) -> pd.DataFrame:
-    """Tabela "Por Fonte de Lead" — colunas confiáveis hoje.
+def _pcts_prevendas(r) -> dict:
+    """Percentuais canônicos a partir de absolutos somados.
 
-    Mantém apenas o que o `mkt_visao_geral_kpis_canal` já entrega por
-    canal (invest + leads + financeiro atribuído + derivadas). Colunas
-    do briefing que dependem de atribuição de activities por canal —
-    Agendamentos / Comparecimentos / %Recebimento por canal /
-    %Conversão / %Venda / %Comparecimento — ficam de fora desta versão.
-    BACKLOG: criar view `bi.vw_atividades_por_canal` (deal→lead→canal +
-    activities) e fazer merge aqui.
+    Compartilhado entre `_tabela_indicadores_fonte` (cálculo por linha de
+    fonte) e `_total_prevendas_from_absolutes` (linha Total exibida na
+    faixa abaixo da tabela). Mantém a regra única: % +12, % -12 e %
+    Comparecimento têm `agendamentos` como denominador; % Conversão usa
+    `vendas / agendamentos` e % Venda usa `vendas / comparecimentos`; %
+    Recebimento é `receita / montante`.
     """
-    if df_kpc is None or df_kpc.empty:
-        return pd.DataFrame()
-    cols_in = [
-        "canal",
-        "leads_totais",
-        "leads_mais_12",
-        "leads_menos_12",
-        "leads_qualificados",
-        "vendas_total_geral",
-        "vendas_novas_total_geral",
-        "montante_total_geral",
-        "receita_total_geral",
-        "investimento_total_geral",
-        "cpl",
-        "cpl_qualificado",
-        "ticket_medio",
-        "roas_total_geral",
-    ]
-    use = [c for c in cols_in if c in df_kpc.columns]
-    out = df_kpc[use].copy()
-
-    # % qualificação +12 / -12 (sobre leads_totais do canal)
-    if {"leads_totais", "leads_mais_12"}.issubset(out.columns):
-        out["pct_mais_12"] = out.apply(
-            lambda r: _safe_div(r["leads_mais_12"], r["leads_totais"]) * 100,
-            axis=1,
-        )
-    if {"leads_totais", "leads_menos_12"}.issubset(out.columns):
-        out["pct_menos_12"] = out.apply(
-            lambda r: _safe_div(r["leads_menos_12"], r["leads_totais"]) * 100,
-            axis=1,
-        )
-    # % Recebimento por canal (receita/montante) — único derivado seguro
-    if {"montante_total_geral", "receita_total_geral"}.issubset(out.columns):
-        out["pct_recebimento"] = out.apply(
-            lambda r: _safe_div(r["receita_total_geral"],
-                                r["montante_total_geral"]) * 100,
-            axis=1,
-        )
-
-    # Ordem final / renomeação amigável
-    rename = {
-        "canal":                     "Fonte",
-        "leads_totais":              "Leads",
-        "leads_mais_12":             "Leads +12",
-        "pct_mais_12":               "% +12",
-        "leads_menos_12":            "Leads -12",
-        "pct_menos_12":              "% -12",
-        "leads_qualificados":        "Aplicações",
-        "vendas_total_geral":        "Vendas (atrib.)",
-        "vendas_novas_total_geral":  "Vendas novas",
-        "montante_total_geral":      "Montante",
-        "receita_total_geral":       "Receita",
-        "pct_recebimento":           "% Recebimento",
-        "investimento_total_geral":  "Investimento",
-        "cpl":                       "CPL",
-        "cpl_qualificado":           "Custo / Aplicação",
-        "ticket_medio":              "Ticket médio",
-        "roas_total_geral":          "ROAS",
+    ag   = float(r.get("agendamentos") or 0)
+    comp = float(r.get("comparecimentos") or 0)
+    mais = float(r.get("agendamentos_mais_12") or 0)
+    meno = float(r.get("agendamentos_menos_12") or 0)
+    vds  = float(r.get("vendas") or 0)
+    mon  = float(r.get("montante") or 0)
+    rec  = float(r.get("receita") or 0)
+    return {
+        "pct_mais_12":        _safe_div(mais, ag) * 100,
+        "pct_menos_12":       _safe_div(meno, ag) * 100,
+        "pct_comparecimento": _safe_div(comp, ag) * 100,
+        "pct_conversao":      _safe_div(vds, ag) * 100,
+        "pct_venda":          _safe_div(vds, comp) * 100,
+        "pct_recebimento":    _safe_div(rec, mon) * 100,
     }
-    ordered = [c for c in rename if c in out.columns]
-    out = out[ordered].rename(columns=rename)
-    if "Leads" in out.columns:
-        out = out.sort_values("Leads", ascending=False)
-    return out.reset_index(drop=True)
+
+
+def _tabela_indicadores_fonte(df_fonte: pd.DataFrame) -> pd.DataFrame:
+    """Tabela "Indicadores - Fonte de Lead" — formato Looker.
+
+    Consolida `one_page_prevendas_por_fonte.sql` (1 row por fonte/dia) em
+    uma linha por fonte (Inbound / Fábrica / Outbound). Agendamentos já
+    chegam LÍQUIDOS (sem vencidos) da SQL; +12/-12 usam a regra COMBINADA
+    (CRM + ext_reconecta.leads). Percentuais derivados em Python a partir
+    dos absolutos somados — NÃO média simples das linhas diárias.
+
+    O Total NÃO é emitido como linha aqui — ele é construído à parte
+    por `_total_prevendas_from_absolutes` no bloco renderizador, que
+    concatena como última linha do df antes de chamar `st.dataframe`.
+    """
+    if (df_fonte is None or df_fonte.empty
+            or "fonte" not in df_fonte.columns):
+        return pd.DataFrame()
+
+    cols_abs = [
+        "agendamentos",
+        "agendamentos_mais_12", "agendamentos_menos_12",
+        "comparecimentos", "vendas", "montante", "receita",
+    ]
+    use = ["fonte"] + [c for c in cols_abs if c in df_fonte.columns]
+    agg = (df_fonte[use]
+           .groupby("fonte", as_index=False, dropna=False)
+           .sum(numeric_only=True))
+
+    # Ordem fixa pra leitura estável (Looker). Outbound só entra se
+    # houver atividade no período (segue o padrão da própria SQL).
+    ordem = ["Inbound", "Fábrica", "Outbound"]
+    agg["__ord"] = agg["fonte"].map({n: i for i, n in enumerate(ordem)})
+    agg = agg[agg["__ord"].notna()].copy()
+    agg = agg.sort_values("__ord").drop(columns="__ord")
+    ativo = (
+        agg.get("agendamentos", pd.Series(0, index=agg.index)).fillna(0) > 0
+    ) | (
+        agg.get("vendas", pd.Series(0, index=agg.index)).fillna(0) > 0
+    )
+    agg = agg[ativo].reset_index(drop=True)
+    if agg.empty:
+        return pd.DataFrame()
+
+    derived = pd.DataFrame([_pcts_prevendas(r) for _, r in agg.iterrows()])
+    agg = pd.concat([agg, derived], axis=1)
+
+    rename = {
+        "fonte":                 "Fonte",
+        "agendamentos":          "Agendamentos",
+        "agendamentos_mais_12":  "+12",
+        "pct_mais_12":           "% +12",
+        "agendamentos_menos_12": "-12",
+        "pct_menos_12":          "% -12",
+        "comparecimentos":       "Comparecimento",
+        "montante":              "Montante",
+        "receita":               "Receita",
+        "pct_recebimento":       "% Recebimento",
+        "pct_conversao":         "% Conversão",
+        "pct_venda":             "% Venda",
+        "pct_comparecimento":    "% Comparecimento",
+    }
+    ordered = [c for c in rename if c in agg.columns]
+    return agg[ordered].rename(columns=rename).reset_index(drop=True)
+
+
+def _total_prevendas_from_absolutes(df: pd.DataFrame,
+                                    abs_cols: list[str]) -> dict:
+    """Soma colunas absolutas e recalcula percentuais via `_pcts_prevendas`.
+
+    `df` é o df-fonte (1 linha por grão — fonte/dia, executiva, par
+    SDR×Closer) com as colunas absolutas brutas; `abs_cols` lista quais
+    devem ser somadas. Sempre devolve um dicionário com chaves
+    `agendamentos`, `comparecimentos`, `vendas`, `montante`, `receita`,
+    `agendamentos_mais_12`, `agendamentos_menos_12` (zero quando ausente)
+    + os percentuais derivados, que são montados como dict da última
+    linha "Total do período" e concatenados ao df antes de renderizar.
+    """
+    base = {k: 0.0 for k in (
+        "agendamentos", "agendamentos_mais_12", "agendamentos_menos_12",
+        "comparecimentos", "vendas", "montante", "receita",
+    )}
+    if df is None or df.empty:
+        base.update(_pcts_prevendas(base))
+        return base
+    for c in abs_cols:
+        if c in df.columns:
+            base[c] = float(pd.to_numeric(df[c], errors="coerce")
+                             .fillna(0).sum())
+    base.update(_pcts_prevendas(base))
+    return base
 
 
 def _tabela_sdr_closer(df_sc: pd.DataFrame) -> pd.DataFrame:
@@ -967,13 +1138,6 @@ except Exception as e:
     df_one      = pd.DataFrame()
     df_one_prev = pd.DataFrame()
 
-# Tabela "Por Fonte de Lead" — segue na visão por canal do Marketing
-# (atribuição financeira oficial), não substituível pela query legada.
-df_kpc = safe_run(
-    lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
-    view_label="mkt_visao_geral_kpis_canal",
-)
-
 # Pré-vendas
 # - `df_prev_dia`: alimenta o card consolidado de Agendamentos e a
 #   % Comparecimento via `prevendas_overview_kpis` (regra oficial).
@@ -1142,7 +1306,7 @@ with col_prev:
         accent=True,
         hero=True,
         badges=[
-            ("Custo / Agendamento",
+            ("Custo / Ag.",
              brl(_safe_div(k_apl["investimento"], ag_exib), casas=2)),
         ],
     )
@@ -1241,7 +1405,7 @@ with col_prev:
             int_br(inb["comparecimentos"]),
             hint="comparecimentos Inbound",
             badges=[
-                ("% Comp. Inbound",
+                ("% Comp.",
                  pct(_safe_div(inb["comparecimentos"],
                                inb["agendamentos"]) * 100)),
             ],
@@ -1252,7 +1416,7 @@ with col_prev:
             int_br(ss["comparecimentos"]),
             hint="comparecimentos Fábrica",
             badges=[
-                ("% Comp. SS",
+                ("% Comp.",
                  pct(_safe_div(ss["comparecimentos"],
                                ss["agendamentos"]) * 100)),
             ],
@@ -1289,7 +1453,7 @@ with col_vendas:
         )
     with r[1]:
         one_page_metric_card(
-            "Ascensões",
+            "Asc.",
             int_br(k_vendas["ascensoes"]),
             delta_pct=delta_pct(k_vendas["ascensoes"],
                                 k_vendas_prev["ascensoes"]),
@@ -1297,7 +1461,7 @@ with col_vendas:
         )
     with r[2]:
         one_page_metric_card(
-            "Renovações",
+            "Renov.",
             int_br(k_vendas["renovacoes"]),
             delta_pct=delta_pct(k_vendas["renovacoes"],
                                 k_vendas_prev["renovacoes"]),
@@ -1305,7 +1469,7 @@ with col_vendas:
         )
     with r[3]:
         one_page_metric_card(
-            "Indicações",
+            "Indic.",
             int_br(k_vendas["indicacoes"]),
             delta_pct=delta_pct(k_vendas["indicacoes"],
                                 k_vendas_prev["indicacoes"]),
@@ -1358,7 +1522,7 @@ with col_vendas:
         )
     with r[2]:
         one_page_metric_card(
-            "Ticket médio",
+            "Ticket méd.",
             brl(k_vendas["ticket_medio"]) if k_vendas["ticket_medio"] else "—",
             delta_pct=delta_pct(k_vendas["ticket_medio"],
                                 k_vendas_prev["ticket_medio"]),
@@ -1396,31 +1560,33 @@ with g_left:
     if df_evo.empty:
         st.info("Sem série diária de Marketing no período.")
     else:
+        # Specs por trace: (nome, coluna, cor, dash, espessura, tamanho marker).
+        # Formatter compartilhado (int_br) — todas as séries são contagens.
+        _traces = [
+            ("Leads",      "leads_totais",        PALETTE["gold"],        None,   2.5, 5),
+            ("Aplicações", "aplicacoes",          PALETTE["wine_light"],  None,   2.5, 5),
+            ("Apl. +12",   "aplicacoes_mais_12",  "#1D4ED8",              "dash", 2.0, 4),
+            ("Apl. -12",   "aplicacoes_menos_12", "#7C3AED",              "dot",  2.0, 4),
+        ]
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_evo["data_ref"], y=df_evo["leads_totais"], name="Leads",
-            line=dict(color=PALETTE["gold"], width=2.5),
-            mode="lines+markers", marker=dict(size=5),
-        ))
-        fig.add_trace(go.Scatter(
-            x=df_evo["data_ref"], y=df_evo["aplicacoes"], name="Aplicações",
-            line=dict(color=PALETTE["wine_light"], width=2.5),
-            mode="lines+markers", marker=dict(size=5),
-        ))
-        fig.add_trace(go.Scatter(
-            x=df_evo["data_ref"], y=df_evo["aplicacoes_mais_12"],
-            name="Apl. +12",
-            line=dict(color="#1D4ED8", width=2, dash="dash"),
-            mode="lines+markers", marker=dict(size=4),
-        ))
-        fig.add_trace(go.Scatter(
-            x=df_evo["data_ref"], y=df_evo["aplicacoes_menos_12"],
-            name="Apl. -12",
-            line=dict(color="#7C3AED", width=2, dash="dot"),
-            mode="lines+markers", marker=dict(size=4),
-        ))
+        for name, col, color, dash, w, msz in _traces:
+            series = df_evo[col]
+            fmt_series = [int_br(v) for v in series]
+            fig.add_trace(go.Scatter(
+                x=df_evo["data_ref"], y=series, name=name,
+                customdata=[[v] for v in fmt_series],
+                hovertemplate="%{customdata[0]}<extra></extra>",
+                mode="lines+markers+text",
+                text=annotate_adaptive(series, int_br),
+                textposition="top center",
+                textfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+                cliponaxis=False,
+                line=dict(color=color, width=w, dash=dash),
+                marker=dict(size=msz),
+            ))
         fig.update_layout(**_base_layout(height=320, unified=True))
         _style_axes(fig)
+        style_temporal(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 # ---- 2. Investimento por dia (mesma base do CPL: anuncios sem REL_02*) ----
@@ -1430,7 +1596,30 @@ with g_right:
         st.info("Sem investimento registrado no período.")
     else:
         df_inv_one = df_one[["data_ref", "investimento"]].sort_values("data_ref")
-        fig = area(df_inv_one, x="data_ref", y="investimento", money_axis="y")
+        # Construído inline (em vez de chamar `area()`) pra ter hovertemplate
+        # com brl BR (R$ X.XXX,XX); o helper area() ainda não suporta
+        # formatter customizado.
+        inv_series = df_inv_one["investimento"]
+        fmt_inv = [brl(v) for v in inv_series]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_inv_one["data_ref"], y=inv_series,
+            name="Investimento",
+            fill="tozeroy",
+            line=dict(color=PALETTE["gold"], width=2.5),
+            fillcolor="rgba(201,168,76,0.18)",
+            mode="lines+markers+text",
+            marker=dict(size=5),
+            customdata=[[v] for v in fmt_inv],
+            hovertemplate="%{customdata[0]}<extra></extra>",
+            text=annotate_adaptive(inv_series, brl),
+            textposition="top center",
+            textfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+            cliponaxis=False,
+        ))
+        fig.update_layout(**_base_layout(height=280, unified=True))
+        _style_axes(fig, money_axis="y")
+        style_temporal(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 g_left2, g_right2 = st.columns(2, gap="large")
@@ -1449,25 +1638,30 @@ with g_left2:
         df_pd["agendamentos_menos_12_aprox"] = (
             df_pd["agendamentos"] - df_pd["agendamentos_mais_12"]
         ).clip(lower=0)
+        _traces = [
+            ("Agendamentos",     "agendamentos",                PALETTE["gold"], None,   2.5, 5),
+            ("Ag. +12",          "agendamentos_mais_12",        "#1D4ED8",       "dash", 2.0, 4),
+            ("Ag. -12 (aprox.)", "agendamentos_menos_12_aprox", "#7C3AED",       "dot",  2.0, 4),
+        ]
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_pd["data_ref"], y=df_pd["agendamentos"], name="Agendamentos",
-            line=dict(color=PALETTE["gold"], width=2.5),
-            mode="lines+markers", marker=dict(size=5),
-        ))
-        fig.add_trace(go.Scatter(
-            x=df_pd["data_ref"], y=df_pd["agendamentos_mais_12"], name="Ag. +12",
-            line=dict(color="#1D4ED8", width=2, dash="dash"),
-            mode="lines+markers", marker=dict(size=4),
-        ))
-        fig.add_trace(go.Scatter(
-            x=df_pd["data_ref"], y=df_pd["agendamentos_menos_12_aprox"],
-            name="Ag. -12 (aprox.)",
-            line=dict(color="#7C3AED", width=2, dash="dot"),
-            mode="lines+markers", marker=dict(size=4),
-        ))
+        for name, col, color, dash, w, msz in _traces:
+            series = df_pd[col]
+            fmt_series = [int_br(v) for v in series]
+            fig.add_trace(go.Scatter(
+                x=df_pd["data_ref"], y=series, name=name,
+                customdata=[[v] for v in fmt_series],
+                hovertemplate="%{customdata[0]}<extra></extra>",
+                mode="lines+markers+text",
+                text=annotate_adaptive(series, int_br),
+                textposition="top center",
+                textfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+                cliponaxis=False,
+                line=dict(color=color, width=w, dash=dash),
+                marker=dict(size=msz),
+            ))
         fig.update_layout(**_base_layout(height=320, unified=True))
         _style_axes(fig)
+        style_temporal(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 # ---- 4. Volumes (ag/comp/vendas) -------------------------------------------
@@ -1484,63 +1678,89 @@ with g_right2:
                   .merge(vendas_dia, on="data_ref", how="outer")
                   .fillna(0)
                   .sort_values("data_ref"))
+        _traces = [
+            ("Agendamentos", "agendamentos",     PALETTE["gold"],       None,   2.5, 5),
+            ("Comparec.",    "comparecimentos",  PALETTE["wine_light"], None,   2.5, 5),
+            ("Vendas",       "vendas",           PALETTE["green"],      "dot",  2.5, 5),
+        ]
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=merged["data_ref"], y=merged["agendamentos"], name="Agendamentos",
-            line=dict(color=PALETTE["gold"], width=2.5),
-            mode="lines+markers", marker=dict(size=5),
-        ))
-        fig.add_trace(go.Scatter(
-            x=merged["data_ref"], y=merged["comparecimentos"], name="Comparec.",
-            line=dict(color=PALETTE["wine_light"], width=2.5),
-            mode="lines+markers", marker=dict(size=5),
-        ))
-        fig.add_trace(go.Scatter(
-            x=merged["data_ref"], y=merged["vendas"], name="Vendas",
-            line=dict(color=PALETTE["green"], width=2.5, dash="dot"),
-            mode="lines+markers", marker=dict(size=5),
-        ))
+        for name, col, color, dash, w, msz in _traces:
+            series = merged[col]
+            fmt_series = [int_br(v) for v in series]
+            fig.add_trace(go.Scatter(
+                x=merged["data_ref"], y=series, name=name,
+                customdata=[[v] for v in fmt_series],
+                hovertemplate="%{customdata[0]}<extra></extra>",
+                mode="lines+markers+text",
+                text=annotate_adaptive(series, int_br),
+                textposition="top center",
+                textfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+                cliponaxis=False,
+                line=dict(color=color, width=w, dash=dash),
+                marker=dict(size=msz),
+            ))
         fig.update_layout(**_base_layout(height=320, unified=True))
         _style_axes(fig)
+        style_temporal(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 # =============================================================================
 # Tabelas
 # =============================================================================
 
-# ---- Tabela por Fonte ------------------------------------------------------
+# ---- Tabela Indicadores - Fonte de Lead -----------------------------------
+# Fonte: `one_page_prevendas_por_fonte.sql` (mesma base dos cards INBOUND/SS).
+# Agendamentos já chegam LÍQUIDOS (sem vencidos); ±12 usa regra combinada
+# (CRM + ext_reconecta.leads). `st.dataframe` interativo (sort/scroll/
+# resize do Glide preservados). Linha "Total do período" é a última row
+# do df — percentuais recalculados sobre os totais via
+# `_total_prevendas_from_absolutes` (não média simples). Sem suporte
+# nativo a pinning no Glide; total acompanha o sort do usuário.
 section_title(
-    "Por Fonte de Lead",
-    "atribuição financeira: zoho_id > session_id > email (regra oficial)",
+    "Indicadores - Fonte de Lead",
+    "agendamentos líquidos · regra origem_final (Looker)",
 )
-st.caption(
-    "ℹ️ Colunas de Agendamentos / Comparecimentos / % Conversão / % Venda / "
-    "% Comparecimento por canal estão no backlog — dependem de atribuir "
-    "activities/deals por canal de lead (não existe view/chave de match hoje)."
-)
-tab_fonte = _tabela_por_fonte(df_kpc)
+tab_fonte = _tabela_indicadores_fonte(df_prev_fonte)
 if tab_fonte.empty:
-    st.info("Sem atribuição por canal no período.")
+    st.info("Sem dados de Pré-vendas por fonte no período.")
 else:
-    cfg_fonte = {}
-    for col_money in ("Montante", "Receita", "Investimento", "CPL",
-                      "Custo / Aplicação", "Ticket médio"):
-        if col_money in tab_fonte.columns:
-            cfg_fonte[col_money] = st.column_config.NumberColumn(
-                col_money, format="R$ %.2f"
-            )
-    for col_pct in ("% +12", "% -12", "% Recebimento"):
-        if col_pct in tab_fonte.columns:
-            cfg_fonte[col_pct] = st.column_config.NumberColumn(
-                col_pct, format="%.2f%%"
-            )
-    if "ROAS" in tab_fonte.columns:
-        cfg_fonte["ROAS"] = st.column_config.NumberColumn("ROAS", format="%.2fx")
+    tot_f = _total_prevendas_from_absolutes(
+        df_prev_fonte,
+        abs_cols=[
+            "agendamentos", "agendamentos_mais_12", "agendamentos_menos_12",
+            "comparecimentos", "vendas", "montante", "receita",
+        ],
+    )
+    total_row_f = {
+        "Fonte":             "Total do período",
+        "Agendamentos":      tot_f["agendamentos"],
+        "+12":               tot_f["agendamentos_mais_12"],
+        "% +12":             tot_f["pct_mais_12"],
+        "-12":               tot_f["agendamentos_menos_12"],
+        "% -12":             tot_f["pct_menos_12"],
+        "Comparecimento":    tot_f["comparecimentos"],
+        "Montante":          tot_f["montante"],
+        "Receita":           tot_f["receita"],
+        "% Recebimento":     tot_f["pct_recebimento"],
+        "% Conversão":       tot_f["pct_conversao"],
+        "% Venda":           tot_f["pct_venda"],
+        "% Comparecimento":  tot_f["pct_comparecimento"],
+    }
+    tab_fonte = pd.concat(
+        [tab_fonte, pd.DataFrame([total_row_f])],
+        ignore_index=True,
+    )
+    tab_fonte = _br_format_table(
+        tab_fonte,
+        money_cols=("Montante", "Receita"),
+        int_cols=("Agendamentos", "+12", "-12", "Comparecimento"),
+        pct_cols=("% +12", "% -12", "% Recebimento",
+                  "% Conversão", "% Venda", "% Comparecimento"),
+    )
     st.dataframe(
         tab_fonte,
         use_container_width=True,
         hide_index=True,
-        column_config=cfg_fonte,
     )
 
 # ---- Tabela por Executiva --------------------------------------------------
@@ -1552,14 +1772,13 @@ rank_exec = executivas_ranking(df_exec)
 if rank_exec is None or rank_exec.empty:
     st.info("Sem ranking de executivas no período.")
 else:
-    # Subconjunto de colunas pedido no briefing
     cols_exec = [c for c in (
         "executiva", "agendamentos", "comparecimentos", "vendas",
         "montante", "receita",
         "pct_recebimento", "pct_conversao", "pct_vendas", "pct_comparecimento",
     ) if c in rank_exec.columns]
     tab_exec = rank_exec[cols_exec].copy()
-    tab_exec = tab_exec.rename(columns={
+    tab_exec_disp = tab_exec.rename(columns={
         "executiva":          "Executiva",
         "agendamentos":       "Agendamentos",
         "comparecimentos":    "Comparec.",
@@ -1571,18 +1790,38 @@ else:
         "pct_vendas":         "% Vendas",
         "pct_comparecimento": "% Comparec.",
     })
-    cfg_exec = {}
-    for c in ("Montante", "Receita"):
-        if c in tab_exec.columns:
-            cfg_exec[c] = st.column_config.NumberColumn(c, format="R$ %.0f")
-    for c in ("% Recebimento", "% Conversão", "% Vendas", "% Comparec."):
-        if c in tab_exec.columns:
-            cfg_exec[c] = st.column_config.NumberColumn(c, format="%.2f%%")
-    st.dataframe(
+    tot_e = _total_prevendas_from_absolutes(
         tab_exec,
+        abs_cols=["agendamentos", "comparecimentos",
+                  "vendas", "montante", "receita"],
+    )
+    total_row_e = {
+        "Executiva":      "Total do período",
+        "Agendamentos":   tot_e["agendamentos"],
+        "Comparec.":      tot_e["comparecimentos"],
+        "Vendas":         tot_e["vendas"],
+        "Montante":       tot_e["montante"],
+        "Receita":        tot_e["receita"],
+        "% Recebimento":  tot_e["pct_recebimento"],
+        "% Conversão":    tot_e["pct_conversao"],
+        "% Vendas":       tot_e["pct_venda"],
+        "% Comparec.":    tot_e["pct_comparecimento"],
+    }
+    tab_exec_disp = pd.concat(
+        [tab_exec_disp, pd.DataFrame([total_row_e])],
+        ignore_index=True,
+    )
+    tab_exec_disp = _br_format_table(
+        tab_exec_disp,
+        money_cols=("Montante", "Receita"),
+        int_cols=("Agendamentos", "Comparec.", "Vendas"),
+        pct_cols=("% Recebimento", "% Conversão",
+                  "% Vendas", "% Comparec."),
+    )
+    st.dataframe(
+        tab_exec_disp,
         use_container_width=True,
         hide_index=True,
-        column_config=cfg_exec,
     )
 
 # ---- Tabela por SDR × Closer -----------------------------------------------
@@ -1615,18 +1854,48 @@ else:
         "pct_vendas":         "% Vendas",
         "pct_comparecimento": "% Comparec.",
     })
-    cfg_sc = {}
-    for c in ("Montante", "Receita"):
-        if c in tab_sc_disp.columns:
-            cfg_sc[c] = st.column_config.NumberColumn(c, format="R$ %.0f")
-    for c in ("% Recebimento", "% Conversão", "% Vendas", "% Comparec."):
-        if c in tab_sc_disp.columns:
-            cfg_sc[c] = st.column_config.NumberColumn(c, format="%.2f%%")
+    tab_sc_disp = _br_format_table(
+        tab_sc_disp,
+        money_cols=("Montante", "Receita"),
+        int_cols=("Agendamentos", "Comparec.", "Vendas"),
+        pct_cols=("% Recebimento", "% Conversão",
+                  "% Vendas", "% Comparec."),
+    )
+    # Altura limitada (~420px) — até ~64 linhas no período típico,
+    # ocuparia metade da One Page sem scroll interno. Total fica FORA
+    # do scroll, numa linha-rodapé `_render_total_row` alinhada por
+    # CSS Grid (aproximação visual: Glide não expõe larguras reais).
     st.dataframe(
         tab_sc_disp,
         use_container_width=True,
         hide_index=True,
-        column_config=cfg_sc,
+        height=420,
+    )
+    tot_sc = _total_prevendas_from_absolutes(
+        tab_sc,
+        abs_cols=["agendamentos", "comparecimentos",
+                  "vendas", "montante", "receita"],
+    )
+    # Pesos calibrados pelo conteúdo médio das colunas (SDR/Closer com
+    # nomes longos = mais peso; numéricas/percentuais menores). Ordem
+    # MESMA do `tab_sc_disp` pra colunas caírem visualmente alinhadas:
+    # SDR · Closer · Agend. · Comp. · Vendas · Montante · Receita ·
+    # % Comp. · % Conv. · % Vendas · % Recb.
+    _render_total_row(
+        cells=[
+            ("Total do período",                       "label"),
+            ("",                                        "txt"),
+            (int_br(tot_sc["agendamentos"]),            "accent"),
+            (int_br(tot_sc["comparecimentos"]),         "num"),
+            (int_br(tot_sc["vendas"]),                  "num"),
+            (brl(tot_sc["montante"]),                   "num"),
+            (brl(tot_sc["receita"]),                    "accent"),
+            (pct(tot_sc["pct_comparecimento"]),         "num"),
+            (pct(tot_sc["pct_conversao"]),              "num"),
+            (pct(tot_sc["pct_venda"]),                  "num"),
+            (pct(tot_sc["pct_recebimento"]),            "num"),
+        ],
+        weights=[1.5, 1.8, 0.95, 0.85, 0.75, 1.05, 1.05, 1.0, 0.95, 0.85, 1.0],
     )
 
 # ---- Tabela semanal (matriz executiva no formato Looker) -------------------
