@@ -69,6 +69,11 @@ pages = {
         st.Page("views/investimento.py", title="Investimento & ROAS"),
         st.Page("views/inspecao.py",     title="Inspeção de Views"),
     ],
+    # Ferramentas — vão abaixo dos blocos por time. Por enquanto só o
+    # simulador de funil; quando crescer, vira um bloco próprio.
+    "Ferramentas": [
+        st.Page("views/funil_reconecta.py", title="Funil da Reconecta"),
+    ],
 }
 
 pg = st.navigation(pages, position="sidebar")

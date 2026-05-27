@@ -10,15 +10,14 @@
 --   3. ainda NULL → "Sem SDR"
 -- `fonte_sdr` carrega a auditoria.
 --
--- Classificação +12 / -12 / Não atua — REGRA COMBINADA das 4 fontes
--- (espelha prevendas_overview_diario.sql / prevendas_por_sdr.sql):
+-- Classificação +12 / -12 / Não atua — PRIORIDADE EXCLUSIVA (substitui o
+-- OR combinado que duplicava deals em +12 e -12 quando CRM e ext.leads
+-- divergiam). Ordem das fontes:
 --   1. zoho_deals.lead_classification  (CRM, principal)
 --   2. zoho_deals.qualificacao         (CRM, manual da gestoria)
 --   3. zoho_deals.classificado_cal     (CRM)
---   4. ext_reconecta.leads.classificado (ext, última do email)
--- Antes a query só lia ext.classificado via `last_classif` — leads
--- classificados só no CRM caíam em "Sem classif". Agora basta UMA das
--- 4 fontes ter o valor pra o bucket valer.
+--   4. ext_reconecta.leads.classificado (ext, dedup por zoho_id)
+-- Primeira fonte com valor IN ('Atua +12','Atua -12','Não atua') decide.
 --
 -- Caminho:
 --   activity (Consulta/Indicação) → deal (what_id) → lead matched via
@@ -106,57 +105,56 @@ deals_novos AS (
       AND zd.tipo_venda = 'Novo cliente'
       AND zd.data_hora_compra::date BETWEEN :data_ini AND :data_fim
 ),
+ext_leads_dedup AS (
+    -- ext.leads DEDUPLICADO por zoho_id, com filtro de e-mails teste —
+    -- 1 row por zoho_id, sempre a versão MAIS RECENTE.
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS ext_classif
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
+),
 deal_classif AS (
-    -- Regra COMBINADA das 4 fontes por deal (espelha a canônica).
-    -- bool_or agrega todas as linhas-lead pareadas em ext.leads; o deal
-    -- vence se QUALQUER fonte indicar +12/-12/Não atua. Filtro de
-    -- e-mails de teste no JOIN com ext.leads (canônico).
+    -- classif_final EXCLUSIVA via CASE prioridade. Sem fan-out: ext.leads
+    -- vem 1 row por zoho_id, zoho_deals tem 1 row por deal.
     SELECT
         d.id                                                AS deal_id,
-        bool_or(
-            d.lead_classification = 'Atua +12'
-            OR d.qualificacao     = 'Atua +12'
-            OR d.classificado_cal = 'Atua +12'
-            OR l.classificado     = 'Atua +12'
-        )                                                   AS tem_mais_12,
-        bool_or(
-            d.lead_classification = 'Atua -12'
-            OR d.qualificacao     = 'Atua -12'
-            OR d.classificado_cal = 'Atua -12'
-            OR l.classificado     = 'Atua -12'
-        )                                                   AS tem_menos_12,
-        bool_or(
-            d.lead_classification = 'Não atua'
-            OR d.qualificacao     = 'Não atua'
-            OR d.classificado_cal = 'Não atua'
-            OR l.classificado     = 'Não atua'
-        )                                                   AS tem_nao_atua
+        CASE
+            WHEN NULLIF(btrim(d.lead_classification), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.lead_classification), '')
+            WHEN NULLIF(btrim(d.qualificacao), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.qualificacao), '')
+            WHEN NULLIF(btrim(d.classificado_cal), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.classificado_cal), '')
+            WHEN NULLIF(btrim(eld.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(eld.ext_classif), '')
+            ELSE 'Sem classificação'
+        END                                                 AS classif_final
     FROM zoho_deals d
-    LEFT JOIN ext_reconecta.leads l
-           ON d.id::text = l.zoho_id::text
-          AND (
-              l.email IS NULL
-              OR (
-                  btrim(l.email) <> ''
-                  AND lower(l.email) NOT LIKE '%@teste%'
-                  AND lower(l.email) NOT LIKE 'teste@%'
-                  AND lower(l.email) NOT LIKE '%smarts%'
-                  AND lower(l.email) NOT LIKE '%reconecta%'
-              )
-          )
-    GROUP BY d.id
+    LEFT JOIN ext_leads_dedup eld ON eld.deal_id = d.id::text
 ),
 final_pairs AS (
     SELECT
         als.email_norm,
         als.sdr,
         als.fonte_sdr,
-        -- Bucket exclusivo +12 > -12 > Não atua > Sem classif (regra
-        -- canônica do projeto).
+        -- Bucket exclusivo a partir de classif_final.
         CASE
-            WHEN COALESCE(dc.tem_mais_12,  FALSE) THEN '+12'
-            WHEN COALESCE(dc.tem_menos_12, FALSE) THEN '-12'
-            WHEN COALESCE(dc.tem_nao_atua, FALSE) THEN 'Não atua'
+            WHEN dc.classif_final = 'Atua +12' THEN '+12'
+            WHEN dc.classif_final = 'Atua -12' THEN '-12'
+            WHEN dc.classif_final = 'Não atua' THEN 'Não atua'
             ELSE 'Sem classif'
         END                                          AS bucket,
         als.teve_agend,

@@ -29,13 +29,15 @@
 -- prevendas distintas) e o ganho é coerência: oportunidade, agendamentos
 -- e venda do mesmo deal somam para o mesmo SDR.
 --
--- Classificação +12 / -12 / Não atua / Sem classif — regra COMBINADA das
--- 4 fontes (espelha prevendas_overview_diario.sql:147-157):
---   lead_classification (CRM) OR qualificacao (CRM)
---   OR classificado_cal (CRM) OR classificado (ext.leads)
--- Buckets mutuamente exclusivos: prioridade +12 > -12 > Não atua > Sem
--- classif. Aplicada por deal via bool_or sobre todas as linhas-lead
--- pareadas.
+-- Classificação +12 / -12 / Não atua / Sem classif — PRIORIDADE EXCLUSIVA
+-- (substitui o OR combinado que duplicava deals em +12 e -12 quando CRM
+-- e ext.leads divergiam). Ordem das fontes:
+--   1. zoho_deals.lead_classification
+--   2. zoho_deals.qualificacao         (CRM, manual da gestoria)
+--   3. zoho_deals.classificado_cal
+--   4. ext_reconecta.leads.classificado (ext, dedup por zoho_id)
+-- Primeira fonte com valor IN ('Atua +12','Atua -12','Não atua') decide.
+-- Sem nenhum válido → 'Sem classificação'. Buckets mutuamente exclusivos.
 --
 -- Agendamentos: activities Consulta/Indicação com status_reuniao IS NOT
 -- NULL cujo `created_time::date` OU `start_datetime::date` cai no
@@ -89,11 +91,8 @@ deals_relevantes AS (
     UNION
     SELECT deal_id FROM deals_ganhos_periodo
 ),
--- ext.leads DEDUPLICADO por zoho_id — mesma técnica das demais SQLs
--- de Pré-vendas. Antes o LEFT JOIN com BOOL_OR dependia de QUALQUER
--- versão histórica do lead ter `classificado='Atua +12'`; agora vale
--- só a versão MAIS RECENTE. As 3 colunas CRM seguem combinadas no OR
--- abaixo (regra híbrida).
+-- ext.leads DEDUPLICADO por zoho_id, com filtro de e-mails teste —
+-- 1 row por zoho_id, sempre a versão MAIS RECENTE.
 ext_leads_dedup AS (
     SELECT DISTINCT ON (l.zoho_id::text)
         l.zoho_id::text  AS deal_id,
@@ -113,33 +112,38 @@ ext_leads_dedup AS (
       )
     ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
 ),
-deal_classif AS (
-    -- OR das 4 fontes por deal (3 CRM + ext.classificado dedupado).
-    -- Sem fan-out: ext.leads vem 1 row por zoho_id, então o bool_or
-    -- nas 3 fontes CRM é trivial (1 row em zoho_deals por deal).
+deal_classif_raw AS (
+    -- classif_final EXCLUSIVA via CASE prioridade. Sem fan-out: ext.leads
+    -- vem 1 row por zoho_id, zoho_deals tem 1 row por deal.
     SELECT
         dr.deal_id,
-        (
-            d.lead_classification = 'Atua +12'
-            OR d.qualificacao     = 'Atua +12'
-            OR d.classificado_cal = 'Atua +12'
-            OR eld.ext_classif    = 'Atua +12'
-        )                                       AS tem_mais_12,
-        (
-            d.lead_classification = 'Atua -12'
-            OR d.qualificacao     = 'Atua -12'
-            OR d.classificado_cal = 'Atua -12'
-            OR eld.ext_classif    = 'Atua -12'
-        )                                       AS tem_menos_12,
-        (
-            d.lead_classification = 'Não atua'
-            OR d.qualificacao     = 'Não atua'
-            OR d.classificado_cal = 'Não atua'
-            OR eld.ext_classif    = 'Não atua'
-        )                                       AS tem_nao_atua
+        CASE
+            WHEN NULLIF(btrim(d.lead_classification), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.lead_classification), '')
+            WHEN NULLIF(btrim(d.qualificacao), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.qualificacao), '')
+            WHEN NULLIF(btrim(d.classificado_cal), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.classificado_cal), '')
+            WHEN NULLIF(btrim(eld.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(eld.ext_classif), '')
+            ELSE 'Sem classificação'
+        END                                     AS classif_final
     FROM deals_relevantes dr
     JOIN zoho_deals d           ON d.id::text = dr.deal_id
     LEFT JOIN ext_leads_dedup eld ON eld.deal_id = d.id::text
+),
+deal_classif AS (
+    SELECT
+        deal_id,
+        classif_final,
+        (classif_final = 'Atua +12') AS tem_mais_12,
+        (classif_final = 'Atua -12') AS tem_menos_12,
+        (classif_final = 'Não atua') AS tem_nao_atua
+    FROM deal_classif_raw
 ),
 leads_funil AS (
     -- Funil de origem por deal (mesma técnica de

@@ -42,13 +42,13 @@ from src.repositories import (
     get_investimento_diario,
     get_media_movel_vendas,
     get_one_page_legacy_diario,
+    get_one_page_por_executiva,
     get_one_page_prevendas_por_fonte,
     get_prevendas_overview_diario,
     get_prevendas_sdr_closer,
 )
 from src.transforms import (
     delta_pct,
-    executivas_ranking,
     visao_geral_kpis,
 )
 from src.ui.charts import (
@@ -1820,11 +1820,28 @@ else:
     )
 
 # ---- Tabela por Executiva --------------------------------------------------
+# Fonte: cálculo direto a partir de `zoho_deals` + `zoho_activities` +
+# `fdw_reconecta.executivas_vendas`. Nome resolvido por
+# `zoho_deals.executiva_vendas = executivas_vendas.id_crm`. Visão padrão
+# mostra só ativas; opção "Todas / Histórico" expõe inativas e IDs órfãos
+# pra auditoria. Não usa mais a view legada nem o `df_exec` cá no bloco.
 section_title(
     "Por Executiva",
-    "ranking consolidado · view bi.vw_dashboard_comercial_executivas_rw",
+    "cálculo direto · zoho_deals + executivas_vendas (cadastro oficial)",
 )
-rank_exec = executivas_ranking(df_exec)
+_modo_label = st.radio(
+    "Visualização de executivas",
+    options=("Ativas", "Todas / Histórico"),
+    index=0,
+    horizontal=True,
+    help=(
+        "Ativas: apenas executivas com `ativo='y'` no cadastro oficial.\n"
+        "Todas / Histórico: inclui inativas e IDs sem cadastro (para auditoria)."
+    ),
+    key="onepage_exec_modo",
+)
+_modo_arg = "ativas" if _modo_label == "Ativas" else "todas"
+rank_exec = get_one_page_por_executiva(ctx.data_ini, ctx.data_fim, _modo_arg)
 if rank_exec is None or rank_exec.empty:
     st.info("Sem ranking de executivas no período.")
 else:

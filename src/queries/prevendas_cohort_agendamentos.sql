@@ -16,20 +16,17 @@
 --
 -- Filtro aplicado a `deals_periodo`:
 --   d.created_at::date BETWEEN :data_ini AND :data_fim
---   AND (tem_mais_12 OR tem_menos_12)  -- pela regra combinada abaixo
+--   AND classif_final IN ('Atua +12','Atua -12')
 --
--- Regra COMBINADA de classificação (4 fontes, mesma de
--- prevendas_overview_diario.sql / prevendas_por_sdr.sql):
+-- Regra de classificação — PRIORIDADE EXCLUSIVA (substitui o OR antigo
+-- que duplicava deals em +12 e -12 quando CRM e ext.leads divergiam):
 --   1. zoho_deals.lead_classification
 --   2. zoho_deals.qualificacao
 --   3. zoho_deals.classificado_cal
---   4. ext_reconecta.leads.classificado
--- bool_or agrega TODOS os leads pareados ao deal; basta UMA fonte indicar
--- +12 ou -12 pra o deal entrar. Prioridade exclusiva +12 > -12 (não muda
--- o universo aqui, mas mantemos a coluna `classif_bucket` por simetria
--- com prevendas_oportunidades_sdr.sql, caso o Python queira separar D_n
--- por bucket no futuro).
--- Filtro de e-mails internos no JOIN com ext.leads (regra canônica).
+--   4. ext_reconecta.leads.classificado (dedup por zoho_id)
+-- Primeira fonte com valor IN ('Atua +12','Atua -12','Não atua') decide.
+-- ext.leads é deduplicado por zoho_id (sem fan-out) e o filtro de
+-- e-mails de teste é aplicado na dedup (regra canônica).
 --
 -- Atribuição de SDR — cascata canônica:
 --   1) activity.prevendas mais recente do deal (Consulta/Indicação)
@@ -55,54 +52,60 @@ WITH deals_periodo_bruto AS (
     FROM zoho_deals d
     WHERE d.created_at::date BETWEEN :data_ini AND :data_fim
 ),
+ext_leads_dedup AS (
+    -- ext.leads DEDUPLICADO por zoho_id, com filtro canônico de e-mails
+    -- de teste. 1 row por zoho_id, sempre a versão mais recente.
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS ext_classif
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
+),
 deal_classif AS (
-    -- bool_or sobre as 4 fontes por deal. JOIN com ext.leads filtra
-    -- e-mails de teste (regra canônica) pra não distorcer a classif.
+    -- classif_final EXCLUSIVA via CASE prioridade.
     SELECT
         dpb.deal_id,
-        bool_or(
-            d.lead_classification = 'Atua +12'
-            OR d.qualificacao     = 'Atua +12'
-            OR d.classificado_cal = 'Atua +12'
-            OR l.classificado     = 'Atua +12'
-        )                                       AS tem_mais_12,
-        bool_or(
-            d.lead_classification = 'Atua -12'
-            OR d.qualificacao     = 'Atua -12'
-            OR d.classificado_cal = 'Atua -12'
-            OR l.classificado     = 'Atua -12'
-        )                                       AS tem_menos_12
+        CASE
+            WHEN NULLIF(btrim(d.lead_classification), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.lead_classification), '')
+            WHEN NULLIF(btrim(d.qualificacao), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.qualificacao), '')
+            WHEN NULLIF(btrim(d.classificado_cal), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.classificado_cal), '')
+            WHEN NULLIF(btrim(eld.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(eld.ext_classif), '')
+            ELSE 'Sem classificação'
+        END                                     AS classif_final
     FROM deals_periodo_bruto dpb
     JOIN zoho_deals d           ON d.id::text = dpb.deal_id
-    LEFT JOIN ext_reconecta.leads l
-                                ON d.id::text = l.zoho_id::text
-                               AND (
-                                   l.email IS NULL
-                                   OR (
-                                       btrim(l.email) <> ''
-                                       AND lower(l.email) NOT LIKE '%@teste%'
-                                       AND lower(l.email) NOT LIKE 'teste@%'
-                                       AND lower(l.email) NOT LIKE '%smarts%'
-                                       AND lower(l.email) NOT LIKE '%reconecta%'
-                                   )
-                               )
-    GROUP BY dpb.deal_id
+    LEFT JOIN ext_leads_dedup eld ON eld.deal_id = d.id::text
 ),
 deals_periodo AS (
-    -- Filtragem ao universo Oportunidades: somente deals +12 OU -12.
+    -- Filtragem ao universo Oportunidades: somente deals +12 ou -12.
     -- Não atua e sem classificação ficam fora.
     SELECT
         dpb.deal_id,
         dpb.data_geracao,
         dpb.sdr_ss_id,
         CASE
-            WHEN COALESCE(dc.tem_mais_12,  FALSE) THEN '+12'
-            WHEN COALESCE(dc.tem_menos_12, FALSE) THEN '-12'
+            WHEN dc.classif_final = 'Atua +12' THEN '+12'
+            WHEN dc.classif_final = 'Atua -12' THEN '-12'
         END                                     AS classif_bucket
     FROM deals_periodo_bruto dpb
     JOIN deal_classif dc ON dc.deal_id = dpb.deal_id
-    WHERE COALESCE(dc.tem_mais_12, FALSE)
-       OR COALESCE(dc.tem_menos_12, FALSE)
+    WHERE dc.classif_final IN ('Atua +12','Atua -12')
 ),
 sdr_via_activity AS (
     -- SDR primário = activity.prevendas mais recente do deal (com ou sem

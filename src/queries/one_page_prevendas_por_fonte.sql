@@ -20,8 +20,16 @@
 --
 -- Agendamentos LÍQUIDOS (sem `Vencida`); vencidas ficam separadas em
 -- `agendamentos_vencidos`. Comparecimentos = `Concluída`/`Concluído`.
--- Mesma regra +12/-12 COMBINADA (lead_classification OR qualificacao OR
--- classificado_cal OR ext.classificado).
+--
+-- Classificação +12 / -12 / Não atua — REGRA DE PRIORIDADE EXCLUSIVA
+-- (substitui o OR combinado que duplicava deals em ambas as categorias).
+-- Ordem das fontes:
+--   1. zoho_deals.lead_classification
+--   2. zoho_deals.qualificacao
+--   3. zoho_deals.classificado_cal
+--   4. ext_reconecta.leads.classificado (dedup por zoho_id, última)
+-- Primeira fonte com valor IN ('Atua +12','Atua -12','Não atua') decide.
+-- Sem nenhum válido → 'Sem classificação'. Buckets MUTUAMENTE EXCLUSIVOS.
 --
 -- "ate_hoje": subset que tem `start_datetime::date <= CURRENT_DATE` —
 -- exclui reuniões futuras do denominador de % comparecimento.
@@ -58,19 +66,18 @@ deals_clean AS (
     FROM zoho_deals d
 ),
 -- ---------------------------------------------------------------------------
--- 2) Classificação +12/-12 via ext_reconecta.leads — REGRA HÍBRIDA.
+-- 2) Classificação por deal — prioridade exclusiva (CRM > ext.leads).
 --
 -- `ext_reconecta.leads` é DEDUPLICADO por `zoho_id` (mesma técnica que
 -- prevendas_leads_detalhe_diario.sql / prevendas_leads_por_origem.sql):
 -- `DISTINCT ON (zoho_id) ORDER BY zoho_id, timestamp DESC, id DESC` —
--- pega a versão MAIS RECENTE da classificação. Antes (BOOL_OR sem dedup)
--- bastava qualquer row antiga marcar 'Atua +12' pro deal contar; isso
--- inflava +12/-12 em ~1-5 unid em mai/2026.
+-- pega a versão MAIS RECENTE da classificação.
 --
--- A flag final preserva as 3 colunas CRM (`lead_classification` /
--- `qualificacao` / `classificado_cal`) OR a `classificado` da row
--- deduplicada — assim Fábrica/SS (que raramente popula ext.leads) continua
--- sendo classificada via CRM, ao contrário do Looker puro (que zera SS).
+-- A regra antiga (OR de 4 fontes) deixava deals caírem ao mesmo tempo em
+-- `tem_mais_12` e `tem_menos_12` quando o CRM e o ext.leads divergiam.
+-- A nova regra usa PRIORIDADE: lead_classification → qualificacao →
+-- classificado_cal → ext.classificado. Primeira fonte com valor válido
+-- decide. Buckets mutuamente exclusivos.
 -- ---------------------------------------------------------------------------
 ext_leads_dedup AS (
     SELECT DISTINCT ON (l.zoho_id::text)
@@ -87,14 +94,6 @@ ext_leads_dedup AS (
       AND lower(l.email) NOT LIKE '%reconecta%'
     ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
 ),
-leads_classif AS (
-    SELECT
-        d.deal_id,
-        (ed.ext_classif = 'Atua +12') AS tem_ext_mais_12,
-        (ed.ext_classif = 'Atua -12') AS tem_ext_menos_12
-    FROM deals_clean d
-    LEFT JOIN ext_leads_dedup ed ON ed.deal_id = d.deal_id::text
-),
 deal_flags AS (
     SELECT
         d.deal_id,
@@ -104,20 +103,23 @@ deal_flags AS (
         d.tipo_venda,
         d.amount_raw,
         d.receita_raw,
-        (
-            d.lead_classification = 'Atua +12'
-            OR d.qualificacao    = 'Atua +12'
-            OR d.classificado_cal = 'Atua +12'
-            OR COALESCE(lc.tem_ext_mais_12, FALSE)
-        ) AS tem_mais_12,
-        (
-            d.lead_classification = 'Atua -12'
-            OR d.qualificacao    = 'Atua -12'
-            OR d.classificado_cal = 'Atua -12'
-            OR COALESCE(lc.tem_ext_menos_12, FALSE)
-        ) AS tem_menos_12
+        CASE
+            WHEN NULLIF(btrim(d.lead_classification), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.lead_classification), '')
+            WHEN NULLIF(btrim(d.qualificacao), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.qualificacao), '')
+            WHEN NULLIF(btrim(d.classificado_cal), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.classificado_cal), '')
+            WHEN NULLIF(btrim(ed.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(ed.ext_classif), '')
+            ELSE 'Sem classificação'
+        END                                 AS classif_final
     FROM deals_clean d
-    LEFT JOIN leads_classif lc USING (deal_id)
+    LEFT JOIN ext_leads_dedup ed ON ed.deal_id = d.deal_id::text
 ),
 -- ---------------------------------------------------------------------------
 -- 3) Atividades base — `Consulta`/`Indicação` com status preenchido.
@@ -147,8 +149,8 @@ acts_reuniao AS (
         a.data_reuniao,
         a.status_reuniao,
         df.fonte,
-        df.tem_mais_12,
-        df.tem_menos_12
+        (df.classif_final = 'Atua +12')  AS tem_mais_12,
+        (df.classif_final = 'Atua -12')  AS tem_menos_12
     FROM acts a
     JOIN deal_flags df ON df.deal_id = a.deal_id
     WHERE a.data_reuniao BETWEEN :data_ini AND :data_fim

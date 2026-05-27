@@ -39,48 +39,59 @@
 --     usa `regexp_replace(...)` em ambos os lados. Pode divergir
 --     quando o `what_id` tem chaves/JSON.
 -- =============================================================================
-WITH deal_classif AS (
-    -- Classificação por deal — REGRA COMBINADA das 4 fontes (espelha
-    -- prevendas_overview_diario.sql:147-157):
+WITH ext_leads_dedup AS (
+    -- ext.leads DEDUPLICADO por zoho_id, com filtro de e-mails teste —
+    -- 1 row por zoho_id, sempre a mais recente. Espelha as outras SQLs.
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS ext_classif
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
+),
+deal_classif_raw AS (
+    -- Classificação por deal — PRIORIDADE EXCLUSIVA (substitui o OR antigo
+    -- que duplicava deals em +12 e -12 quando CRM e ext.leads divergiam):
     --   1. zoho_deals.lead_classification  (CRM, principal)
     --   2. zoho_deals.qualificacao         (CRM, manual da gestoria)
     --   3. zoho_deals.classificado_cal     (CRM)
-    --   4. ext_reconecta.leads.classificado (ext)
-    -- bool_or agrega sobre TODAS as linhas-lead pareadas: basta UMA das
-    -- fontes ter a classificação pra a flag valer. Antes a query só
-    -- olhava lead_classification + classificado, deixando +12/-12 da
-    -- gestoria fora dos rankings — corrigido.
-    -- Filtro de e-mails internos/testes adicionado no JOIN com ext.leads
-    -- pra alinhar com a regra canônica (e evitar lead-teste contaminar
-    -- a classificação combinada).
+    --   4. ext_reconecta.leads.classificado (ext, dedup)
+    -- Primeira fonte com valor IN ('Atua +12','Atua -12','Não atua') decide.
+    -- Sem fan-out pois ext.leads vem deduplicado.
     SELECT
         d.id                                              AS deal_id,
-        bool_or(
-            d.lead_classification = 'Atua +12'
-            OR d.qualificacao     = 'Atua +12'
-            OR d.classificado_cal = 'Atua +12'
-            OR l.classificado     = 'Atua +12'
-        )                                                 AS tem_mais_12,
-        bool_or(
-            d.lead_classification = 'Atua -12'
-            OR d.qualificacao     = 'Atua -12'
-            OR d.classificado_cal = 'Atua -12'
-            OR l.classificado     = 'Atua -12'
-        )                                                 AS tem_menos_12
+        CASE
+            WHEN NULLIF(btrim(d.lead_classification), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.lead_classification), '')
+            WHEN NULLIF(btrim(d.qualificacao), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.qualificacao), '')
+            WHEN NULLIF(btrim(d.classificado_cal), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.classificado_cal), '')
+            WHEN NULLIF(btrim(eld.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(eld.ext_classif), '')
+            ELSE 'Sem classificação'
+        END                                               AS classif_final
     FROM zoho_deals d
-    LEFT JOIN ext_reconecta.leads l
-           ON d.id::text = l.zoho_id::text
-          AND (
-              l.email IS NULL
-              OR (
-                  btrim(l.email) <> ''
-                  AND lower(l.email) NOT LIKE '%@teste%'
-                  AND lower(l.email) NOT LIKE 'teste@%'
-                  AND lower(l.email) NOT LIKE '%smarts%'
-                  AND lower(l.email) NOT LIKE '%reconecta%'
-              )
-          )
-    GROUP BY d.id
+    LEFT JOIN ext_leads_dedup eld ON eld.deal_id = d.id::text
+),
+deal_classif AS (
+    SELECT
+        deal_id,
+        classif_final,
+        (classif_final = 'Atua +12') AS tem_mais_12,
+        (classif_final = 'Atua -12') AS tem_menos_12
+    FROM deal_classif_raw
 ),
 acts_agendamento AS (
     SELECT

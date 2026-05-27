@@ -29,6 +29,29 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Por Executiva…")
+def get_one_page_por_executiva(data_ini: date,
+                               data_fim: date,
+                               modo: str = "ativas") -> pd.DataFrame:
+    """Tabela Por Executiva da One Page — cálculo direto.
+
+    Vai a `zoho_deals` + `zoho_activities` + `fdw_reconecta.executivas_vendas`
+    em vez da view legada `bi.vw_dashboard_comercial_executivas_rw`. Resolve
+    o nome via `id_crm`.
+
+    Parâmetro `modo`:
+      - 'ativas' (padrão): só executivas com `ativo='y'` no cadastro oficial;
+        IDs sem cadastro são descartados.
+      - 'todas': cadastro inteiro (ativas + inativas) + IDs sem cadastro
+        rotulados como 'ID sem cadastro: <id>' — útil para auditoria.
+    """
+    if modo not in ("ativas", "todas"):
+        modo = "ativas"
+    params = _date_params(data_ini, data_fim)
+    params["modo"] = modo
+    return run_sql_file("one_page_por_executiva.sql", params)
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo SDR × Closer…")
 def get_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
     # Migrado de bi.vw_compatibilidade_sdr_closer (defasada e com regra

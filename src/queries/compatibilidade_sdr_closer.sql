@@ -33,15 +33,15 @@
 -- Vínculo SDR-Closer: ~99,4% dos deals criados desde jun/2025 têm AMBOS
 -- `sdr_ss` e `executiva_vendas` preenchidos.
 --
--- Classificação +12 / -12 / Não atua — REGRA COMBINADA das 4 fontes
--- (espelha prevendas_overview_diario.sql / prevendas_por_sdr.sql):
+-- Classificação +12 / -12 / Não atua — PRIORIDADE EXCLUSIVA (substitui o
+-- OR combinado que ainda podia classificar duplamente a fonte ext.leads
+-- vs CRM). Ordem das fontes:
 --   1. zoho_deals.lead_classification
 --   2. zoho_deals.qualificacao
 --   3. zoho_deals.classificado_cal
---   4. ext_reconecta.leads.classificado
--- Prioridade exclusiva: +12 > -12 > Não atua > Sem classif. Aplicada por
--- deal via bool_or (CTE `deal_classif`), com filtro de e-mails teste no
--- JOIN com ext.leads — sem fan-out.
+--   4. ext_reconecta.leads.classificado (dedup por zoho_id)
+-- Primeira fonte com valor IN ('Atua +12','Atua -12','Não atua') decide.
+-- Buckets mutuamente exclusivos pela classif_final.
 --
 -- Shape preservado para os transforms (annotate_and_clean_sdr_closer,
 -- sdr_closer_totais, sdr_closer_matriz, sdr_ranking, closer_ranking).
@@ -70,44 +70,47 @@ deals_relevantes AS (
     UNION
     SELECT deal_id FROM repasses_periodo
 ),
+ext_leads_dedup AS (
+    -- ext.leads DEDUPLICADO por zoho_id, com filtro de e-mails teste —
+    -- 1 row por zoho_id, sempre a versão MAIS RECENTE.
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS ext_classif
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
+),
 deal_classif AS (
-    -- 1 row por deal: bool_or das 4 fontes. Filtro de e-mails de teste no
-    -- JOIN com ext.leads pra alinhar com a regra canônica.
+    -- 1 row por deal relevante. classif_final EXCLUSIVA via CASE
+    -- prioridade lead_classification > qualificacao > classificado_cal
+    -- > ext.classificado. Sem fan-out pois ext.leads vem deduplicado.
     SELECT
         dr.deal_id,
-        bool_or(
-            d.lead_classification = 'Atua +12'
-            OR d.qualificacao     = 'Atua +12'
-            OR d.classificado_cal = 'Atua +12'
-            OR l.classificado     = 'Atua +12'
-        )                                       AS tem_mais_12,
-        bool_or(
-            d.lead_classification = 'Atua -12'
-            OR d.qualificacao     = 'Atua -12'
-            OR d.classificado_cal = 'Atua -12'
-            OR l.classificado     = 'Atua -12'
-        )                                       AS tem_menos_12,
-        bool_or(
-            d.lead_classification = 'Não atua'
-            OR d.qualificacao     = 'Não atua'
-            OR d.classificado_cal = 'Não atua'
-            OR l.classificado     = 'Não atua'
-        )                                       AS tem_nao_atua
+        CASE
+            WHEN NULLIF(btrim(d.lead_classification), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.lead_classification), '')
+            WHEN NULLIF(btrim(d.qualificacao), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.qualificacao), '')
+            WHEN NULLIF(btrim(d.classificado_cal), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.classificado_cal), '')
+            WHEN NULLIF(btrim(eld.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(eld.ext_classif), '')
+            ELSE 'Sem classificação'
+        END                                     AS classif_final
     FROM deals_relevantes dr
     JOIN zoho_deals d           ON d.id::text = dr.deal_id
-    LEFT JOIN ext_reconecta.leads l
-                                ON d.id::text = l.zoho_id::text
-                               AND (
-                                   l.email IS NULL
-                                   OR (
-                                       btrim(l.email) <> ''
-                                       AND lower(l.email) NOT LIKE '%@teste%'
-                                       AND lower(l.email) NOT LIKE 'teste@%'
-                                       AND lower(l.email) NOT LIKE '%smarts%'
-                                       AND lower(l.email) NOT LIKE '%reconecta%'
-                                   )
-                               )
-    GROUP BY dr.deal_id
+    LEFT JOIN ext_leads_dedup eld ON eld.deal_id = dr.deal_id
 ),
 base AS (
     -- 1 row por deal relevante, com SDR/closer resolvidos + flags de
@@ -144,9 +147,7 @@ base AS (
         END                                                   AS receita,
         (dr.deal_id IN (SELECT deal_id FROM ganhos_periodo))   AS is_ganho,
         (dr.deal_id IN (SELECT deal_id FROM repasses_periodo)) AS is_repasse,
-        COALESCE(dc.tem_mais_12,  FALSE)                       AS tem_mais_12,
-        COALESCE(dc.tem_menos_12, FALSE)                       AS tem_menos_12,
-        COALESCE(dc.tem_nao_atua, FALSE)                       AS tem_nao_atua
+        COALESCE(dc.classif_final, 'Sem classificação')        AS classif_final
     FROM deals_relevantes dr
     JOIN zoho_deals d           ON d.id::text = dr.deal_id
     LEFT JOIN zoho_users closer ON closer.id::text = d.executiva_vendas::text
@@ -190,26 +191,24 @@ SELECT
     COUNT(DISTINCT deal_id) FILTER (WHERE is_repasse)
                                                                AS repasses,
     COUNT(DISTINCT deal_id) FILTER (
-        WHERE is_repasse AND tem_mais_12
+        WHERE is_repasse AND classif_final = 'Atua +12'
     )                                                          AS repasses_mais_12,
     COUNT(DISTINCT deal_id) FILTER (
-        WHERE is_repasse AND NOT tem_mais_12 AND tem_menos_12
+        WHERE is_repasse AND classif_final = 'Atua -12'
     )                                                          AS repasses_menos_12,
     COUNT(DISTINCT deal_id) FILTER (
-        WHERE is_repasse AND NOT tem_mais_12 AND NOT tem_menos_12
-              AND tem_nao_atua
+        WHERE is_repasse AND classif_final = 'Não atua'
     )                                                          AS repasses_nao_atua,
 
     -- ===== Novas métricas: GANHOS por classificação =====
     COUNT(DISTINCT deal_id) FILTER (
-        WHERE is_ganho AND tem_mais_12
+        WHERE is_ganho AND classif_final = 'Atua +12'
     )                                                          AS ganhos_mais_12,
     COUNT(DISTINCT deal_id) FILTER (
-        WHERE is_ganho AND NOT tem_mais_12 AND tem_menos_12
+        WHERE is_ganho AND classif_final = 'Atua -12'
     )                                                          AS ganhos_menos_12,
     COUNT(DISTINCT deal_id) FILTER (
-        WHERE is_ganho AND NOT tem_mais_12 AND NOT tem_menos_12
-              AND tem_nao_atua
+        WHERE is_ganho AND classif_final = 'Não atua'
     )                                                          AS ganhos_nao_atua
 FROM base
 GROUP BY sdr, closer

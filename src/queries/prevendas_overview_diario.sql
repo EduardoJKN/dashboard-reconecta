@@ -21,13 +21,18 @@
 --                            antigo que somava o montante várias vezes quando
 --                            o mesmo deal tinha N leads pareados)
 --
--- Regra +12 COMBINADA (4 fontes em OR):
---   1. zoho_deals.lead_classification = 'Atua +12'
---   2. zoho_deals.qualificacao        = 'Atua +12'  (fonte manual da gestoria)
---   3. zoho_deals.classificado_cal    = 'Atua +12'
---   4. ext_reconecta.leads.classificado = 'Atua +12'
--- Aplicada em: agendamentos_mais_12, comparecimentos_mais_12, vendas_mais_12.
--- Regra -12 idem trocando '+12' por '-12' (usada só em leads_menos_12).
+-- Classificação por deal — PRIORIDADE EXCLUSIVA (substitui o OR antigo
+-- que duplicava deals em ambas as categorias quando CRM e ext.leads
+-- divergiam). Ordem das fontes:
+--   1. zoho_deals.lead_classification
+--   2. zoho_deals.qualificacao        (fonte manual da gestoria)
+--   3. zoho_deals.classificado_cal
+--   4. ext_reconecta.leads.classificado (dedup por zoho_id)
+-- Primeira fonte com valor IN ('Atua +12','Atua -12','Não atua') decide.
+-- Sem nenhum válido → 'Sem classificação'. Aplicada em
+-- agendamentos_mais_12, comparecimentos_mais_12, vendas_mais_12.
+-- (leads_mais_12 / leads_menos_12 seguem pré-deal, classificados direto
+-- pela coluna `ext_reconecta.leads.classificado` — não usam essa regra.)
 --
 -- Compatibilidade com páginas ainda não migradas:
 --   - `novos_agendamentos` = alias de `agendamentos_criados`
@@ -69,23 +74,28 @@ leads_diario AS (
     FROM leads_dia_email
     GROUP BY data_ref
 ),
--- ext.leads DEDUPLICADO por zoho_id — mesma técnica das demais SQLs
--- (prevendas_leads_detalhe_diario.sql, prevendas_leads_por_origem.sql,
--- one_page_prevendas_por_fonte.sql). Antes o LEFT JOIN sem dedup criava
--- fan-out (mesmo deal × N rows ext.leads) e o `classificado` antigo
--- bastava pra inflar +12/-12 via COUNT(DISTINCT) FILTER. Hoje pega só
--- a linha MAIS RECENTE — saneamento de 1-5 unidades em mai/2026 sem
--- alterar a regra das 3 colunas CRM.
+-- ext.leads DEDUPLICADO por zoho_id, com filtro de e-mails de teste —
+-- mesma técnica das demais SQLs de Pré-vendas. 1 row por zoho_id, sempre
+-- a mais recente.
 ext_leads_dedup AS (
     SELECT DISTINCT ON (l.zoho_id::text)
         l.zoho_id::text  AS deal_id,
-        l.classificado   AS classificado
+        l.classificado   AS ext_classif
     FROM ext_reconecta.leads l
     WHERE l.zoho_id IS NOT NULL
       AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
     ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
 ),
 base_dados AS (
+    -- 1 row por deal: dados financeiros + classificação final EXCLUSIVA
+    -- (prioridade lead_classification > qualificacao > classificado_cal
+    -- > ext.classificado). Sem fan-out pois ext.leads vem deduplicado.
     SELECT
         d.id AS deal_id,
         d.data_hora_compra::date AS data_venda_ref,
@@ -109,23 +119,28 @@ base_dados AS (
                      ',', '.'
                  )::numeric
         END AS receita,
-        eld.classificado,
-        -- 3 fontes de classificação direto do deal. Todas no Zoho (CRM),
-        -- editáveis pela gestoria depois que o lead entra. Sem fan-out
-        -- agora que ext.leads vem deduplicado via ext_leads_dedup.
-        d.lead_classification,
-        d.qualificacao,
-        d.classificado_cal
+        CASE
+            WHEN NULLIF(btrim(d.lead_classification), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.lead_classification), '')
+            WHEN NULLIF(btrim(d.qualificacao), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.qualificacao), '')
+            WHEN NULLIF(btrim(d.classificado_cal), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(d.classificado_cal), '')
+            WHEN NULLIF(btrim(eld.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(eld.ext_classif), '')
+            ELSE 'Sem classificação'
+        END AS classif_final
     FROM zoho_deals d
     LEFT JOIN ext_leads_dedup eld ON d.id::text = eld.deal_id
 ),
 acts AS (
     SELECT
         bd.deal_id,
-        bd.classificado,
-        bd.lead_classification,
-        bd.qualificacao,
-        bd.classificado_cal,
+        bd.classif_final,
         a.created_time::date AS data_criacao_ref,
         a.start_datetime::date AS data_reuniao_ref,
         a.status_reuniao,
@@ -141,13 +156,6 @@ acts AS (
           OR a.start_datetime::date BETWEEN :data_ini AND :data_fim
       )
 ),
--- O fan-out histórico (mesma activity replicada em N linhas pelo LEFT
--- JOIN com ext_reconecta.leads) foi eliminado na origem ao trocar o
--- JOIN por `ext_leads_dedup` — 1 row por zoho_id, sempre a mais recente.
--- COUNT(DISTINCT activity_id) segue sendo a regra correta (idempotente
--- aqui, mantida por hábito e por defesa contra eventuais fontes futuras).
--- A `classificado` ext.leads usada nos FILTER de +12 abaixo é a versão
--- atual do lead, não mais "qualquer versão histórica".
 agendamentos_criados_diario AS (
     SELECT
         data_criacao_ref AS data_ref,
@@ -157,30 +165,21 @@ agendamentos_criados_diario AS (
     GROUP BY 1
 ),
 agendamentos_diario AS (
-    -- Regra +12 COMBINADA (4 fontes em OR): lead_classification (CRM) OR
-    -- qualificacao (CRM, manual da gestoria) OR classificado_cal (CRM) OR
-    -- classificado (ext_reconecta.leads). Aplicada também em
-    -- comparecimentos_mais_12.
+    -- Buckets exclusivos pela classif_final (CASE prioridade aplicado em
+    -- `base_dados`). Antes era OR das 4 fontes — duplicava deals em +12 e
+    -- -12 quando CRM e ext.leads divergiam.
     SELECT
         data_reuniao_ref AS data_ref,
         COUNT(DISTINCT activity_id)::bigint AS agendamentos,
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE lead_classification = 'Atua +12'
-               OR qualificacao        = 'Atua +12'
-               OR classificado_cal    = 'Atua +12'
-               OR classificado        = 'Atua +12'
+            WHERE classif_final = 'Atua +12'
         )::bigint AS agendamentos_mais_12,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE status_reuniao IN ('Concluída', 'Concluído')
         )::bigint AS comparecimentos,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE status_reuniao IN ('Concluída', 'Concluído')
-              AND (
-                  lead_classification = 'Atua +12'
-                  OR qualificacao    = 'Atua +12'
-                  OR classificado_cal = 'Atua +12'
-                  OR classificado    = 'Atua +12'
-              )
+              AND classif_final = 'Atua +12'
         )::bigint AS comparecimentos_mais_12,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE status_reuniao = 'Vencida'
@@ -191,21 +190,14 @@ agendamentos_diario AS (
 ),
 deals_ganhos_dedup AS (
     -- Dedup explícito por deal_id ANTES de somar montante/receita.
-    -- Antes essa CTE era `vendas_diario` somando direto de base_dados,
-    -- o que inflava montante/receita pelo fan-out do LEFT JOIN com leads.
-    -- bool_or da regra +12 combinada agrega TODAS as linhas-lead pareadas:
-    -- basta uma delas ter +12 (em qualquer das 4 fontes) pra o deal contar.
+    -- classif_final já é único por deal (base_dados sem fan-out), então
+    -- bool_or vira MAX defensivo.
     SELECT
         bd.deal_id,
         MAX(bd.data_venda_ref)             AS data_venda_ref,
         MAX(bd.montante)                    AS montante,
         MAX(bd.receita)                     AS receita,
-        bool_or(
-            bd.lead_classification = 'Atua +12'
-            OR bd.qualificacao    = 'Atua +12'
-            OR bd.classificado_cal = 'Atua +12'
-            OR bd.classificado    = 'Atua +12'
-        )                                   AS tem_mais_12
+        bool_or(bd.classif_final = 'Atua +12') AS tem_mais_12
     FROM base_dados bd
     WHERE bd.stage = 'Ganho'
       AND bd.tipo_venda = 'Novo cliente'
