@@ -23,7 +23,8 @@ Fontes:
   - get_executivas / get_investimento_diario            (Vendas)
   - get_media_movel_vendas                              (Vendas)
   - get_one_page_prevendas_por_fonte                    (tabela Fonte)
-  - get_prevendas_overview_diario / _por_sdr / _sdr_closer (Pré-vendas)
+  - get_prevendas_overview_diario                         (Pré-vendas)
+  - get_one_page_sdr_closer                               (tabela SDR×Closer)
 
 Performance via `@st.cache_data(ttl=600)` em todos os repositories.
 """
@@ -41,11 +42,13 @@ from src.repositories import (
     get_executivas,
     get_investimento_diario,
     get_media_movel_vendas,
+    get_one_page_indicacoes_fonte,
     get_one_page_legacy_diario,
+    get_one_page_novos_forma_venda,
     get_one_page_por_executiva,
     get_one_page_prevendas_por_fonte,
+    get_one_page_sdr_closer,
     get_prevendas_overview_diario,
-    get_prevendas_sdr_closer,
 )
 from src.transforms import (
     delta_pct,
@@ -308,6 +311,46 @@ _OP_CARD_CSS = """
     white-space: nowrap;
     flex: 0 0 auto;
 }
+/* Em call + Follow lado a lado (card Novos) — mais baixo que stack vertical. */
+.op-badge-extras.op-badge-extras-inline {
+    flex-direction: row;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 2px;
+    padding-top: 3px;
+    border-top: 1px dotted var(--color-border);
+}
+.op-badge-extras.op-badge-extras-inline .op-badge-extra {
+    flex: 1 1 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0;
+    max-width: 48%;
+}
+.op-badge-extras.op-badge-extras-inline .op-badge-extra-label {
+    font-size: 0.44rem;
+    letter-spacing: 0.35px;
+    opacity: 0.65;
+}
+.op-badge-extras.op-badge-extras-inline .op-badge-extra-value {
+    font-size: 0.62rem;
+    font-weight: 600;
+    line-height: 1.05;
+}
+/* Card Novos compacto — badges com menos respiro vertical. */
+.op-card.compact .op-badges.op-badges-novos {
+    margin-top: 4px;
+    padding-top: 4px;
+    gap: 1px;
+}
+.op-card.compact .op-badges.op-badges-novos .op-badge-value {
+    font-size: 0.74rem;
+}
+.op-card.compact .op-badges.op-badges-novos .op-badge-label {
+    font-size: 0.46rem;
+}
 
 /* Toggle discreto do hero de Marketing — segmented_control compactado */
 [data-testid="stSegmentedControl"] { margin: 0 0 6px 0; }
@@ -430,6 +473,8 @@ def one_page_metric_card(
     compact: bool = False,
     wine_accent: bool = False,
     badges: list[tuple] | None = None,
+    extras_inline: bool = False,
+    badges_class: str | None = None,
 ) -> None:
     """Card compacto da One Page. `hero` e `compact` são mutuamente
     exclusivos visualmente — se ambos True, `hero` vence (atalho seguro
@@ -491,8 +536,11 @@ def one_page_metric_card(
                     f'</div>'
                     for el, ev in extras
                 )
+                extras_cls = "op-badge-extras"
+                if extras_inline:
+                    extras_cls += " op-badge-extras-inline"
                 extras_html = (
-                    f'<div class="op-badge-extras">{extras_items}</div>'
+                    f'<div class="{extras_cls}">{extras_items}</div>'
                 )
             items_parts.append(
                 f'<div class="op-badge">'
@@ -506,6 +554,8 @@ def one_page_metric_card(
         badges_cls = "op-badges"
         if len(badges) == 1:
             badges_cls += " op-badges-single"
+        if badges_class:
+            badges_cls += f" {badges_class}"
         badges_html = f'<div class="{badges_cls}">{items}</div>'
 
     val_cls = "op-value accent" if accent else "op-value"
@@ -1192,16 +1242,13 @@ except Exception as e:
 #   % Comparecimento via `prevendas_overview_kpis` (regra oficial).
 # - `df_prev_fonte`: alimenta os cards INBOUND/SS (regra origem_final do
 #   Looker — quebra por `zoho_deals.fonte_de_lead`, não por tipo de SDR).
-# - `df_prev_sc`:  tabela SDR × Closer (visualização separada).
 try:
     df_prev_dia   = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
     df_prev_fonte = get_one_page_prevendas_por_fonte(ctx.data_ini, ctx.data_fim)
-    df_prev_sc    = get_prevendas_sdr_closer(ctx.data_ini, ctx.data_fim)
 except Exception as e:
     st.warning(f"Falha ao consultar Pré-vendas: {e}")
     df_prev_dia   = pd.DataFrame()
     df_prev_fonte = pd.DataFrame()
-    df_prev_sc    = pd.DataFrame()
 
 # Média móvel — sempre últimos 21 dias (regra Looker)
 try:
@@ -1226,6 +1273,25 @@ por_fonte = _prev_por_fonte(df_prev_fonte)
 
 k_vendas      = visao_geral_kpis(df_exec, df_inv)
 k_vendas_prev = visao_geral_kpis(df_exec_prev, df_inv_prev)
+
+# Card Indic. — regra Looker (`fonte_de_lead = 'Indicação'`), não a coluna
+# `indicacoes` da view (que classifica por `tipo_venda`). Pode sobrepor Novos.
+try:
+    k_vendas["indicacoes"] = get_one_page_indicacoes_fonte(
+        ctx.data_ini, ctx.data_fim,
+    )
+    k_vendas_prev["indicacoes"] = get_one_page_indicacoes_fonte(
+        prev_ini, prev_fim,
+    )
+except Exception as e:
+    st.warning(f"Falha ao consultar Indic. (fonte): {e}")
+
+# Sub-stats Em call / Follow no card Novos (forma_venda em zoho_deals).
+novos_forma = {"em_call": 0, "follow": 0}
+try:
+    novos_forma = get_one_page_novos_forma_venda(ctx.data_ini, ctx.data_fim)
+except Exception as e:
+    st.warning(f"Falha ao consultar Novos (forma venda): {e}")
 
 # =============================================================================
 # Painel executivo — 3 colunas (Marketing | Pré-vendas | Vendas).
@@ -1497,7 +1563,14 @@ with col_vendas:
             delta_pct=delta_pct(k_vendas["novos"], k_vendas_prev["novos"]),
             accent=True,
             compact=True,
-            badges=[("% Conversão", pct(pct_conversao))],
+            badges=[
+                ("% Conversão", pct(pct_conversao), [
+                    ("Em call", int_br(novos_forma.get("em_call", 0))),
+                    ("Follow",  int_br(novos_forma.get("follow", 0))),
+                ]),
+            ],
+            extras_inline=True,
+            badges_class="op-badges-novos",
         )
     with r[1]:
         one_page_metric_card(
@@ -1644,7 +1717,7 @@ with g_left:
 
 # ---- 2. Investimento por dia (mesma base do CPL: anuncios sem REL_02*) ----
 with g_right:
-    st.markdown("**Investimento por dia** (regra Looker · sem REL_02*)")
+    st.markdown("**Investimento por dia**")
     if df_one is None or df_one.empty or "investimento" not in df_one.columns:
         st.info("Sem investimento registrado no período.")
     else:
@@ -1898,18 +1971,34 @@ else:
     )
 
 # ---- Tabela por SDR × Closer -----------------------------------------------
-# TODO/backlog: inconsistência de "Comparecimentos" entre as fontes.
-# `prevendas_sdr_closer.sql:81` filtra apenas `status_reuniao = 'Concluída'`
-# (feminino), enquanto `prevendas_overview_diario.sql:160` e
-# `prevendas_por_sdr.sql:195` usam `status_reuniao IN ('Concluída',
-# 'Concluído')`. A coluna "Comparec." desta tabela pode subcontar quando
-# o status estiver gravado no masculino. Não corrigir agora — a SQL é
-# consumida também por `views/prevendas_sdr_closer.py`; precisa validar
-# impacto cruzado antes de unificar.
+# Fonte: cálculo direto a partir de `zoho_deals` + `zoho_activities` +
+# `fdw_reconecta.executivas_pre_vendas` + `executivas_vendas`. Visão padrão
+# mostra só SDR cadastrada + closer ativa; "Todas / Histórico" inclui
+# inativas e IDs órfãos (fallback SDR em `zoho_users` quando possível).
 section_title(
     "Por SDR × Closer",
-    "pares com pelo menos um agendamento ou venda no período",
+    "cálculo direto · zoho_deals + executivas_pre_vendas / executivas_vendas",
 )
+_modo_sc_label = st.radio(
+    "Visualização SDR × Closer",
+    options=("Ativos", "Todas / Histórico"),
+    index=0,
+    horizontal=True,
+    help=(
+        "Ativos: SDR presente em `executivas_pre_vendas` e Closer com "
+        "`ativo='y'` no cadastro oficial.\n"
+        "Todas / Histórico: inclui inativas e IDs sem cadastro (para auditoria)."
+    ),
+    key="onepage_sc_modo",
+)
+_modo_sc_arg = "ativos" if _modo_sc_label == "Ativos" else "todas"
+try:
+    df_prev_sc = get_one_page_sdr_closer(
+        ctx.data_ini, ctx.data_fim, _modo_sc_arg,
+    )
+except Exception as e:
+    st.warning(f"Falha ao consultar SDR × Closer: {e}")
+    df_prev_sc = pd.DataFrame()
 tab_sc = _tabela_sdr_closer(df_prev_sc)
 if tab_sc.empty:
     st.info("Sem pares SDR × Closer com atividade no período.")

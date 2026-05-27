@@ -52,6 +52,69 @@ def get_one_page_por_executiva(data_ini: date,
     return run_sql_file("one_page_por_executiva.sql", params)
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo SDR × Closer da One Page…")
+def get_one_page_sdr_closer(
+    data_ini: date,
+    data_fim: date,
+    modo: str = "ativos",
+) -> pd.DataFrame:
+    """Tabela Por SDR × Closer da One Page — cálculo direto.
+
+    Vai a `zoho_deals` + `zoho_activities` +
+    `fdw_reconecta.executivas_pre_vendas` +
+    `fdw_reconecta.executivas_vendas`, em vez da query/view legada.
+
+    Parâmetro `modo`:
+      - 'ativos': apenas SDRs no cadastro oficial e closers ativos;
+      - 'todas': inclui histórico, inativos e IDs sem cadastro.
+    """
+    if modo not in ("ativos", "todas"):
+        modo = "ativos"
+
+    params = _date_params(data_ini, data_fim)
+    params["modo"] = modo
+
+    return run_sql_file("one_page_sdr_closer.sql", params)
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Novos (forma venda) da One Page…")
+def get_one_page_novos_forma_venda(data_ini: date, data_fim: date) -> dict:
+    """Sub-stats Em call / Follow do card Novos (One Page).
+
+    Base: `zoho_deals` com `tipo_venda = 'Novo cliente'` e compra no período.
+    O total `novos` retornado é referência de auditoria — o card principal
+    continua vindo da view via `visao_geral_kpis`.
+    """
+    df = run_sql_file(
+        "one_page_novos_forma_venda.sql", _date_params(data_ini, data_fim)
+    )
+    if df.empty:
+        return {"novos": 0, "em_call": 0, "follow": 0}
+    row = df.iloc[0]
+    return {
+        "novos": int(row["novos"] or 0),
+        "em_call": int(row["em_call"] or 0),
+        "follow": int(row["follow"] or 0),
+    }
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo indicações (fonte) da One Page…")
+def get_one_page_indicacoes_fonte(data_ini: date, data_fim: date) -> int:
+    """Card Indic. da One Page — vendas por `fonte_de_lead = 'Indicação'`.
+
+    Substitui a coluna `indicacoes` da view legada (que usava `tipo_venda`)
+    apenas neste card. Alinhado ao Looker: ganhos no período por
+    `data_hora_compra`, com filtros canônicos de e-mail de teste.
+    """
+    df = run_sql_file(
+        "one_page_indicacoes_fonte.sql", _date_params(data_ini, data_fim)
+    )
+    if df.empty:
+        return 0
+    val = df.iloc[0]["indicacoes"]
+    return int(val) if val is not None else 0
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo SDR × Closer…")
 def get_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
     # Migrado de bi.vw_compatibilidade_sdr_closer (defasada e com regra
