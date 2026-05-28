@@ -61,42 +61,41 @@ leads_dia AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- Aplicações (fdw_reconecta.typeform_aplicacoes) — daily-distinct por e-mail,
--- com flags +12/-12/não atua agregadas via BOOL_OR (mesmo email no mesmo dia
--- pode ter múltiplas submissões; uma com '+12' já marca o bucket).
+-- Aplicações (fdw_reconecta.typeform_aplicacoes) — submissões brutas (COUNT(*))
+-- com data normalizada para São Paulo (created_at AT TIME ZONE 'America/Sao_Paulo').
+-- IMPORTANTE: NÃO filtra e-mails de teste aqui, para bater com Typeform/Submissions.
 -- ---------------------------------------------------------------------------
 aplicacoes_clean AS (
     SELECT
-        ta.created_at::date                            AS data,
+        (ta.created_at AT TIME ZONE 'America/Sao_Paulo')::date AS data,
         lower(btrim(ta.email))                         AS email_norm,
         lower(btrim(coalesce(ta.classificado, '')))    AS classif_norm
     FROM fdw_reconecta.typeform_aplicacoes ta
-    WHERE ta.created_at::date BETWEEN :data_ini AND :data_fim
-      AND ta.email IS NOT NULL
-      AND btrim(ta.email) <> ''
-      AND lower(ta.email) NOT LIKE '%@teste%'
-      AND lower(ta.email) NOT LIKE 'teste@%'
-      AND lower(ta.email) NOT LIKE '%smarts%'
-      AND lower(ta.email) NOT LIKE '%reconecta%'
-),
-aplicacoes_dia_email AS (
-    SELECT
-        data,
-        email_norm,
-        BOOL_OR(classif_norm IN ('atua +12', 'atua+12', '+12'))  AS tem_mais_12,
-        BOOL_OR(classif_norm IN ('atua -12', 'atua-12', '-12'))  AS tem_menos_12,
-        BOOL_OR(classif_norm IN ('não atua', 'nao atua'))        AS tem_nao_atua
-    FROM aplicacoes_clean
-    GROUP BY data, email_norm
+    WHERE (ta.created_at AT TIME ZONE 'America/Sao_Paulo')::date
+          BETWEEN :data_ini AND :data_fim
+      AND (
+          :excluir_testes_aplicacoes = 0
+          OR (
+              ta.email IS NOT NULL
+              AND btrim(ta.email) <> ''
+              AND lower(ta.email) NOT LIKE '%@teste%'
+              AND lower(ta.email) NOT LIKE 'teste@%'
+              AND lower(ta.email) NOT LIKE '%smarts%'
+              AND lower(ta.email) NOT LIKE '%reconecta%'
+          )
+      )
 ),
 aplicacoes_dia AS (
     SELECT
         data,
-        COUNT(*)::bigint                                        AS novas_aplicacoes,
-        COUNT(*) FILTER (WHERE tem_mais_12)::bigint             AS aplicacoes_mais_12,
-        COUNT(*) FILTER (WHERE tem_menos_12)::bigint            AS aplicacoes_menos_12,
-        COUNT(*) FILTER (WHERE tem_nao_atua)::bigint            AS aplicacoes_nao_atua
-    FROM aplicacoes_dia_email
+        COUNT(*)::bigint                                         AS novas_aplicacoes,
+        COUNT(*) FILTER (WHERE classif_norm IN ('atua +12', 'atua+12', '+12'))::bigint
+                                                                  AS aplicacoes_mais_12,
+        COUNT(*) FILTER (WHERE classif_norm IN ('atua -12', 'atua-12', '-12'))::bigint
+                                                                  AS aplicacoes_menos_12,
+        COUNT(*) FILTER (WHERE classif_norm IN ('não atua', 'nao atua'))::bigint
+                                                                  AS aplicacoes_nao_atua
+    FROM aplicacoes_clean
     GROUP BY data
 ),
 
@@ -186,18 +185,21 @@ deals_com_agendamento AS (
 -- Match final aplicação → lead → deal → agendamento.
 apl_com_ag AS (
     SELECT
-        ad.data,
-        COUNT(DISTINCT ad.email_norm)::bigint                           AS aplicacoes_com_agendamento,
-        COUNT(DISTINCT ad.email_norm) FILTER (WHERE ad.tem_mais_12)::bigint
-                                                                         AS aplicacoes_mais_12_com_agendamento,
-        COUNT(DISTINCT ad.email_norm) FILTER (WHERE ad.tem_menos_12)::bigint
-                                                                         AS aplicacoes_menos_12_com_agendamento,
-        COUNT(DISTINCT ad.email_norm) FILTER (WHERE ad.tem_nao_atua)::bigint
-                                                                         AS aplicacoes_nao_atua_com_agendamento
-    FROM aplicacoes_dia_email ad
-    JOIN leads_email_zoho      lez USING (email_norm)
-    JOIN deals_com_agendamento dca USING (deal_id)
-    GROUP BY ad.data
+        ac.data,
+        COUNT(*)::bigint                                              AS aplicacoes_com_agendamento,
+        COUNT(*) FILTER (
+            WHERE ac.classif_norm IN ('atua +12', 'atua+12', '+12')
+        )::bigint                                                     AS aplicacoes_mais_12_com_agendamento,
+        COUNT(*) FILTER (
+            WHERE ac.classif_norm IN ('atua -12', 'atua-12', '-12')
+        )::bigint                                                     AS aplicacoes_menos_12_com_agendamento,
+        COUNT(*) FILTER (
+            WHERE ac.classif_norm IN ('não atua', 'nao atua')
+        )::bigint                                                     AS aplicacoes_nao_atua_com_agendamento
+    FROM aplicacoes_clean       ac
+    JOIN leads_email_zoho       lez ON lez.email_norm = ac.email_norm
+    JOIN deals_com_agendamento  dca ON dca.deal_id = lez.deal_id
+    GROUP BY ac.data
 ),
 
 -- ---------------------------------------------------------------------------

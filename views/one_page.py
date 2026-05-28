@@ -133,13 +133,13 @@ _OP_CARD_CSS = """
     background: var(--color-card);
     border: 1px solid var(--color-border);
     border-radius: 8px;
-    padding: 10px 12px;
+    padding: 8px 11px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 2px;
-    min-height: 64px;
+    min-height: 0;
     height: 100%;
     position: relative;
     text-align: center;
@@ -147,14 +147,25 @@ _OP_CARD_CSS = """
 }
 .op-card:hover { border-color: var(--color-border-strong); }
 .op-card.hero {
-    padding: 12px 16px;
-    min-height: 86px;
+    padding: 8px 12px 9px;
+    min-height: 0;
+    gap: 1px;
     border-color: var(--color-border-strong);
 }
 .op-card.compact {
-    padding: 6px 10px;
-    min-height: 50px;
+    padding: 5px 8px;
+    min-height: 0;
     gap: 1px;
+}
+/* Cards simples (1 badge ou só hint) — menos altura fantasma na linha */
+.op-card:has(.op-badges-single):not(:has(.op-badge-extras)) {
+    padding: 7px 9px;
+}
+.op-card.compact:has(.op-hint):not(:has(.op-badges)):not(:has(.op-novos-chips)) {
+    padding: 5px 8px 4px;
+}
+.op-card:not(.hero):not(.compact):has(.op-hint):not(:has(.op-badges)) {
+    padding: 6px 9px;
 }
 /* Cabeçalho — label + delta inline. `gap: 8px` (era 6) garante respiro
    entre o título e o badge de variação, evitando que ele "cole" no label. */
@@ -166,32 +177,46 @@ _OP_CARD_CSS = """
     width: 100%;
     min-width: 0;
 }
+/* ---- Tipografia cards OP — escala hero / médio / compact ---- */
 .op-label {
-    color: var(--color-muted);
-    font-size: 0.6rem;
+    color: var(--color-text-subtle);
+    opacity: 0.9;
+    font-size: 0.68rem;
     font-weight: 600;
-    letter-spacing: 1.4px;
+    letter-spacing: 1.3px;
     text-transform: uppercase;
     min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.op-card.compact .op-label { font-size: 0.56rem; letter-spacing: 1.1px; }
-.op-card.hero    .op-label { font-size: 0.66rem; }
+.op-card.hero .op-label {
+    font-size: 0.72rem;
+    letter-spacing: 1.4px;
+}
+.op-card.compact .op-label {
+    font-size: 0.62rem;
+    letter-spacing: 1.1px;
+}
 .op-value {
     color: var(--color-text);
-    font-size: 1.22rem;
+    font-size: 1.28rem;
     font-weight: 700;
     line-height: 1.1;
     font-variant-numeric: tabular-nums;
     margin-top: 2px;
-    /* Mantém o valor numa única linha — evita quebrar `R$ 934.000,00`
-       em "R$" / "934.000,00" em colunas estreitas (Montante hero). */
     white-space: nowrap;
 }
-.op-card.hero    .op-value { font-size: 1.7rem; margin-top: 4px; }
-.op-card.compact .op-value { font-size: 1.0rem; font-weight: 600; margin-top: 1px; }
+.op-card.hero .op-value {
+    font-size: 1.95rem;
+    margin-top: 1px;
+    line-height: 1.05;
+}
+.op-card.compact .op-value {
+    font-size: 1.12rem;
+    font-weight: 600;
+    margin-top: 0;
+}
 .op-value.accent { color: var(--color-gold); }
 /* Delta — anotação leve ao lado do label (texto colorido sem pílula
    chamativa). Versão executiva sutil; cores up/down/flat dão o sinal. */
@@ -200,37 +225,39 @@ _OP_CARD_CSS = """
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.2px;
-    opacity: 0.78;
+    opacity: 0.86;
     white-space: nowrap;
     flex: 0 0 auto;
 }
 .op-card.compact .op-delta { font-size: 0.5rem; }
 .op-card.hero    .op-delta { font-size: 0.6rem; }
-.op-delta.up   { color: var(--color-green); }
-.op-delta.down { color: var(--color-red); }
-.op-delta.flat { color: var(--color-text-subtle); opacity: 0.55; }
+.op-delta.up   { color: var(--color-green); opacity: 0.92; }
+.op-delta.down { color: var(--color-red); opacity: 0.92; }
+.op-delta.flat { color: var(--color-text-subtle); opacity: 0.72; }
 .op-hint {
     color: var(--color-text-subtle);
-    font-size: 0.55rem;
-    margin-top: 1px;
-    opacity: 0.6;
+    font-size: 0.6rem;
+    margin-top: 0;
+    line-height: 1.15;
+    opacity: 0.76;
     max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.op-card.compact .op-hint { font-size: 0.52rem; }
+.op-card.hero .op-hint { font-size: 0.62rem; opacity: 0.78; }
+.op-card.compact .op-hint { font-size: 0.58rem; opacity: 0.74; }
 
 /* Mini-indicadores associados — sub-grid no rodapé do card. Usado pra
    "grudar" % Agendamento e Custo/Aplicação ao card de Aplicações (e ±12).
    Visual segue o padrão Looker de mini-métricas atreladas ao card principal. */
 .op-badges {
-    margin-top: 8px;
-    padding-top: 8px;
+    margin-top: 4px;
+    padding-top: 4px;
     border-top: 1px dashed var(--color-border);
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 4px 10px;
+    gap: 2px 10px;
     width: 100%;
 }
 /* Badge único — centraliza em coluna full ao invés de ocupar só a esquerda
@@ -246,11 +273,11 @@ _OP_CARD_CSS = """
 }
 .op-badge-label {
     color: var(--color-text-subtle);
-    font-size: 0.5rem;
+    font-size: 0.62rem;
     font-weight: 600;
-    letter-spacing: 0.7px;
+    letter-spacing: 0.55px;
     text-transform: uppercase;
-    opacity: 0.7;
+    opacity: 0.88;
     max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
@@ -258,29 +285,45 @@ _OP_CARD_CSS = """
 }
 .op-badge-value {
     color: var(--color-text);
-    font-size: 0.82rem;
+    font-size: 0.96rem;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
-    line-height: 1.1;
+    line-height: 1.15;
     max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.op-card.hero .op-badges { margin-top: 10px; padding-top: 10px; gap: 5px 14px; }
-.op-card.hero .op-badge-label { font-size: 0.54rem; }
-.op-card.hero .op-badge-value { font-size: 0.95rem; }
+.op-card.hero .op-badges {
+    margin-top: 4px;
+    padding-top: 4px;
+    gap: 2px 12px;
+    width: 100%;
+}
+.op-card.hero .op-badge-label { font-size: 0.64rem; opacity: 0.9; }
+.op-card.hero .op-badge-value { font-size: 1.02rem; }
+.op-card.compact .op-badge-label { font-size: 0.58rem; }
+.op-card.compact .op-badge-value { font-size: 0.88rem; }
+/* Agend. INBOUND/SS — muitos sub-stats, mas conteúdo alinhado ao topo */
+.op-card:not(.hero):not(.compact):has(.op-badge-extras) {
+    padding: 7px 9px 8px;
+    gap: 1px;
+}
+.op-card:has(.op-badges-single):not(:has(.op-badge-extras)) .op-badges {
+    margin-top: 3px;
+    padding-top: 3px;
+}
 
 /* Sub-stats dentro de um badge — usados pra detalhar Agend. ±12 IN/SS
    acoplados em Agend. INBOUND/SS (volume no destaque, % e custo logo
    abaixo). Visual mais discreto que o valor principal do badge. */
 .op-badge-extras {
-    margin-top: 4px;
-    padding-top: 4px;
+    margin-top: 2px;
+    padding-top: 3px;
     border-top: 1px dotted var(--color-border);
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     width: 100%;
 }
 .op-badge-extra {
@@ -293,11 +336,11 @@ _OP_CARD_CSS = """
 }
 .op-badge-extra-label {
     color: var(--color-text-subtle);
-    font-size: 0.5rem;
-    font-weight: 500;
-    letter-spacing: 0.4px;
+    font-size: 0.58rem;
+    font-weight: 600;
+    letter-spacing: 0.35px;
     text-transform: uppercase;
-    opacity: 0.7;
+    opacity: 0.84;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -305,53 +348,36 @@ _OP_CARD_CSS = """
 }
 .op-badge-extra-value {
     color: var(--color-text);
-    font-size: 0.68rem;
-    font-weight: 500;
+    font-size: 0.86rem;
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     flex: 0 0 auto;
 }
-/* Em call + Follow lado a lado (card Novos) — mais baixo que stack vertical. */
+/* Em call / Follow inline — outros cards (Agend. INBOUND/SS). */
 .op-badge-extras.op-badge-extras-inline {
-    flex-direction: row;
-    justify-content: center;
-    align-items: flex-start;
-    gap: 10px;
-    margin-top: 2px;
-    padding-top: 3px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 10px;
+    margin-top: 3px;
+    padding-top: 4px;
     border-top: 1px dotted var(--color-border);
+    width: 100%;
 }
 .op-badge-extras.op-badge-extras-inline .op-badge-extra {
-    flex: 1 1 0;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
-    gap: 0;
-    max-width: 48%;
+    gap: 1px;
+    min-width: 0;
 }
 .op-badge-extras.op-badge-extras-inline .op-badge-extra-label {
-    font-size: 0.44rem;
-    letter-spacing: 0.35px;
-    opacity: 0.65;
+    font-size: 0.58rem;
+    opacity: 0.86;
 }
 .op-badge-extras.op-badge-extras-inline .op-badge-extra-value {
-    font-size: 0.62rem;
+    font-size: 0.86rem;
     font-weight: 600;
-    line-height: 1.05;
 }
-/* Card Novos compacto — badges com menos respiro vertical. */
-.op-card.compact .op-badges.op-badges-novos {
-    margin-top: 4px;
-    padding-top: 4px;
-    gap: 1px;
-}
-.op-card.compact .op-badges.op-badges-novos .op-badge-value {
-    font-size: 0.74rem;
-}
-.op-card.compact .op-badges.op-badges-novos .op-badge-label {
-    font-size: 0.46rem;
-}
-
 /* Toggle discreto do hero de Marketing — segmented_control compactado */
 [data-testid="stSegmentedControl"] { margin: 0 0 6px 0; }
 [data-testid="stSegmentedControl"] button {
@@ -365,33 +391,34 @@ _OP_CARD_CSS = """
 /* Densidade — apenas blocos que contém cards OP. Charts/tabelas
    abaixo do KPI block usam seu próprio espaçamento (gap="large"). */
 [data-testid="stHorizontalBlock"]:has(.op-card) {
-    gap: 0.7rem !important;
-    margin-bottom: 6px;
+    gap: 0.75rem !important;
+    margin-bottom: 0;
 }
-/* Base — irmãos genéricos dentro de uma coluna ficam próximos (0.4rem).
-   Hierarquia diferenciada vem via margin-top nos seletores abaixo. */
+/* Base — irmãos dentro de cada coluna KPI (título, toggle, cards). */
 [data-testid="stColumn"]:has(.op-card) [data-testid="stVerticalBlock"] {
-    gap: 0.4rem !important;
+    gap: 0.6rem !important;
 }
-/* Hero → primeiro bloco de filhos. Quando um stElementContainer com
-   `.op-card.hero` (pai standalone, full-width) é seguido por um
-   stHorizontalBlock contendo cards, adiciona ar extra pra separar
-   visualmente o pai do seu agrupamento de filhos. Total efetivo: gap
-   base 0.4rem + 0.45rem = ~0.85rem. */
-[data-testid="stElementContainer"]:has(.op-card.hero)
-    + [data-testid="stHorizontalBlock"]:has(.op-card) {
-    margin-top: 0.45rem !important;
+/* Espaçadores explícitos (op_spacer) — ritmo vertical:
+   parent = 1rem (pai → filhos) · row = 0.9rem (linha → linha). */
+.op-spacer {
+    display: block;
+    width: 100%;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    pointer-events: none;
 }
-/* Bloco → bloco irmão. Quando dois stHorizontalBlocks de cards estão
-   adjacentes na mesma coluna (ex.: Agend. row → Comp. row), ar
-   intermediário pra sinalizar que são grupos distintos sem distanciar
-   demais. Total efetivo: 0.4 + 0.3 = 0.7rem. */
-[data-testid="stHorizontalBlock"]:has(.op-card)
-    + [data-testid="stHorizontalBlock"]:has(.op-card) {
-    margin-top: 0.3rem !important;
+.op-spacer-parent { height: 1rem; }
+.op-spacer-row { height: 0.9rem; }
+section[data-testid="stMain"]
+    [data-testid="stElementContainer"]:has(.op-spacer) {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
 }
-/* Section title mais apertado só no topo (antes do KPI grid). Aplica
-   global porque é classe própria — fica natural na página inteira. */
+/* Títulos de seção — margem local; escala tipográfica no bloco macro abaixo. */
 .sec-title { margin: 10px 0 6px 0; padding-bottom: 4px; }
 
 /* Linha-rodapé "Total do período" — usada APENAS abaixo da tabela
@@ -447,6 +474,107 @@ _OP_CARD_CSS = """
    destaque visual — Total não pinta valores em dourado, fica com
    a mesma cor das demais células. */
 .op-foot-cell.accent { color: #FAFAFA; }
+
+/* =========================================================================
+   One Page — layout macro (enquadramento / largura / header → KPI)
+   Escopo: section[data-testid="stMain"] — só afeta a página ativa.
+   ========================================================================= */
+section[data-testid="stMain"] .block-container {
+    padding-top: 0.35rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+    max-width: 1720px !important;
+}
+section[data-testid="stMain"]
+    [data-testid="stHorizontalBlock"]:has(.page-header-title) {
+    margin-bottom: 4px !important;
+}
+/* Linha do seletor de tema — menos respiro antes dos cards */
+section[data-testid="stMain"]
+    [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"]:has(
+        [data-testid="stSelectbox"]
+    ) {
+    margin-top: 0 !important;
+    margin-bottom: 2px !important;
+}
+section[data-testid="stMain"] .sec-title {
+    font-size: 1.02rem;
+    line-height: 1.25;
+}
+section[data-testid="stMain"] .sec-title .sub,
+section[data-testid="stMain"] .sec-title span {
+    font-size: 0.72rem;
+}
+section[data-testid="stMain"] [data-testid="stColumn"]:has(.op-card) .sec-title {
+    margin: 0 0 10px 0 !important;
+    padding-bottom: 4px;
+}
+section[data-testid="stMain"] [data-testid="stColumn"]:has(.op-card) .sec-title .sub {
+    opacity: 0.75;
+}
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-card)
+    [data-testid="stElementContainer"]:has(.sec-title) {
+    margin-bottom: 4px !important;
+}
+/* Marketing — toggle entre título e card hero. */
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-card) [data-testid="stSegmentedControl"] {
+    margin: 0 0 6px 0 !important;
+}
+
+/* Card Novos — chips Em call / Follow */
+.op-card.compact:has(.op-novos-chips) {
+    padding: 5px 8px 6px;
+    gap: 0;
+}
+.op-novos-chips {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    width: 100%;
+    margin-top: 2px;
+}
+.op-chip {
+    background: var(--color-bg-soft);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 3px 4px 2px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    min-width: 0;
+}
+.op-chip-label {
+    color: var(--color-text-subtle);
+    font-size: 0.58rem;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    opacity: 0.88;
+    line-height: 1.1;
+}
+.op-chip-value {
+    color: var(--color-text);
+    font-size: 0.86rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.12;
+}
+.op-card.compact .op-badges.op-badges-novos {
+    margin-top: 2px;
+    padding-top: 3px;
+    gap: 0;
+}
+.op-card.compact .op-badges.op-badges-novos .op-badge-value {
+    font-size: 0.88rem;
+}
+.op-card.compact .op-badges.op-badges-novos .op-badge-label {
+    font-size: 0.58rem;
+    opacity: 0.88;
+}
 </style>
 """
 
@@ -463,6 +591,23 @@ def _op_fmt_delta(delta_pct: float | None) -> tuple[str, str]:
     return cls, f"{arrow} {abs(delta_pct):.1f}%".replace(".", ",")
 
 
+def op_spacer(kind: str = "row") -> None:
+    """Respiro vertical entre grupos de cards KPI.
+
+    kind:
+      - ``parent`` — 1rem (card pai → linha de filhos)
+      - ``row``    — 0.9rem (linha → próxima linha na mesma coluna)
+    """
+    aliases = {"sm": "row", "md": "parent", "lg": "parent"}
+    key = aliases.get(kind, kind)
+    if key not in ("parent", "row"):
+        key = "row"
+    st.markdown(
+        f'<div class="op-spacer op-spacer-{key}" aria-hidden="true"></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def one_page_metric_card(
     label: str,
     value: str,
@@ -475,6 +620,7 @@ def one_page_metric_card(
     badges: list[tuple] | None = None,
     extras_inline: bool = False,
     badges_class: str | None = None,
+    footer_chips: list[tuple[str, str]] | None = None,
 ) -> None:
     """Card compacto da One Page. `hero` e `compact` são mutuamente
     exclusivos visualmente — se ambos True, `hero` vence (atalho seguro
@@ -558,6 +704,17 @@ def one_page_metric_card(
             badges_cls += f" {badges_class}"
         badges_html = f'<div class="{badges_cls}">{items}</div>'
 
+    chips_html = ""
+    if footer_chips:
+        chip_items = "".join(
+            f'<div class="op-chip">'
+            f'<span class="op-chip-label">{html.escape(lbl)}</span>'
+            f'<span class="op-chip-value">{html.escape(str(val))}</span>'
+            f'</div>'
+            for lbl, val in footer_chips
+        )
+        chips_html = f'<div class="op-novos-chips">{chip_items}</div>'
+
     val_cls = "op-value accent" if accent else "op-value"
     st.markdown(
         f'<div class="{" ".join(classes)}">'
@@ -565,6 +722,7 @@ def one_page_metric_card(
         f'<div class="{val_cls}">{html.escape(str(value))}</div>'
         f'{hint_html}'
         f'{badges_html}'
+        f'{chips_html}'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -644,7 +802,7 @@ def _aplicacoes_kpis(df_one: pd.DataFrame) -> dict:
     """KPIs de Marketing do bloco superior — regra LEGADA do Looker.
 
     Agrega `get_one_page_legacy_diario` no período. "Aplicações" =
-    submissões únicas/dia em `fdw_reconecta.typeform_aplicacoes`. CPL,
+    submissões brutas/dia em `fdw_reconecta.typeform_aplicacoes` (data SP). CPL,
     Custo/Aplicação e Custo/Aplicação +12 usam o investimento da MESMA
     query (anuncios, sem campanhas REL_02*) — mantém coerência com o
     Looker e evita misturar fontes de mídia.
@@ -662,8 +820,7 @@ def _aplicacoes_kpis(df_one: pd.DataFrame) -> dict:
     apl_naoatua  = _sum(df_one, "aplicacoes_nao_atua")
     investimento = _sum(df_one, "investimento")
     agendamentos = _sum(df_one, "agendamentos")
-    # Aplicações com agendamento — por segmento (vem da query legada,
-    # match por (data, email) em `apl_com_ag`).
+    # Aplicações com agendamento — por segmento (vem da query legada).
     apl_total_ag = _sum(df_one, "aplicacoes_com_agendamento")
     apl_m12_ag   = _sum(df_one, "aplicacoes_mais_12_com_agendamento")
     apl_n12_ag   = _sum(df_one, "aplicacoes_menos_12_com_agendamento")
@@ -1211,6 +1368,9 @@ apply_one_page_theme()
 # =============================================================================
 # Carga
 # =============================================================================
+excluir_testes_aplicacoes = bool(
+    st.session_state.get("onepage_excluir_testes_aplicacoes", False)
+)
 dias_periodo = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias_periodo - 1)
@@ -1230,8 +1390,16 @@ except Exception as e:
 # Aplicações deixam de ser `leads_qualificados` e passam a vir do
 # typeform específico do Looker.
 try:
-    df_one      = get_one_page_legacy_diario(ctx.data_ini, ctx.data_fim)
-    df_one_prev = get_one_page_legacy_diario(prev_ini, prev_fim)
+    df_one = get_one_page_legacy_diario(
+        ctx.data_ini,
+        ctx.data_fim,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    df_one_prev = get_one_page_legacy_diario(
+        prev_ini,
+        prev_fim,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
 except Exception as e:
     st.error(f"Falha ao consultar One Page legado: {e}")
     df_one      = pd.DataFrame()
@@ -1313,7 +1481,7 @@ ag_exib  = int(k_prev.get("agendamentos_exibidos", max(ag_bruto - ag_venc, 0)))
 # Idempotente (re-injeção a cada rerun apenas redefine as regras).
 st.markdown(_OP_CARD_CSS, unsafe_allow_html=True)
 
-col_mkt, col_prev, col_vendas = st.columns([1.0, 1.05, 1.0], gap="medium")
+col_mkt, col_prev, col_vendas = st.columns([1.0, 1.25, 1.05], gap="medium")
 
 # -----------------------------------------------------------------------------
 # Coluna esquerda — Marketing / Aplicações
@@ -1327,6 +1495,16 @@ col_mkt, col_prev, col_vendas = st.columns([1.0, 1.05, 1.0], gap="medium")
 # -----------------------------------------------------------------------------
 with col_mkt:
     section_title("Marketing", "leads × aplicações")
+
+    excluir_testes_aplicacoes = st.checkbox(
+        "Excluir testes",
+        value=False,
+        key="onepage_excluir_testes_aplicacoes",
+        help=(
+            "Remove e-mails de teste das aplicações (Typeform). "
+            "Desmarcado bate com o total bruto de Submissions."
+        ),
+    )
 
     # Toggle do hero — alterna métrica principal sem trocar o layout.
     # `required=True` evita o estado None (clicar no selecionado deselecta
@@ -1367,6 +1545,8 @@ with col_mkt:
                 ("Custo / Apl.",  brl(k_apl["custo_aplicacao"], casas=2)),
             ],
         )
+
+    op_spacer("parent")
 
     # Linha 2 — Aplic. ±12 (cards compostos, cada um com % e custo do
     # próprio segmento)
@@ -1424,6 +1604,8 @@ with col_prev:
              brl(_safe_div(k_apl["investimento"], ag_exib), casas=2)),
         ],
     )
+
+    op_spacer("parent")
 
     # L2 — Consultas (Inbound | SS) com quebra ±12 acoplada como badges.
     #
@@ -1510,6 +1692,8 @@ with col_prev:
             ],
         )
 
+    op_spacer("row")
+
     # L3 — Comparecimentos (Inbound | SS) com % próprio acoplado como badge
     # (substitui o antigo card "% Comparecimento" geral, full-width).
     r = st.columns(2, gap="small")
@@ -1563,14 +1747,12 @@ with col_vendas:
             delta_pct=delta_pct(k_vendas["novos"], k_vendas_prev["novos"]),
             accent=True,
             compact=True,
-            badges=[
-                ("% Conversão", pct(pct_conversao), [
-                    ("Em call", int_br(novos_forma.get("em_call", 0))),
-                    ("Follow",  int_br(novos_forma.get("follow", 0))),
-                ]),
-            ],
-            extras_inline=True,
+            badges=[("% Conversão", pct(pct_conversao))],
             badges_class="op-badges-novos",
+            footer_chips=[
+                ("Em call", int_br(novos_forma.get("em_call", 0))),
+                ("Follow",  int_br(novos_forma.get("follow", 0))),
+            ],
         )
     with r[1]:
         one_page_metric_card(
@@ -1596,6 +1778,8 @@ with col_vendas:
                                 k_vendas_prev["indicacoes"]),
             compact=True,
         )
+
+    op_spacer("row")
 
     # L2 — Montante | Investido (2 cards hero). Montante é o destaque
     # principal (accent). Hint usa `pct_recebimento` (receita / montante)
@@ -1623,6 +1807,8 @@ with col_vendas:
             hero=True,
             wine_accent=True,
         )
+
+    op_spacer("row")
 
     # L3 — CPA | Média móvel | Ticket médio (3 cards)
     ritmo_fmt = (
@@ -1652,6 +1838,8 @@ with col_vendas:
             hint="montante / vendas",
             accent=True,
         )
+
+    op_spacer("row")
 
     # L4 — Receita / Vendido (full-width, compact — métrica secundária no
     # rodapé da área financeira). Meta + atingimento descrevem a receita
