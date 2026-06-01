@@ -38,6 +38,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.prevendas_transforms import prevendas_overview_kpis
+from src.one_page_funnel import aplicacoes_kpis
 from src.repositories import (
     get_executivas,
     get_investimento_diario,
@@ -798,63 +799,8 @@ def _br_format_table(df: pd.DataFrame,
     return out
 
 
-def _aplicacoes_kpis(df_one: pd.DataFrame) -> dict:
-    """KPIs de Marketing do bloco superior — regra LEGADA do Looker.
-
-    Agrega `get_one_page_legacy_diario` no período. "Aplicações" =
-    submissões brutas/dia em `fdw_reconecta.typeform_aplicacoes` (data SP). CPL,
-    Custo/Aplicação e Custo/Aplicação +12 usam o investimento da MESMA
-    query (anuncios, sem campanhas REL_02*) — mantém coerência com o
-    Looker e evita misturar fontes de mídia.
-
-    Para os cards compostos (Aplicações / Apl. -12 / Apl. +12), cada
-    segmento tem seu próprio `% Agendamento` derivado de
-    `aplicacoes_*_com_agendamento` — regra coerente entre total e ±12.
-    O antigo `pct_agendamento` (agendamentos / aplicações) é mantido só
-    por retrocompat, pode ser removido quando nenhum consumidor restar.
-    """
-    leads        = _sum(df_one, "novos_leads")
-    aplicacoes   = _sum(df_one, "novas_aplicacoes")
-    apl_mais12   = _sum(df_one, "aplicacoes_mais_12")
-    apl_menos12  = _sum(df_one, "aplicacoes_menos_12")
-    apl_naoatua  = _sum(df_one, "aplicacoes_nao_atua")
-    investimento = _sum(df_one, "investimento")
-    agendamentos = _sum(df_one, "agendamentos")
-    # Aplicações com agendamento — por segmento (vem da query legada).
-    apl_total_ag = _sum(df_one, "aplicacoes_com_agendamento")
-    apl_m12_ag   = _sum(df_one, "aplicacoes_mais_12_com_agendamento")
-    apl_n12_ag   = _sum(df_one, "aplicacoes_menos_12_com_agendamento")
-
-    return {
-        "leads_totais":         leads,
-        "aplicacoes":           aplicacoes,
-        "aplicacoes_mais_12":   apl_mais12,
-        "aplicacoes_menos_12":  apl_menos12,
-        "aplicacoes_nao_atua":  apl_naoatua,
-        "pct_aplicacoes":       _safe_div(aplicacoes, leads) * 100,
-        "investimento":         investimento,
-        "cpl":                  _safe_div(investimento, leads),
-        "custo_aplicacao":      _safe_div(investimento, aplicacoes),
-        "custo_apl_mais_12":    _safe_div(investimento, apl_mais12),
-        "custo_apl_menos_12":   _safe_div(investimento, apl_menos12),
-        # Agendamentos da própria query legada (zoho_activities por
-        # created_time::date, regra Looker). Permite que % Agendamento
-        # seja recalculado sobre a MESMA base de aplicações — alinhado
-        # com a definição do CEO.
-        "agendamentos_legacy":  agendamentos,
-        "pct_agendamento":      _safe_div(agendamentos, aplicacoes) * 100,
-        # % Agendamento por segmento — base coerente (apl_*_com_agendamento).
-        # São essas que alimentam os cards compostos no painel.
-        "pct_agendamento_apl":          _safe_div(apl_total_ag, aplicacoes) * 100,
-        "pct_agendamento_apl_mais_12":  _safe_div(apl_m12_ag,   apl_mais12) * 100,
-        "pct_agendamento_apl_menos_12": _safe_div(apl_n12_ag,   apl_menos12) * 100,
-    }
-
-
 # Rótulos canônicos da classificação por FONTE (regra `origem_final` do
 # Looker legado). INBOUND = `fonte = 'Inbound'`; SS = `fonte = 'Fábrica'`.
-# Outbound existe na SQL (`fonte = 'Outbound'`) mas não vira card próprio
-# nesta versão — fica disponível pra futuras seções/tabelas.
 _FONTE_INBOUND = "Inbound"
 _FONTE_SS = "Fábrica"
 
@@ -1368,8 +1314,16 @@ apply_one_page_theme()
 # =============================================================================
 # Carga
 # =============================================================================
-excluir_testes_aplicacoes = bool(
-    st.session_state.get("onepage_excluir_testes_aplicacoes", False)
+# Checkbox antes da query — mesma key do bloco Marketing (evita carregar com
+# flag defasada). Padrão True = e-mails únicos válidos, sem teste (Looker).
+excluir_testes_aplicacoes = st.checkbox(
+    "Excluir testes",
+    value=True,
+    key="onepage_excluir_testes_aplicacoes",
+    help=(
+        "Remove e-mails de teste/reconecta. Desmarcado inclui esses e-mails; "
+        "o card Aplicações sempre conta e-mails únicos com dados_completos."
+    ),
 )
 dias_periodo = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
@@ -1427,8 +1381,8 @@ except Exception:
 # =============================================================================
 # KPIs base
 # =============================================================================
-k_apl      = _aplicacoes_kpis(df_one)
-k_apl_prev = _aplicacoes_kpis(df_one_prev)
+k_apl      = aplicacoes_kpis(df_one)
+k_apl_prev = aplicacoes_kpis(df_one_prev)
 
 # Reaproveita o KPI oficial da Pré-vendas Visão Geral
 # (`src/prevendas_transforms.py`): garante que "Agendamentos" exiba
@@ -1495,16 +1449,6 @@ col_mkt, col_prev, col_vendas = st.columns([1.0, 1.25, 1.05], gap="medium")
 # -----------------------------------------------------------------------------
 with col_mkt:
     section_title("Marketing", "leads × aplicações")
-
-    excluir_testes_aplicacoes = st.checkbox(
-        "Excluir testes",
-        value=False,
-        key="onepage_excluir_testes_aplicacoes",
-        help=(
-            "Remove e-mails de teste das aplicações (Typeform). "
-            "Desmarcado bate com o total bruto de Submissions."
-        ),
-    )
 
     # Toggle do hero — alterna métrica principal sem trocar o layout.
     # `required=True` evita o estado None (clicar no selecionado deselecta

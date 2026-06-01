@@ -225,7 +225,8 @@ def get_one_page_legacy_diario(
 
     Diferente de `get_mkt_visao_geral_diario` em duas dimensões:
       1. "Aplicações" vem de `fdw_reconecta.typeform_aplicacoes`
-         (submissões brutas/dia, data SP), NÃO de `ext_reconecta.leads.classificado`.
+         (e-mail único no período, data SP, dados_completos), NÃO de
+         `ext_reconecta.leads.classificado`.
       2. "Investimento" vem de `fdw_reconecta.anuncios` excluindo
          campanhas `REL_02*`, NÃO de `bi.vw_investimento_diario`.
          (Diferença típica de R$ 10–20 vs o total geral — corresponde

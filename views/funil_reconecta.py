@@ -1,38 +1,46 @@
 """Funil da Reconecta — Simulador de cenários do funil comercial.
 
-Adaptação Streamlit do componente React em
-`calculadora_funil_reconecta (1).jsx` (raiz do projeto). Versão visual
-inicial — todos os inputs são editáveis e os cálculos rodam em Python
-puro (sem ir ao banco). Os valores base vêm da planilha original
-referenciada no JSX e podem ser ajustados manualmente pelo usuário.
+O cenário **Atual** usa dados reais do período (mesmas regras da One Page).
+Simulador e Meta continuam paramétricos para simulação e metas.
 
 Estrutura:
-  1. Header (título + ações: resetar, exportar CSV)
-  2. Toggle de período (Mês / Semana / Dia)
-  3. Alerta de gargalo crítico (etapa com maior impacto se for nivelada à meta)
-  4. 3 colunas de cenário: Atual · Simulador · Meta (cards lado-a-lado,
-     cada um com inputs editáveis do funil)
-  5. Cards de "Gap até a meta" (4 chips com a diferença em volume)
-  6. Comparativo Simulador vs Atual (faixa destaque)
+  1. Header (título + filtro de período global + ações)
+  2. Toggle de visualização (Mês / Semana / Dia)
+  3. Alerta de gargalo crítico (Atual vs Meta)
+  4. Vitrine: grade sincronizada (Atual · Simulador · Meta)
+  5. Cards de "Gap até a meta"
+  6. Comparativo Simulador vs Atual
+  7. Exportação (CSV / Excel / PDF)
+  8. Editor de metas (rascunho + aplicar oficiais no banco)
 
-Lógica do funil:
-  investimento → leads (= invest / custo_lead)
-              → aplicações       (= leads * pctLA)
-              → agendamentos     (= aplicações * pctAAg)
-              → comparecimento   (= agendamentos * pctAgC)
-              → vendas           (= comparecimento * pctCV)
-              → faturamento      (= vendas * ticket)
-
-Períodos: semana = mês/4; dia = mês/28 (mantém a premissa do JSX original).
+Períodos de visualização: semana = total ÷ 4; dia = total ÷ 28.
 """
 from __future__ import annotations
 
 import html
 from dataclasses import asdict, dataclass
+from datetime import date
 
-import pandas as pd
 import streamlit as st
 
+from src.funil_export import (
+    FunilExportBundle,
+    export_funil_csv,
+    export_funil_excel,
+    export_funil_pdf,
+)
+from src.funil_meta_store import (
+    PERIODO_TIPO_PADRAO,
+    load_funil_meta,
+    metas_dict_from_scenario,
+    save_funil_meta,
+)
+from src.one_page_funnel import (
+    FunnelSnapshot,
+    load_one_page_funnel,
+    snapshot_calc_display,
+    snapshot_to_scenario_dict,
+)
 from src.ui.components import section_title
 from src.ui.page import start_page
 from src.ui.theme import PALETTE, brl as brl_global, int_br
@@ -53,7 +61,7 @@ class Scenario:
     ticket: float
 
 
-# Valores base (espelham VALORES_BASE no JSX original). Editáveis em tela.
+# Fallback quando a carga do banco falha.
 _BASE_ATUAL = Scenario(
     investimento=115140.74,
     custo_lead=113.55,
@@ -63,8 +71,6 @@ _BASE_ATUAL = Scenario(
     pct_c_v=0.2094,
     ticket=21400.0,
 )
-# Simulador parte idêntico ao Atual (o usuário ajusta pra simular hipóteses).
-_BASE_SIMULADOR = Scenario(**asdict(_BASE_ATUAL))
 _BASE_META = Scenario(
     investimento=115140.74,
     custo_lead=70.0,
@@ -171,14 +177,32 @@ def brl(v: float, casas: int = 2) -> str:
     return brl_global(v, casas=casas)
 
 
-def num(v: float, casas: int = 1) -> str:
-    """Número BR com `casas` decimais — usa ponto pra milhar, vírgula pra decimal."""
-    s = f"{v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return s
-
-
 def pct_fmt(v: float, casas: int = 2) -> str:
+    """Taxa em fração (0–1+) → exibição com % e duas casas."""
     return f"{v * 100:.{casas}f}%".replace(".", ",")
+
+
+def format_display_value(
+    value: float,
+    *,
+    is_money: bool = False,
+    is_percent: bool = False,
+) -> str:
+    """Formata valor para exibição na vitrine (sem alterar o valor interno)."""
+    value = float(value or 0)
+    if is_money:
+        return brl(value)
+    if is_percent:
+        return pct_fmt(value)
+    return int_br(value)
+
+
+def _format_vitrine_value(rid: str, value: float) -> str:
+    if rid in ("inv", "cl", "ticket"):
+        return format_display_value(value, is_money=True)
+    if rid in ("pct_la", "pct_a_ag", "pct_ag_c", "pct_c_v"):
+        return format_display_value(value, is_percent=True)
+    return format_display_value(value)
 
 
 # =============================================================================
@@ -242,25 +266,130 @@ _FUNIL_CSS = """
 .fr-card-row.highlight {
     background: rgba(201, 168, 76, 0.05);
 }
+/* Vitrine — linhas com altura fixa (Atual · Simulador · Meta alinhados) */
+.fr-vitrine-body {
+    margin-bottom: 0;
+}
+.fr-vitrine-body .fr-card-row,
+.fr-vitrine-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 12px 0 6px;
+    height: 32px;
+    min-height: 32px;
+    max-height: 32px;
+    box-sizing: border-box;
+    border-bottom: none;
+    margin: 0;
+    overflow: hidden;
+}
+.fr-vitrine-row .lbl-chip {
+    display: inline-flex;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 64%;
+    padding: 0 8px 0 4px;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.035) 0%,
+        rgba(255, 255, 255, 0.01) 55%,
+        transparent 100%
+    );
+    box-shadow: none;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: rgba(200, 200, 205, 0.88);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
+    letter-spacing: 0.015em;
+}
+.fr-vitrine-cell.col-sim .lbl-chip,
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.col-sim) .lbl-chip {
+    color: rgba(215, 208, 195, 0.9);
+    background: linear-gradient(
+        90deg,
+        rgba(201, 168, 76, 0.05) 0%,
+        transparent 70%
+    );
+}
+.fr-vitrine-row.highlight .lbl-chip {
+    color: rgba(225, 215, 195, 0.92);
+}
+.fr-vitrine-body .fr-card-row .val,
+.fr-vitrine-row .val {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding-right: 2px;
+}
+.fr-vitrine-row .val.static {
+    color: rgba(255, 255, 255, 0.97);
+    font-weight: 700;
+    font-size: 0.86rem;
+}
+.fr-vitrine-row .val.computed {
+    color: rgba(218, 195, 130, 0.98);
+    font-weight: 700;
+    font-size: 0.86rem;
+    text-shadow: 0 0 10px rgba(201, 168, 76, 0.1);
+}
+.fr-vitrine-row.highlight {
+    background: linear-gradient(
+        90deg,
+        rgba(201, 168, 76, 0.05) 0%,
+        rgba(201, 168, 76, 0.015) 50%,
+        transparent 100%
+    );
+}
+.fr-card.fr-fatu-card {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    margin: 0;
+    overflow: visible;
+}
 .fr-fatu {
-    background: var(--color-gold);
+    background: linear-gradient(
+        155deg,
+        rgba(198, 172, 112, 0.68) 0%,
+        rgba(186, 158, 92, 0.62) 50%,
+        rgba(168, 140, 78, 0.66) 100%
+    );
     color: var(--color-wine);
-    padding: 10px 14px;
+    padding: 12px 14px;
+    min-height: 4.1rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    box-sizing: border-box;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.2),
+        0 2px 8px rgba(0, 0, 0, 0.12);
 }
 .fr-fatu .lbl {
-    font-size: 0.65rem;
+    font-size: 0.6rem;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 1.4px;
-    color: var(--color-wine);
+    letter-spacing: 1.5px;
+    color: rgba(58, 24, 32, 0.58);
 }
 .fr-fatu .val {
     font-family: ui-monospace, "IBM Plex Mono", monospace;
-    font-size: 1.4rem;
+    font-size: 1.36rem;
     font-weight: 700;
-    margin-top: 2px;
-    color: var(--color-wine);
+    margin-top: 3px;
+    color: rgba(48, 20, 30, 0.9);
     font-variant-numeric: tabular-nums;
+    letter-spacing: -0.015em;
 }
 
 /* Alerta de gargalo */
@@ -443,6 +572,268 @@ _FUNIL_CSS = """
     color: var(--color-muted);
     margin-top: 14px;
 }
+
+.fr-scenario-wrap.consulta .fr-card-head .fr-head-badge {
+    background: rgba(255, 255, 255, 0.12);
+}
+.fr-scenario-wrap.sim .fr-card {
+    border-color: rgba(201, 168, 76, 0.28);
+}
+.fr-scenario-wrap.sim .fr-card-head {
+    box-shadow: inset 0 -2px 0 rgba(201, 168, 76, 0.35);
+}
+.fr-scenario-wrap.sim .fr-card-head .fr-head-badge {
+    background: rgba(201, 168, 76, 0.35);
+    color: #fff;
+}
+/* Vitrine — card completo por coluna (cabeçalho + linhas + faturamento) */
+.fr-vitrine-sync { margin-bottom: 10px; }
+.fr-vitrine-sync .fr-vitrine-col-shell .fr-card {
+    margin-bottom: 0;
+    border-radius: 10px 10px 0 0;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-bottom: none;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
+    background: rgba(34, 34, 38, 0.92);
+}
+.fr-vitrine-sync .col-sim-shell .fr-card {
+    border-color: rgba(201, 168, 76, 0.18);
+    background: rgba(38, 32, 30, 0.94);
+}
+.fr-vitrine-sync .col-meta-shell .fr-card {
+    border-color: rgba(4, 120, 87, 0.14);
+    background: rgba(34, 36, 36, 0.92);
+}
+.fr-vitrine-sync .fr-vitrine-col-shell .fr-card-head {
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+.fr-vitrine-fatu-shell {
+    padding: 7px 8px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 0 0 10px 10px;
+    background: rgba(30, 30, 33, 0.88);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+}
+.fr-vitrine-fatu-shell.col-sim {
+    border-color: rgba(201, 168, 76, 0.16);
+    background: rgba(36, 30, 28, 0.9);
+}
+.fr-vitrine-fatu-shell.col-meta {
+    border-color: rgba(4, 120, 87, 0.12);
+    background: rgba(30, 33, 32, 0.88);
+}
+/* Células da grade */
+.fr-vitrine-cell {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.028);
+    box-sizing: border-box;
+}
+.fr-vitrine-cell.col-atual {
+    background: rgba(34, 34, 38, 0.55);
+    border-left: 1px solid rgba(255, 255, 255, 0.09);
+    border-right: none;
+}
+.fr-vitrine-cell.col-sim {
+    background: rgba(38, 32, 30, 0.58);
+    border-left: 1px solid rgba(201, 168, 76, 0.14);
+    border-right: 1px solid rgba(201, 168, 76, 0.14);
+}
+.fr-vitrine-cell.col-meta {
+    background: rgba(34, 36, 36, 0.55);
+    border-right: 1px solid rgba(255, 255, 255, 0.09);
+    border-left: none;
+}
+.fr-vitrine-cell.fr-vitrine-zebra-odd {
+    box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.008);
+}
+.fr-vitrine-cell.fr-vitrine-group-start {
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 2px 5px -5px rgba(0, 0, 0, 0.35);
+}
+.fr-vitrine-cell.fr-vitrine-group-end {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+    box-shadow: inset 0 -2px 6px -5px rgba(0, 0, 0, 0.28);
+}
+.fr-vitrine-cell.is-first {
+    border-top: none;
+}
+.fr-vitrine-cell.col-atual.is-last,
+.fr-vitrine-cell.col-meta.is-last,
+.fr-vitrine-cell.col-sim.is-last {
+    border-bottom: none;
+}
+.fr-vitrine-editable-row {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row) {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    max-height: 32px !important;
+    margin: 0 !important;
+    padding: 0 12px 0 6px !important;
+    gap: 8px !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.028) !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    background: rgba(38, 32, 30, 0.58) !important;
+    border-left: 1px solid rgba(201, 168, 76, 0.14) !important;
+    border-right: 1px solid rgba(201, 168, 76, 0.14) !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row.is-first) {
+    border-top: none !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-group-start) {
+    border-top: 1px solid rgba(255, 255, 255, 0.06) !important;
+    box-shadow: inset 0 2px 5px -5px rgba(0, 0, 0, 0.35) !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-group-end) {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055) !important;
+    box-shadow: inset 0 -2px 6px -5px rgba(0, 0, 0, 0.28) !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-zebra-odd) {
+    box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.008) !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    > div[data-testid="column"] {
+    display: flex !important;
+    align-items: center !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    > div[data-testid="column"]:first-child {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    > div[data-testid="column"]:last-child {
+    flex: 0 0 42% !important;
+    max-width: 42% !important;
+    justify-content: flex-end !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row) .lbl-chip {
+    max-width: 100% !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="element-container"] {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInput"],
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInputContainer"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    width: 100% !important;
+    min-height: 0 !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInput"] > div {
+    gap: 0 !important;
+    min-height: 0 !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInput"] input {
+    height: 22px !important;
+    min-height: 22px !important;
+    max-height: 22px !important;
+    padding: 0 4px !important;
+    font-size: 0.86rem !important;
+    line-height: 1.2 !important;
+    font-family: ui-monospace, "IBM Plex Mono", monospace !important;
+    font-weight: 700 !important;
+    font-variant-numeric: tabular-nums !important;
+    text-align: right !important;
+    color: rgba(255, 255, 255, 0.94) !important;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.14) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInput"] input:hover {
+    border-bottom-color: rgba(201, 168, 76, 0.35) !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInput"] input:focus {
+    border-bottom-color: rgba(201, 168, 76, 0.5) !important;
+    color: #ffffff !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInputStepDown"],
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInputStepUp"] {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 14px !important;
+    min-width: 14px !important;
+    height: 14px !important;
+    min-height: 14px !important;
+    margin: 0 0 0 1px !important;
+    padding: 0 !important;
+    opacity: 0 !important;
+    border: none !important;
+    border-radius: 2px !important;
+    background: transparent !important;
+    color: rgba(255, 255, 255, 0.5) !important;
+    transition: opacity 0.15s ease;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row):hover
+    [data-testid="stNumberInputStepDown"],
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row):hover
+    [data-testid="stNumberInputStepUp"] {
+    opacity: 0.28 !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInputStepDown"]:hover,
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row)
+    [data-testid="stNumberInputStepUp"]:hover {
+    opacity: 0.5 !important;
+}
+.fr-head-badge {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.92);
+}
+.fr-editor-wrap {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 4px 16px 16px;
+    margin-top: 8px;
+    margin-bottom: 14px;
+}
+.fr-editor-wrap.meta {
+    border-color: rgba(4, 120, 87, 0.35);
+}
+.fr-editor-hint {
+    font-size: 0.78rem;
+    color: var(--color-text-subtle);
+    margin: 0 0 12px 0;
+    line-height: 1.45;
+}
 </style>
 """
 
@@ -459,139 +850,577 @@ _CORES_CENARIO = {
     "Meta":      "#047857",
 }
 
+_WIDGET_SUFFIXES = ("_inv", "_cl", "_tk", "_pla", "_paag", "_pagc", "_pcv")
 
-def _scenario_inputs(titulo: str, key_prefix: str, base: Scenario,
-                     periodo: str) -> Scenario:
-    """Renderiza o card de um cenário com inputs editáveis em
-    `st.session_state` e devolve o objeto Scenario atualizado."""
-    div = PERIODOS[periodo]["divisor"]
-    accent = _CORES_CENARIO.get(titulo, PALETTE["wine"])
 
-    # Inicializa session_state com base default na primeira execução.
-    ss_key = f"funil_{key_prefix}"
+def _ensure_scenario(ss_key: str, base: Scenario) -> dict:
     if ss_key not in st.session_state:
         st.session_state[ss_key] = asdict(base)
-    state = st.session_state[ss_key]
+    return st.session_state[ss_key]
 
-    # Cabeçalho do card.
+
+def _investimento_label(periodo: str) -> str:
+    if periodo == "mes":
+        return "Investimento (mês)"
+    if periodo == "semana":
+        return "Investimento (semana)"
+    return "Investimento (dia)"
+
+
+def _clear_funil_widget_keys(*, sim_only: bool = False) -> None:
+    for k in list(st.session_state.keys()):
+        if not isinstance(k, str):
+            continue
+        if k.startswith("meta_ed_"):
+            if not sim_only:
+                del st.session_state[k]
+            continue
+        if k.endswith(_WIDGET_SUFFIXES):
+            del st.session_state[k]
+
+
+def _clear_meta_editor_widget_keys() -> None:
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("meta_ed_"):
+            del st.session_state[k]
+
+
+def _funil_period_storage_key(data_ini: date, data_fim: date) -> str:
+    return f"{data_ini.isoformat()}_{data_fim.isoformat()}"
+
+
+def _sync_official_meta_for_period(
+    data_ini: date,
+    data_fim: date,
+    *,
+    force: bool = False,
+) -> None:
+    """Carrega metas oficiais do banco quando o filtro global muda."""
+    key = _funil_period_storage_key(data_ini, data_fim)
+    if not force and st.session_state.get("funil_meta_period_key") == key:
+        return
+    st.session_state["funil_meta_period_key"] = key
+    try:
+        loaded = load_funil_meta(PERIODO_TIPO_PADRAO, data_ini, data_fim)
+    except Exception:
+        loaded = None
+    official = loaded if loaded is not None else asdict(_BASE_META)
+    st.session_state["funil_meta_oficial"] = official
+    st.session_state["funil_meta_draft"] = dict(official)
+    _clear_meta_editor_widget_keys()
+
+
+def _get_meta_oficial() -> Scenario:
+    return Scenario(
+        **st.session_state.get("funil_meta_oficial", asdict(_BASE_META)),
+    )
+
+
+def _build_export_bundle(
+    *,
+    periodo: str,
+    data_ini: date,
+    data_fim: date,
+    excluir_testes: bool,
+    atual: Scenario,
+    simulador: Scenario,
+    meta: Scenario,
+    calc_atual: dict,
+    calc_sim: dict,
+    calc_meta: dict,
+    impactos: list[dict],
+) -> FunilExportBundle:
+    return FunilExportBundle(
+        periodo_viz=periodo,
+        periodo_viz_label=PERIODOS[periodo]["label"],
+        data_ini=data_ini,
+        data_fim=data_fim,
+        excluir_testes=excluir_testes,
+        atual=atual,
+        simulador=simulador,
+        meta=meta,
+        calc_atual=calc_atual,
+        calc_sim=calc_sim,
+        calc_meta=calc_meta,
+        impactos=impactos,
+        periodos_cfg=PERIODOS,
+    )
+
+
+def _export_file_stem(data_ini: date, data_fim: date, periodo: str) -> str:
+    p = PERIODOS[periodo]["label"].lower()
+    return (
+        f"funil_reconecta_{data_ini:%Y%m%d}_{data_fim:%Y%m%d}_{p}"
+    )
+
+
+def _render_export_actions(bundle: FunilExportBundle) -> None:
+    """Botões de download — usado no popover do topo da página."""
+    stem = _export_file_stem(bundle.data_ini, bundle.data_fim, bundle.periodo_viz)
+    st.caption(
+        "Período, testes, comparativo Atual/Simulador/Meta, gargalo e prioridades."
+    )
+    st.download_button(
+        "CSV",
+        data=export_funil_csv(bundle),
+        file_name=f"{stem}.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="funil_export_csv",
+    )
+    st.download_button(
+        "Excel (.xlsx)",
+        data=export_funil_excel(bundle),
+        file_name=f"{stem}.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        use_container_width=True,
+        key="funil_export_xlsx",
+    )
+    st.download_button(
+        "PDF",
+        data=export_funil_pdf(bundle),
+        file_name=f"{stem}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+        key="funil_export_pdf",
+    )
+
+
+def _value_row_html(label: str, valor: str, *, computed: bool = False,
+                    highlight: bool = False) -> str:
+    """Uma linha label | valor dentro do card da vitrine."""
+    val_cls = "computed" if computed else "static"
+    row_cls = "fr-card-row fr-vitrine-row"
+    if highlight:
+        row_cls += " highlight"
+    return (
+        f'<div class="{row_cls}">'
+        f'<span class="lbl bold lbl-chip">{html.escape(label)}</span>'
+        f'<span class="val {val_cls}">{html.escape(valor)}</span>'
+        f'</div>'
+    )
+
+
+def _vitrine_cell_class(
+    col: str,
+    *,
+    is_first: bool,
+    is_last: bool,
+    group_after: bool = False,
+    group_start: bool = False,
+    zebra: str = "",
+) -> str:
+    parts = ["fr-vitrine-cell", f"col-{col}"]
+    if is_first:
+        parts.append("is-first")
+    if is_last:
+        parts.append("is-last")
+    if group_start:
+        parts.append("fr-vitrine-group-start")
+    if group_after:
+        parts.append("fr-vitrine-group-end")
+    if zebra:
+        parts.append(zebra)
+    return " ".join(parts)
+
+
+def _render_scenario_row_readonly(
+    label: str,
+    value: str,
+    *,
+    computed: bool = False,
+    highlight: bool = False,
+    cell_class: str = "",
+) -> None:
+    """Linha somente leitura — label à esquerda, valor à direita."""
     st.markdown(
-        f'<div class="fr-card">'
-        f'  <div class="fr-card-head" style="background:{accent};">'
-        f'    <h3>{html.escape(titulo)}</h3>'
-        f'    <div class="fr-period">{html.escape(PERIODOS[periodo]["label"])}</div>'
-        f'  </div>'
+        f'<div class="{html.escape(cell_class)}">'
+        f'{_value_row_html(label, value, computed=computed, highlight=highlight)}'
         f'</div>',
         unsafe_allow_html=True,
     )
 
-    # Investimento — ajustado ao período.
-    label_inv = (
-        "Investimento (mês)" if periodo == "mes"
-        else "Investimento (semana)" if periodo == "semana"
-        else "Investimento (dia)"
-    )
-    inv_periodo = st.number_input(
-        label_inv,
-        value=float(state["investimento"]) / div,
-        min_value=0.0, step=100.0, format="%.2f",
-        key=f"{key_prefix}_inv",
-    )
-    state["investimento"] = inv_periodo * div
 
-    state["custo_lead"] = st.number_input(
-        "Custo por Lead (R$)",
-        value=float(state["custo_lead"]),
-        min_value=0.0, step=1.0, format="%.2f",
-        key=f"{key_prefix}_cl",
+def _editable_pct_max(value_pct: float) -> float:
+    """Limite superior para % editáveis — pode passar de 100% (fontes distintas)."""
+    return max(300.0, float(value_pct or 0))
+
+
+def _render_scenario_row_editable(
+    label: str,
+    key: str,
+    value: float,
+    *,
+    cell_class: str = "",
+    min_value: float = 0.0,
+    max_value: float | None = None,
+    step: float = 1.0,
+    is_percent: bool = False,
+) -> float:
+    """Linha editável — mesma altura/tipografia; input compacto à direita."""
+    col_l, col_r = st.columns(
+        [1.55, 1], gap="small", vertical_alignment="center",
     )
+    with col_l:
+        st.markdown(
+            f'<span class="fr-vitrine-editable-row {html.escape(cell_class)}" '
+            f'aria-hidden="true"></span>'
+            f'<span class="lbl bold lbl-chip">{html.escape(label)}</span>',
+            unsafe_allow_html=True,
+        )
+    with col_r:
+        valor_inicial = float(value or 0)
+        kwargs: dict = {
+            "label": label,
+            "value": valor_inicial,
+            "min_value": min_value,
+            "step": step,
+            "format": "%.2f",
+            "key": key,
+            "label_visibility": "collapsed",
+        }
+        if is_percent:
+            kwargs["max_value"] = _editable_pct_max(valor_inicial)
+        elif max_value is not None:
+            kwargs["max_value"] = max(max_value, valor_inicial)
+        return float(st.number_input(**kwargs))
 
-    # Recalcula com valores correntes (necessário pra exibir derivados).
-    s = Scenario(**state)
-    calc = calcular_funil(s, periodo)
 
-    # Linhas computadas + inputs de % alternados.
+def _vitrine_row_specs(periodo: str) -> list[dict]:
+    """Ordem fixa dos indicadores — mesma sequência nas três colunas."""
+    return [
+        {"id": "inv", "label": _investimento_label(periodo), "sim_editable": True,
+         "input": "inv_period"},
+        {"id": "cl", "label": "Custo por Lead (R$)", "sim_editable": True,
+         "input": "money"},
+        {"id": "leads", "label": "Leads", "computed": True, "group_after": True},
+        {"id": "pct_la", "label": "% Lead → Aplicação", "sim_editable": True,
+         "input": "pct"},
+        {"id": "aplicacoes", "label": "Aplicações", "computed": True,
+         "group_after": True},
+        {"id": "pct_a_ag", "label": "% Aplicação → Agendamento", "sim_editable": True,
+         "input": "pct"},
+        {"id": "agendamentos", "label": "Agendamentos", "computed": True,
+         "group_after": True},
+        {"id": "pct_ag_c", "label": "% Agendamento → Comparecimento",
+         "sim_editable": True, "input": "pct"},
+        {"id": "comparecimento", "label": "Comparecimento", "computed": True},
+        {"id": "pct_c_v", "label": "% Comparecimento → Venda", "sim_editable": True,
+         "input": "pct"},
+        {"id": "vendas", "label": "Vendas", "computed": True, "highlight": True,
+         "group_after": True},
+        {"id": "ticket", "label": "Ticket Médio (R$)", "sim_editable": True,
+         "input": "money", "group_after": True},
+    ]
+
+
+def _vitrine_atual_value(
+    spec: dict,
+    snapshot: FunnelSnapshot,
+    calc_display: dict,
+) -> tuple[str, bool, bool]:
+    """Valores reais do Atual — volumes do snapshot, taxas derivadas."""
+    rid = spec["id"]
+    computed = bool(spec.get("computed"))
+    highlight = bool(spec.get("highlight"))
+    if rid == "inv":
+        return _format_vitrine_value(rid, calc_display["investimento"]), computed, highlight
+    if rid == "cl":
+        return _format_vitrine_value(rid, snapshot.custo_lead), computed, highlight
+    if rid == "leads":
+        return _format_vitrine_value(rid, calc_display["leads"]), True, highlight
+    if rid == "pct_la":
+        return _format_vitrine_value(rid, snapshot.pct_la), computed, highlight
+    if rid == "aplicacoes":
+        return _format_vitrine_value(rid, calc_display["aplicacoes"]), True, highlight
+    if rid == "pct_a_ag":
+        return _format_vitrine_value(rid, snapshot.pct_a_ag), computed, highlight
+    if rid == "agendamentos":
+        return _format_vitrine_value(rid, calc_display["agendamentos"]), True, highlight
+    if rid == "pct_ag_c":
+        return _format_vitrine_value(rid, snapshot.pct_ag_c), computed, highlight
+    if rid == "comparecimento":
+        return _format_vitrine_value(rid, calc_display["comparecimento"]), True, highlight
+    if rid == "pct_c_v":
+        return _format_vitrine_value(rid, snapshot.pct_c_v), computed, highlight
+    if rid == "vendas":
+        return _format_vitrine_value(rid, calc_display["vendas"]), True, highlight
+    if rid == "ticket":
+        return _format_vitrine_value(rid, snapshot.ticket), computed, highlight
+    return "", computed, highlight
+
+
+def _calc_atual_display(
+    snapshot: FunnelSnapshot | None,
+    atual_s: Scenario,
+    periodo: str,
+) -> dict:
+    if snapshot is not None:
+        return snapshot_calc_display(snapshot, periodo, PERIODOS)
+    return calcular_funil(atual_s, periodo)
+
+
+def _vitrine_readonly_value(
+    spec: dict,
+    s: Scenario,
+    calc: dict,
+) -> tuple[str, bool, bool]:
+    """Retorna (texto, computed, highlight) para uma célula somente leitura."""
+    rid = spec["id"]
+    computed = bool(spec.get("computed"))
+    highlight = bool(spec.get("highlight"))
+    if rid == "inv":
+        return _format_vitrine_value(rid, calc["investimento"]), computed, highlight
+    if rid == "cl":
+        return _format_vitrine_value(rid, s.custo_lead), computed, highlight
+    if rid == "leads":
+        return _format_vitrine_value(rid, calc["leads"]), True, highlight
+    if rid == "pct_la":
+        return _format_vitrine_value(rid, s.pct_la), computed, highlight
+    if rid == "aplicacoes":
+        return _format_vitrine_value(rid, calc["aplicacoes"]), True, highlight
+    if rid == "pct_a_ag":
+        return _format_vitrine_value(rid, s.pct_a_ag), computed, highlight
+    if rid == "agendamentos":
+        return _format_vitrine_value(rid, calc["agendamentos"]), True, highlight
+    if rid == "pct_ag_c":
+        return _format_vitrine_value(rid, s.pct_ag_c), computed, highlight
+    if rid == "comparecimento":
+        return _format_vitrine_value(rid, calc["comparecimento"]), True, highlight
+    if rid == "pct_c_v":
+        return _format_vitrine_value(rid, s.pct_c_v), computed, highlight
+    if rid == "vendas":
+        return _format_vitrine_value(rid, calc["vendas"]), True, highlight
+    if rid == "ticket":
+        return _format_vitrine_value(rid, s.ticket), computed, highlight
+    return "", computed, highlight
+
+
+def _apply_sim_editable(
+    spec: dict,
+    state: dict,
+    raw: float,
+    *,
+    div: int,
+) -> None:
+    """Persiste valor editado no Simulador conforme o tipo do campo."""
+    rid = spec["id"]
+    if rid == "inv":
+        state["investimento"] = raw * div
+    elif rid == "cl":
+        state["custo_lead"] = raw
+    elif rid == "pct_la":
+        state["pct_la"] = raw / 100
+    elif rid == "pct_a_ag":
+        state["pct_a_ag"] = raw / 100
+    elif rid == "pct_ag_c":
+        state["pct_ag_c"] = raw / 100
+    elif rid == "pct_c_v":
+        state["pct_c_v"] = raw / 100
+    elif rid == "ticket":
+        state["ticket"] = raw
+
+
+def _sim_editable_value(spec: dict, state: dict, *, div: int) -> float:
+    rid = spec["id"]
+    if rid == "inv":
+        return float(state["investimento"]) / div
+    if rid == "cl":
+        return float(state["custo_lead"])
+    if rid == "ticket":
+        return float(state["ticket"])
+    if rid == "pct_la":
+        return float(state["pct_la"]) * 100
+    if rid == "pct_a_ag":
+        return float(state["pct_a_ag"]) * 100
+    if rid == "pct_ag_c":
+        return float(state["pct_ag_c"]) * 100
+    if rid == "pct_c_v":
+        return float(state["pct_c_v"]) * 100
+    return 0.0
+
+
+def _sim_widget_key(spec: dict, key_prefix: str) -> str:
+    keys = {
+        "inv": f"{key_prefix}_inv",
+        "cl": f"{key_prefix}_cl",
+        "pct_la": f"{key_prefix}_pla",
+        "pct_a_ag": f"{key_prefix}_paag",
+        "pct_ag_c": f"{key_prefix}_pagc",
+        "pct_c_v": f"{key_prefix}_pcv",
+        "ticket": f"{key_prefix}_tk",
+    }
+    return keys[spec["id"]]
+
+
+def _render_vitrine_comparison(
+    periodo: str,
+    *,
+    atual_s: Scenario,
+    snapshot: FunnelSnapshot | None,
+) -> tuple[Scenario, Scenario, Scenario]:
+    """Comparativo em grade: uma linha horizontal por indicador (Atual | Sim | Meta)."""
+    st.markdown('<div class="fr-vitrine-sync">', unsafe_allow_html=True)
+
+    key_prefix = "simulador"
+    div = PERIODOS[periodo]["divisor"]
+    rows = _vitrine_row_specs(periodo)
+    n_rows = len(rows)
+    calc_atual_display = _calc_atual_display(snapshot, atual_s, periodo)
+
+    h_atual, h_sim, h_meta = st.columns(3, gap="medium")
+    with h_atual:
+        _render_scenario_header(
+            "Atual", periodo, _CORES_CENARIO["Atual"],
+            badge="Dados reais · consulta",
+            wrap_class="consulta",
+            col_shell="atual",
+        )
+    with h_sim:
+        _render_scenario_header(
+            "Simulador", periodo, _CORES_CENARIO["Simulador"],
+            badge="Cenário de teste · editável",
+            wrap_class="sim",
+            col_shell="sim",
+        )
+    with h_meta:
+        _render_scenario_header(
+            "Meta", periodo, _CORES_CENARIO["Meta"],
+            badge="Objetivo · consulta",
+            wrap_class="consulta",
+            col_shell="meta",
+        )
+
+    sim_state = _ensure_scenario("funil_simulador", atual_s)
+    meta_s = _get_meta_oficial()
+
+    for idx, spec in enumerate(rows):
+        sim_s = Scenario(**sim_state)
+        calc_s = calcular_funil(sim_s, periodo)
+        calc_m = calcular_funil(meta_s, periodo)
+
+        label = spec["label"]
+        is_first = idx == 0
+        is_last = idx == n_rows - 1
+        group_after = bool(spec.get("group_after"))
+        group_start = idx > 0 and bool(rows[idx - 1].get("group_after"))
+        zebra = "fr-vitrine-zebra-odd" if idx % 2 else "fr-vitrine-zebra-even"
+
+        c_atual, c_sim, c_meta = st.columns(3, gap="medium")
+        if snapshot is not None:
+            val_a, comp_a, hi_a = _vitrine_atual_value(
+                spec, snapshot, calc_atual_display,
+            )
+        else:
+            val_a, comp_a, hi_a = _vitrine_readonly_value(
+                spec, atual_s, calc_atual_display,
+            )
+        val_m, comp_m, hi_m = _vitrine_readonly_value(spec, meta_s, calc_m)
+
+        with c_atual:
+            _render_scenario_row_readonly(
+                label, val_a,
+                computed=comp_a, highlight=hi_a,
+                cell_class=_vitrine_cell_class(
+                    "atual", is_first=is_first, is_last=is_last,
+                    group_after=group_after, group_start=group_start,
+                    zebra=zebra,
+                ),
+            )
+        with c_sim:
+            cell_sim = _vitrine_cell_class(
+                "sim", is_first=is_first, is_last=is_last,
+                group_after=group_after, group_start=group_start,
+                zebra=zebra,
+            )
+            if spec.get("sim_editable"):
+                inp = spec["input"]
+                step = 100.0 if inp == "inv_period" else (0.5 if inp == "pct" else 1.0)
+                raw = _render_scenario_row_editable(
+                    label,
+                    _sim_widget_key(spec, key_prefix),
+                    _sim_editable_value(spec, sim_state, div=div),
+                    cell_class=cell_sim,
+                    step=step,
+                    is_percent=(inp == "pct"),
+                )
+                _apply_sim_editable(spec, sim_state, raw, div=div)
+            else:
+                val_s, comp_s, hi_s = _vitrine_readonly_value(spec, sim_s, calc_s)
+                _render_scenario_row_readonly(
+                    label, val_s,
+                    computed=comp_s, highlight=hi_s,
+                    cell_class=cell_sim,
+                )
+        with c_meta:
+            _render_scenario_row_readonly(
+                label, val_m,
+                computed=comp_m, highlight=hi_m,
+                cell_class=_vitrine_cell_class(
+                    "meta", is_first=is_first, is_last=is_last,
+                    group_after=group_after, group_start=group_start,
+                    zebra=zebra,
+                ),
+            )
+
+    st.session_state["funil_simulador"] = sim_state
+
+    sim_s = Scenario(**sim_state)
+    calc_s = calcular_funil(sim_s, periodo)
+    calc_m = calcular_funil(meta_s, periodo)
+
+    f_atual, f_sim, f_meta = st.columns(3, gap="medium")
+    with f_atual:
+        st.markdown(
+            '<div class="fr-vitrine-fatu-shell col-atual">',
+            unsafe_allow_html=True,
+        )
+        _render_faturamento_block(calc_atual_display)
+        st.markdown("</div></div>", unsafe_allow_html=True)
+    with f_sim:
+        st.markdown(
+            '<div class="fr-vitrine-fatu-shell col-sim">',
+            unsafe_allow_html=True,
+        )
+        _render_faturamento_block(calc_s)
+        st.markdown("</div></div>", unsafe_allow_html=True)
+    with f_meta:
+        st.markdown(
+            '<div class="fr-vitrine-fatu-shell col-meta">',
+            unsafe_allow_html=True,
+        )
+        _render_faturamento_block(calc_m)
+        st.markdown("</div></div>", unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    return atual_s, sim_s, meta_s
+
+
+def _render_scenario_header(titulo: str, periodo: str, accent: str, *,
+                            badge: str, wrap_class: str,
+                            col_shell: str = "") -> None:
+    shell_cls = (
+        f" fr-vitrine-col-shell col-{col_shell}-shell" if col_shell else ""
+    )
     st.markdown(
-        f'<div class="fr-card">'
-        f'  <div class="fr-card-row"><span class="lbl bold">Leads</span>'
-        f'    <span class="val computed">{num(calc["leads"])}</span></div>'
-        f'</div>',
+        f'<div class="fr-scenario-wrap {wrap_class}{shell_cls}">'
+        f'  <div class="fr-card">'
+        f'    <div class="fr-card-head" style="background:{accent};">'
+        f'      <h3>{html.escape(titulo)}</h3>'
+        f'      <div class="fr-period">{html.escape(PERIODOS[periodo]["label"])}</div>'
+        f'      <span class="fr-head-badge">{html.escape(badge)}</span>'
+        f'    </div>'
+        f'  </div>',
         unsafe_allow_html=True,
     )
 
-    state["pct_la"] = st.number_input(
-        "% Lead → Aplicação",
-        value=float(state["pct_la"]) * 100,
-        min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
-        key=f"{key_prefix}_pla",
-    ) / 100
 
-    s = Scenario(**state); calc = calcular_funil(s, periodo)
+def _render_faturamento_block(calc: dict) -> None:
     st.markdown(
-        f'<div class="fr-card">'
-        f'  <div class="fr-card-row"><span class="lbl bold">Aplicações</span>'
-        f'    <span class="val computed">{num(calc["aplicacoes"])}</span></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    state["pct_a_ag"] = st.number_input(
-        "% Aplicação → Agendamento",
-        value=float(state["pct_a_ag"]) * 100,
-        min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
-        key=f"{key_prefix}_paag",
-    ) / 100
-
-    s = Scenario(**state); calc = calcular_funil(s, periodo)
-    st.markdown(
-        f'<div class="fr-card">'
-        f'  <div class="fr-card-row"><span class="lbl bold">Agendamentos</span>'
-        f'    <span class="val computed">{num(calc["agendamentos"])}</span></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    state["pct_ag_c"] = st.number_input(
-        "% Agendamento → Comparecimento",
-        value=float(state["pct_ag_c"]) * 100,
-        min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
-        key=f"{key_prefix}_pagc",
-    ) / 100
-
-    s = Scenario(**state); calc = calcular_funil(s, periodo)
-    st.markdown(
-        f'<div class="fr-card">'
-        f'  <div class="fr-card-row"><span class="lbl bold">Comparecimento</span>'
-        f'    <span class="val computed">{num(calc["comparecimento"])}</span></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    state["pct_c_v"] = st.number_input(
-        "% Comparecimento → Venda",
-        value=float(state["pct_c_v"]) * 100,
-        min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
-        key=f"{key_prefix}_pcv",
-    ) / 100
-
-    s = Scenario(**state); calc = calcular_funil(s, periodo)
-    st.markdown(
-        f'<div class="fr-card">'
-        f'  <div class="fr-card-row highlight"><span class="lbl bold">Vendas</span>'
-        f'    <span class="val computed" style="font-size:1.05rem;">{num(calc["vendas"])}</span></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    state["ticket"] = st.number_input(
-        "Ticket Médio (R$)",
-        value=float(state["ticket"]),
-        min_value=0.0, step=100.0, format="%.2f",
-        key=f"{key_prefix}_tk",
-    )
-
-    s = Scenario(**state); calc = calcular_funil(s, periodo)
-    st.markdown(
-        f'<div class="fr-card">'
+        f'<div class="fr-card fr-fatu-card">'
         f'  <div class="fr-fatu">'
         f'    <div class="lbl">Faturamento</div>'
         f'    <div class="val">{html.escape(brl(calc["faturamento"]))}</div>'
@@ -600,7 +1429,164 @@ def _scenario_inputs(titulo: str, key_prefix: str, base: Scenario,
         unsafe_allow_html=True,
     )
 
-    return s
+
+def _render_scenario_fields_editor(
+    periodo: str,
+    ss_key: str,
+    base: Scenario,
+    widget_prefix: str,
+) -> Scenario:
+    """Inputs compactos em 2 colunas — atualiza `st.session_state[ss_key]`."""
+    state = _ensure_scenario(ss_key, base)
+    div = PERIODOS[periodo]["divisor"]
+    label_inv = _investimento_label(periodo)
+
+    c1, c2 = st.columns(2, gap="medium")
+    with c1:
+        inv_periodo = st.number_input(
+            label_inv,
+            value=float(state["investimento"]) / div,
+            min_value=0.0, step=100.0, format="%.2f",
+            key=f"{widget_prefix}_inv",
+        )
+        state["investimento"] = inv_periodo * div
+        state["custo_lead"] = st.number_input(
+            "Custo por Lead (R$)",
+            value=float(state["custo_lead"]),
+            min_value=0.0, step=1.0, format="%.2f",
+            key=f"{widget_prefix}_cl",
+        )
+        _pct_la = float(state["pct_la"]) * 100
+        state["pct_la"] = st.number_input(
+            "% Lead → Aplicação",
+            value=_pct_la,
+            min_value=0.0,
+            max_value=_editable_pct_max(_pct_la),
+            step=0.5,
+            format="%.2f",
+            key=f"{widget_prefix}_pla",
+        ) / 100
+        _pct_a_ag = float(state["pct_a_ag"]) * 100
+        state["pct_a_ag"] = st.number_input(
+            "% Aplicação → Agendamento",
+            value=_pct_a_ag,
+            min_value=0.0,
+            max_value=_editable_pct_max(_pct_a_ag),
+            step=0.5,
+            format="%.2f",
+            key=f"{widget_prefix}_paag",
+        ) / 100
+    with c2:
+        _pct_ag_c = float(state["pct_ag_c"]) * 100
+        state["pct_ag_c"] = st.number_input(
+            "% Agendamento → Comparecimento",
+            value=_pct_ag_c,
+            min_value=0.0,
+            max_value=_editable_pct_max(_pct_ag_c),
+            step=0.5,
+            format="%.2f",
+            key=f"{widget_prefix}_pagc",
+        ) / 100
+        _pct_c_v = float(state["pct_c_v"]) * 100
+        state["pct_c_v"] = st.number_input(
+            "% Comparecimento → Venda",
+            value=_pct_c_v,
+            min_value=0.0,
+            max_value=_editable_pct_max(_pct_c_v),
+            step=0.5,
+            format="%.2f",
+            key=f"{widget_prefix}_pcv",
+        ) / 100
+        state["ticket"] = st.number_input(
+            "Ticket Médio (R$)",
+            value=float(state["ticket"]),
+            min_value=0.0, step=100.0, format="%.2f",
+            key=f"{widget_prefix}_tk",
+        )
+
+    return Scenario(**state)
+
+
+def _render_meta_editor(
+    periodo: str,
+    *,
+    data_ini: date,
+    data_fim: date,
+) -> Scenario:
+    """Editor de rascunho — metas oficiais só persistem ao clicar em Aplicar."""
+    section_title(
+        "Editor de metas",
+        "objetivos oficiais do período — a coluna Meta usa o que estiver salvo",
+    )
+    st.markdown(
+        '<div class="fr-editor-wrap meta">'
+        '<p class="fr-editor-hint">'
+        "Ajuste investimento, custo por lead, taxas e ticket alvo. "
+        "As alterações abaixo são um <strong>rascunho</strong> até você aplicar. "
+        "A coluna <strong>Meta</strong>, o gargalo e os exports usam as metas "
+        "<strong>oficiais</strong> já salvas para este período."
+        "</p>",
+        unsafe_allow_html=True,
+    )
+    if "funil_meta_draft" not in st.session_state:
+        st.session_state["funil_meta_draft"] = dict(
+            st.session_state.get("funil_meta_oficial", asdict(_BASE_META)),
+        )
+    draft = _render_scenario_fields_editor(
+        periodo,
+        "funil_meta_draft",
+        _get_meta_oficial(),
+        "meta_ed",
+    )
+    st.session_state["funil_meta_draft"] = asdict(draft)
+
+    st.warning(
+        "Você está prestes a alterar as metas oficiais do período selecionado "
+        f"({data_ini.strftime('%d/%m/%Y')}–{data_fim.strftime('%d/%m/%Y')}). "
+        "Confirme abaixo antes de aplicar.",
+    )
+    confirmado = st.checkbox(
+        "Confirmo que quero aplicar essas metas como oficiais",
+        key="funil_meta_confirm_apply",
+    )
+    b_apply, b_restore = st.columns(2)
+    with b_apply:
+        aplicar = st.button(
+            "Aplicar metas oficiais",
+            type="primary",
+            use_container_width=True,
+            disabled=not confirmado,
+        )
+    with b_restore:
+        if st.button("Restaurar metas padrão", use_container_width=True):
+            st.session_state["funil_meta_draft"] = asdict(_BASE_META)
+            _clear_meta_editor_widget_keys()
+            st.info(
+                "Rascunho restaurado aos valores padrão. "
+                "Clique em «Aplicar metas oficiais» para gravar no banco."
+            )
+            st.rerun()
+
+    if aplicar:
+        try:
+            save_funil_meta(
+                PERIODO_TIPO_PADRAO,
+                data_ini,
+                data_fim,
+                metas_dict_from_scenario(st.session_state["funil_meta_draft"]),
+                criado_por="dashboard",
+            )
+            st.session_state["funil_meta_oficial"] = dict(
+                st.session_state["funil_meta_draft"],
+            )
+            st.session_state["funil_meta_confirm_apply"] = False
+            st.success("Metas aplicadas com sucesso.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Não foi possível salvar as metas: {exc}")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    return draft
 
 
 def _render_alerta_gargalo(impactos: list[dict], periodo: str) -> None:
@@ -728,110 +1714,84 @@ def _render_compare(calc_atual: dict, calc_sim: dict, calc_meta: dict) -> None:
     )
 
 
-def _exportar_csv(atual: Scenario, simulador: Scenario, meta: Scenario,
-                  periodo: str) -> bytes:
-    """Monta o CSV de comparação Atual / Simulador / Meta."""
-    ca = calcular_funil(atual, periodo)
-    cs = calcular_funil(simulador, periodo)
-    cm = calcular_funil(meta, periodo)
-    p_label = PERIODOS[periodo]["label"]
-    rows = [
-        ["Métrica", f"Atual ({p_label})", f"Simulador ({p_label})",
-         f"Meta ({p_label})", "Gap Atual→Meta"],
-        ["Investimento",    ca["investimento"],   cs["investimento"],   cm["investimento"],   cm["investimento"] - ca["investimento"]],
-        ["Custo Lead",      atual.custo_lead,     simulador.custo_lead, meta.custo_lead,      meta.custo_lead - atual.custo_lead],
-        ["Leads",           ca["leads"],          cs["leads"],          cm["leads"],          cm["leads"] - ca["leads"]],
-        ["% L→A",           atual.pct_la,         simulador.pct_la,     meta.pct_la,          ""],
-        ["Aplicações",      ca["aplicacoes"],     cs["aplicacoes"],     cm["aplicacoes"],     ""],
-        ["% A→Ag",          atual.pct_a_ag,       simulador.pct_a_ag,   meta.pct_a_ag,        ""],
-        ["Agendamentos",    ca["agendamentos"],   cs["agendamentos"],   cm["agendamentos"],   ""],
-        ["% Ag→C",          atual.pct_ag_c,       simulador.pct_ag_c,   meta.pct_ag_c,        ""],
-        ["Comparecimento",  ca["comparecimento"], cs["comparecimento"], cm["comparecimento"], ""],
-        ["% C→V",           atual.pct_c_v,        simulador.pct_c_v,    meta.pct_c_v,         ""],
-        ["Vendas",          ca["vendas"],         cs["vendas"],         cm["vendas"],         cm["vendas"] - ca["vendas"]],
-        ["Ticket Médio",    atual.ticket,         simulador.ticket,     meta.ticket,          meta.ticket - atual.ticket],
-        ["Faturamento",     ca["faturamento"],    cs["faturamento"],    cm["faturamento"],    cm["faturamento"] - ca["faturamento"]],
-    ]
-    df = pd.DataFrame(rows[1:], columns=rows[0])
-    # CSV com separador `;` (compatível com Excel pt-BR) e BOM UTF-8.
-    return ("﻿" + df.to_csv(index=False, sep=";")).encode("utf-8")
-
-
 # =============================================================================
 # Página
 # =============================================================================
 
-start_page(
+ctx = start_page(
     title="Funil da Reconecta",
     subtitle="Simulador de cenários — compare contra a meta e ataque o gargalo",
     filters=(),
-    include_period=False,
+    include_period=True,
 )
 
 st.markdown(_FUNIL_CSS, unsafe_allow_html=True)
 
-# Toggle de período (Mês / Semana / Dia) + ações de reset/export.
-c1, c2 = st.columns([3, 2], gap="large")
-with c1:
+excluir_testes_aplicacoes = st.checkbox(
+    "Excluir testes nas aplicações",
+    value=bool(st.session_state.get("onepage_excluir_testes_aplicacoes", False)),
+    key="onepage_excluir_testes_aplicacoes",
+    help=(
+        "Remove e-mails de teste das aplicações (Typeform). "
+        "Mesma regra da One Page."
+    ),
+)
+
+_funnel_snapshot: FunnelSnapshot | None = None
+try:
+    _funnel_snapshot = load_one_page_funnel(
+        ctx.data_ini,
+        ctx.data_fim,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    st.session_state["funil_atual"] = snapshot_to_scenario_dict(_funnel_snapshot)
+except Exception as e:
+    st.warning(f"Não foi possível carregar o cenário Atual do banco: {e}")
+    st.session_state.setdefault("funil_atual", asdict(_BASE_ATUAL))
+
+if "funil_simulador" not in st.session_state and _funnel_snapshot is not None:
+    st.session_state["funil_simulador"] = snapshot_to_scenario_dict(_funnel_snapshot)
+
+_sync_official_meta_for_period(ctx.data_ini, ctx.data_fim)
+
+atual_s = Scenario(**st.session_state["funil_atual"])
+meta_oficial_s = _get_meta_oficial()
+
+# Visualização (Mês / Semana / Dia) + ações globais (reset / exportar).
+c_periodo, c_reset, c_export = st.columns([4, 2, 2], gap="medium")
+with c_periodo:
     periodo = st.segmented_control(
-        "Período",
+        "Visualização",
         options=list(PERIODOS.keys()),
         format_func=lambda k: PERIODOS[k]["label"],
         default="mes",
         key="funil_periodo",
         label_visibility="collapsed",
     ) or "mes"
-with c2:
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("Resetar valores", use_container_width=True):
-            st.session_state["funil_atual"]     = asdict(_BASE_ATUAL)
-            st.session_state["funil_simulador"] = asdict(_BASE_SIMULADOR)
-            st.session_state["funil_meta"]      = asdict(_BASE_META)
-            # Limpa os widgets de input ligados aos session_state acima
-            for k in list(st.session_state.keys()):
-                if isinstance(k, str) and (
-                    k.endswith(("_inv", "_cl", "_tk",
-                                "_pla", "_paag", "_pagc", "_pcv"))
-                ):
-                    del st.session_state[k]
-            st.rerun()
-    with b2:
-        # Botão de export — espera os scenarios já estarem montados (fica
-        # ativo após a renderização das colunas; usa session_state).
-        try:
-            _atual_export     = Scenario(**st.session_state.get("funil_atual",     asdict(_BASE_ATUAL)))
-            _simulador_export = Scenario(**st.session_state.get("funil_simulador", asdict(_BASE_SIMULADOR)))
-            _meta_export      = Scenario(**st.session_state.get("funil_meta",      asdict(_BASE_META)))
-            st.download_button(
-                "Exportar CSV",
-                data=_exportar_csv(_atual_export, _simulador_export, _meta_export, periodo),
-                file_name=f"funil_reconecta_{PERIODOS[periodo]['label'].lower()}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        except Exception:
-            st.button("Exportar CSV", disabled=True, use_container_width=True)
+with c_reset:
+    if st.button("Resetar simulador", use_container_width=True):
+        if "funil_simulador" in st.session_state:
+            del st.session_state["funil_simulador"]
+        _clear_funil_widget_keys(sim_only=True)
+        st.rerun()
+with c_export:
+    _export_top_slot = st.empty()
 
-# Alerta de gargalo (calculado com base nos valores atuais do session_state).
-_atual_pre = Scenario(**st.session_state.get("funil_atual", asdict(_BASE_ATUAL)))
-_meta_pre  = Scenario(**st.session_state.get("funil_meta",  asdict(_BASE_META)))
-impactos = identificar_gargalos(_atual_pre, _meta_pre)
+# Alerta de gargalo (Atual real vs Meta oficial).
+impactos = identificar_gargalos(atual_s, meta_oficial_s)
 _render_alerta_gargalo(impactos, periodo)
 
-# 3 colunas de cenário.
-col_atual, col_sim, col_meta = st.columns(3, gap="medium")
-with col_atual:
-    atual_s = _scenario_inputs("Atual",     "atual",     _BASE_ATUAL,     periodo)
-with col_sim:
-    sim_s = _scenario_inputs("Simulador", "simulador", _BASE_SIMULADOR, periodo)
-with col_meta:
-    meta_s = _scenario_inputs("Meta",      "meta",      _BASE_META,      periodo)
+section_title(
+    "Comparativo de cenários",
+    "Compare Atual, Simulador e Meta — ajuste o cenário na coluna central.",
+)
+atual_s, sim_s, meta_s = _render_vitrine_comparison(
+    periodo, atual_s=atual_s, snapshot=_funnel_snapshot,
+)
 
-# Recalcula com os scenarios já atualizados pelas inputs.
-calc_atual = calcular_funil(atual_s, periodo)
-calc_sim   = calcular_funil(sim_s,   periodo)
-calc_meta  = calcular_funil(meta_s,  periodo)
+calc_atual = _calc_atual_display(_funnel_snapshot, atual_s, periodo)
+calc_sim   = calcular_funil(sim_s, periodo)
+calc_meta  = calcular_funil(meta_s, periodo)
 
 # Gap até a meta — 4 cards lado a lado.
 section_title(
@@ -860,14 +1820,37 @@ with g4:
                      calc_meta["faturamento"]  * PERIODOS[periodo]["divisor"],
                      periodo, is_money=True)
 
-# Comparativo Simulador vs Atual (faixa final).
+# Comparativo Simulador vs Atual (faixa destaque).
 st.markdown("&nbsp;", unsafe_allow_html=True)
 _render_compare(calc_atual, calc_sim, calc_meta)
 
+_export_bundle = _build_export_bundle(
+    periodo=periodo,
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    excluir_testes=excluir_testes_aplicacoes,
+    atual=atual_s,
+    simulador=sim_s,
+    meta=meta_oficial_s,
+    calc_atual=calc_atual,
+    calc_sim=calc_sim,
+    calc_meta=calc_meta,
+    impactos=impactos,
+)
+with _export_top_slot.container():
+    with st.popover("Exportar relatório", use_container_width=True):
+        _render_export_actions(_export_bundle)
+
+# Editor de metas — rascunho; oficial só ao aplicar.
+_render_meta_editor(periodo, data_ini=ctx.data_ini, data_fim=ctx.data_fim)
+
 st.markdown(
     '<div class="fr-footer-note">'
-    'Premissas: Semana = Mês ÷ 4 · Dia = Mês ÷ 28. '
-    'Todos os campos numéricos são editáveis.'
+    f'Atual: dados reais do período ({ctx.data_ini.strftime("%d/%m/%Y")}'
+    f'–{ctx.data_fim.strftime("%d/%m/%Y")}), mesmas regras da One Page. '
+    'Semana e Dia são aproximações proporcionais (÷ 4 e ÷ 28). '
+    'Edite o Simulador na coluna central; metas oficiais no editor abaixo '
+    '(salvas ao clicar em Aplicar).'
     '</div>',
     unsafe_allow_html=True,
 )

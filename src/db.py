@@ -28,3 +28,9 @@ def run_sql(sql: str, params: dict | None = None) -> pd.DataFrame:
 
 def run_sql_file(filename: str, params: dict | None = None) -> pd.DataFrame:
     return run_sql((QUERIES_DIR / filename).read_text(encoding="utf-8"), params)
+
+
+def execute_sql(sql: str, params: dict | None = None) -> None:
+    """Executa DML/DDL (INSERT, UPDATE, CREATE, …) sem retorno tabular."""
+    with get_engine().begin() as conn:
+        conn.execute(text(sql), params or {})

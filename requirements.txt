@@ -6,3 +6,5 @@ python-dotenv>=1.0
 plotly>=5.22
 extra-streamlit-components>=0.1.71
 PyJWT>=2.8
+openpyxl>=3.1
+fpdf2>=2.7

@@ -61,42 +61,70 @@ leads_dia AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- Aplicações (fdw_reconecta.typeform_aplicacoes) — submissões brutas (COUNT(*))
--- com data normalizada para São Paulo (created_at AT TIME ZONE 'America/Sao_Paulo').
--- IMPORTANTE: NÃO filtra e-mails de teste aqui, para bater com Typeform/Submissions.
+-- Aplicações (fdw_reconecta.typeform_aplicacoes) — regra Looker:
+--   created_at::date · LOWER(TRIM(email)) · dados_completos = TRUE
+--   · e-mails únicos no período (cards usam *_periodo)
+-- Filtros de teste quando :excluir_testes_aplicacoes = 1 (padrão na UI).
 -- ---------------------------------------------------------------------------
 aplicacoes_clean AS (
     SELECT
-        (ta.created_at AT TIME ZONE 'America/Sao_Paulo')::date AS data,
+        ta.created_at::date                            AS data,
         lower(btrim(ta.email))                         AS email_norm,
         lower(btrim(coalesce(ta.classificado, '')))    AS classif_norm
     FROM fdw_reconecta.typeform_aplicacoes ta
-    WHERE (ta.created_at AT TIME ZONE 'America/Sao_Paulo')::date
-          BETWEEN :data_ini AND :data_fim
+    WHERE ta.created_at::date BETWEEN :data_ini AND :data_fim
+      AND ta.dados_completos IS TRUE
+      AND ta.email IS NOT NULL
+      AND btrim(ta.email) <> ''
       AND (
           :excluir_testes_aplicacoes = 0
           OR (
-              ta.email IS NOT NULL
-              AND btrim(ta.email) <> ''
-              AND lower(ta.email) NOT LIKE '%@teste%'
+              lower(ta.email) NOT LIKE '%@teste%'
               AND lower(ta.email) NOT LIKE 'teste@%'
               AND lower(ta.email) NOT LIKE '%smarts%'
               AND lower(ta.email) NOT LIKE '%reconecta%'
           )
       )
 ),
+-- 1 e-mail por dia (flags ±12 agregadas com BOOL_OR nas submissões do dia).
+aplicacoes_dia_email AS (
+    SELECT
+        data,
+        email_norm,
+        BOOL_OR(classif_norm IN ('atua +12', 'atua+12', '+12'))  AS tem_mais_12,
+        BOOL_OR(classif_norm IN ('atua -12', 'atua-12', '-12'))  AS tem_menos_12,
+        BOOL_OR(classif_norm IN ('não atua', 'nao atua'))        AS tem_nao_atua
+    FROM aplicacoes_clean
+    GROUP BY data, email_norm
+),
 aplicacoes_dia AS (
     SELECT
         data,
-        COUNT(*)::bigint                                         AS novas_aplicacoes,
-        COUNT(*) FILTER (WHERE classif_norm IN ('atua +12', 'atua+12', '+12'))::bigint
-                                                                  AS aplicacoes_mais_12,
-        COUNT(*) FILTER (WHERE classif_norm IN ('atua -12', 'atua-12', '-12'))::bigint
-                                                                  AS aplicacoes_menos_12,
-        COUNT(*) FILTER (WHERE classif_norm IN ('não atua', 'nao atua'))::bigint
-                                                                  AS aplicacoes_nao_atua
-    FROM aplicacoes_clean
+        COUNT(*)::bigint                              AS novas_aplicacoes,
+        COUNT(*) FILTER (WHERE tem_mais_12)::bigint     AS aplicacoes_mais_12,
+        COUNT(*) FILTER (WHERE tem_menos_12)::bigint    AS aplicacoes_menos_12,
+        COUNT(*) FILTER (WHERE tem_nao_atua)::bigint    AS aplicacoes_nao_atua
+    FROM aplicacoes_dia_email
     GROUP BY data
+),
+-- 1 e-mail no período (dedupe para cards KPI — não somar dias).
+aplicacoes_email_periodo AS (
+    SELECT
+        email_norm,
+        BOOL_OR(classif_norm IN ('atua +12', 'atua+12', '+12'))  AS tem_mais_12,
+        BOOL_OR(classif_norm IN ('atua -12', 'atua-12', '-12'))  AS tem_menos_12,
+        BOOL_OR(classif_norm IN ('não atua', 'nao atua'))        AS tem_nao_atua
+    FROM aplicacoes_clean
+    GROUP BY email_norm
+),
+-- COUNT(*) aqui = COUNT(DISTINCT email_norm) — 1 linha por e-mail no período.
+aplicacoes_periodo AS (
+    SELECT
+        COUNT(*)::bigint                              AS novas_aplicacoes_periodo,
+        COUNT(*) FILTER (WHERE tem_mais_12)::bigint     AS aplicacoes_mais_12_periodo,
+        COUNT(*) FILTER (WHERE tem_menos_12)::bigint    AS aplicacoes_menos_12_periodo,
+        COUNT(*) FILTER (WHERE tem_nao_atua)::bigint    AS aplicacoes_nao_atua_periodo
+    FROM aplicacoes_email_periodo
 ),
 
 -- ---------------------------------------------------------------------------
@@ -182,24 +210,35 @@ deals_com_agendamento AS (
     JOIN zoho_deals zd ON zd.id = a.what_id
     WHERE a.activity_type IN ('Consulta', 'Indicação')
 ),
--- Match final aplicação → lead → deal → agendamento.
+-- Match final aplicação → lead → deal → agendamento (e-mail único/dia).
 apl_com_ag AS (
     SELECT
-        ac.data,
-        COUNT(*)::bigint                                              AS aplicacoes_com_agendamento,
-        COUNT(*) FILTER (
-            WHERE ac.classif_norm IN ('atua +12', 'atua+12', '+12')
-        )::bigint                                                     AS aplicacoes_mais_12_com_agendamento,
-        COUNT(*) FILTER (
-            WHERE ac.classif_norm IN ('atua -12', 'atua-12', '-12')
-        )::bigint                                                     AS aplicacoes_menos_12_com_agendamento,
-        COUNT(*) FILTER (
-            WHERE ac.classif_norm IN ('não atua', 'nao atua')
-        )::bigint                                                     AS aplicacoes_nao_atua_com_agendamento
-    FROM aplicacoes_clean       ac
-    JOIN leads_email_zoho       lez ON lez.email_norm = ac.email_norm
+        ad.data,
+        COUNT(DISTINCT ad.email_norm)::bigint                         AS aplicacoes_com_agendamento,
+        COUNT(DISTINCT ad.email_norm) FILTER (WHERE ad.tem_mais_12)::bigint
+                                                                      AS aplicacoes_mais_12_com_agendamento,
+        COUNT(DISTINCT ad.email_norm) FILTER (WHERE ad.tem_menos_12)::bigint
+                                                                      AS aplicacoes_menos_12_com_agendamento,
+        COUNT(DISTINCT ad.email_norm) FILTER (WHERE ad.tem_nao_atua)::bigint
+                                                                      AS aplicacoes_nao_atua_com_agendamento
+    FROM aplicacoes_dia_email     ad
+    JOIN leads_email_zoho       lez ON lez.email_norm = ad.email_norm
     JOIN deals_com_agendamento  dca ON dca.deal_id = lez.deal_id
-    GROUP BY ac.data
+    GROUP BY ad.data
+),
+-- Mesma jornada, dedupe no período (denominador dos % Agendamento nos cards).
+apl_com_ag_periodo AS (
+    SELECT
+        COUNT(DISTINCT ap.email_norm)::bigint                         AS aplicacoes_com_agendamento_periodo,
+        COUNT(DISTINCT ap.email_norm) FILTER (WHERE ap.tem_mais_12)::bigint
+                                                                      AS aplicacoes_mais_12_com_agendamento_periodo,
+        COUNT(DISTINCT ap.email_norm) FILTER (WHERE ap.tem_menos_12)::bigint
+                                                                      AS aplicacoes_menos_12_com_agendamento_periodo,
+        COUNT(DISTINCT ap.email_norm) FILTER (WHERE ap.tem_nao_atua)::bigint
+                                                                      AS aplicacoes_nao_atua_com_agendamento_periodo
+    FROM aplicacoes_email_periodo ap
+    JOIN leads_email_zoho         lez ON lez.email_norm = ap.email_norm
+    JOIN deals_com_agendamento    dca ON dca.deal_id = lez.deal_id
 ),
 
 -- ---------------------------------------------------------------------------
@@ -238,11 +277,24 @@ SELECT
     COALESCE(aca.aplicacoes_mais_12_com_agendamento, 0)::bigint       AS aplicacoes_mais_12_com_agendamento,
     COALESCE(aca.aplicacoes_menos_12_com_agendamento, 0)::bigint      AS aplicacoes_menos_12_com_agendamento,
     COALESCE(aca.aplicacoes_nao_atua_com_agendamento, 0)::bigint      AS aplicacoes_nao_atua_com_agendamento,
-    COALESCE(inv.investimento, 0)::numeric                            AS investimento
+    COALESCE(inv.investimento, 0)::numeric                            AS investimento,
+    COALESCE(ap.novas_aplicacoes_periodo, 0)::bigint                  AS novas_aplicacoes_periodo,
+    COALESCE(ap.aplicacoes_mais_12_periodo, 0)::bigint                AS aplicacoes_mais_12_periodo,
+    COALESCE(ap.aplicacoes_menos_12_periodo, 0)::bigint               AS aplicacoes_menos_12_periodo,
+    COALESCE(ap.aplicacoes_nao_atua_periodo, 0)::bigint               AS aplicacoes_nao_atua_periodo,
+    COALESCE(acp.aplicacoes_com_agendamento_periodo, 0)::bigint       AS aplicacoes_com_agendamento_periodo,
+    COALESCE(acp.aplicacoes_mais_12_com_agendamento_periodo, 0)::bigint
+                                                                      AS aplicacoes_mais_12_com_agendamento_periodo,
+    COALESCE(acp.aplicacoes_menos_12_com_agendamento_periodo, 0)::bigint
+                                                                      AS aplicacoes_menos_12_com_agendamento_periodo,
+    COALESCE(acp.aplicacoes_nao_atua_com_agendamento_periodo, 0)::bigint
+                                                                      AS aplicacoes_nao_atua_com_agendamento_periodo
 FROM keys k
 LEFT JOIN leads_dia        ld  USING (data)
 LEFT JOIN aplicacoes_dia   ad  USING (data)
 LEFT JOIN agendamentos_dia agd USING (data)
 LEFT JOIN apl_com_ag       aca USING (data)
 LEFT JOIN invest_dia       inv USING (data)
+CROSS JOIN aplicacoes_periodo ap
+CROSS JOIN apl_com_ag_periodo acp
 ORDER BY k.data;
