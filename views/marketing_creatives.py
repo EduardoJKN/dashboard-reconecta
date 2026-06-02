@@ -350,6 +350,9 @@ SORT_OPTIONS = {
     "Leads (maior)":            ("leads_total",    False),
     "Leads +12 (maior)":        ("leads_mais_12",  False),
     "Não atua (maior)":         ("leads_nao_atua", False),
+    "Aplicações (maior)":       ("aplicacoes",     False),
+    "Apl. +12 (maior)":         ("aplicacoes_mais_12", False),
+    "Apl. -12 (maior)":         ("aplicacoes_menos_12", False),
     "Agendamentos (maior)":     ("agendamentos",   False),
     "Vendas (maior)":           ("vendas",         False),
     "Receita (maior)":          ("valor_receita", False),
@@ -465,6 +468,34 @@ def _render_resultado_atribuido_top12(top: pd.DataFrame) -> None:
             "Σ classificado Não atua",
         ))
 
+    apl_s = _usable_series(resultado_base, "aplicacoes")
+    apl_t = _sum_series(apl_s)
+
+    apl12_s = _usable_series(resultado_base, "aplicacoes_mais_12")
+    apl12_t = _sum_series(apl12_s)
+
+    aplmen12_s = _usable_series(resultado_base, "aplicacoes_menos_12")
+    aplmen12_t = _sum_series(aplmen12_s)
+
+    if apl_t is not None:
+        row1.append((
+            "Aplicações",
+            int_br(int(round(apl_t))),
+            "Σ aplicações typeform (e-mail cruzado com leads do criativo)",
+        ))
+    if apl12_t is not None:
+        row1.append((
+            "Apl. +12",
+            int_br(int(round(apl12_t))),
+            "Σ classificado Atua +12 (typeform)",
+        ))
+    if aplmen12_t is not None:
+        row1.append((
+            "Apl. -12",
+            int_br(int(round(aplmen12_t))),
+            "Σ classificado Atua -12 (typeform)",
+        ))
+
     _emit_row(row1)
 
     row2: list[tuple[str, str, str | None]] = []
@@ -527,8 +558,8 @@ head_l, head_r = st.columns([3, 1.2], vertical_alignment="bottom")
 with head_l:
     section_title(
         "Top 12 criativos",
-        "por nome (utm_content = ad_name) · mídia fdw + leads ext_reconecta · "
-        "investimento no período",
+        "por nome (utm_content = ad_name) · mídia fdw + leads ext_reconecta + "
+        "aplicações typeform · investimento no período",
     )
 with head_r:
     sort_choice = st.selectbox(
@@ -647,10 +678,16 @@ def _creative_card_html(row) -> str:
     mais12_raw = row.get("leads_mais_12")
     nao_atua_raw = row.get("leads_nao_atua")
     cpl_raw = row.get("cpl")
+    apl_raw = row.get("aplicacoes")
+    apl12_raw = row.get("aplicacoes_mais_12")
+    aplmen12_raw = row.get("aplicacoes_menos_12")
     leads_fmt = "—" if _missing(leads_raw) else int_br(int(leads_raw))
     mais12_fmt = "—" if _missing(mais12_raw) else int_br(int(mais12_raw))
     nao_atua_fmt = int_br(0 if _missing(nao_atua_raw) else int(nao_atua_raw))
     cpl_fmt = "—" if _missing(cpl_raw) else brl(float(cpl_raw), casas=2)
+    apl_fmt = int_br(0 if _missing(apl_raw) else int(apl_raw))
+    apl12_fmt = int_br(0 if _missing(apl12_raw) else int(apl12_raw))
+    aplmen12_fmt = int_br(0 if _missing(aplmen12_raw) else int(aplmen12_raw))
 
     metric_label_css = (
         f'font-size:0.62em;color:{PALETTE["muted"]};'
@@ -681,6 +718,9 @@ def _creative_card_html(row) -> str:
     if not _missing(row.get("cpl_meta")):
         tip_chunks.append(f'CPL Meta: {brl(float(row["cpl_meta"]), casas=2)}')
     tip_chunks.append("CPL = invest fdw ÷ leads reais (e-mail único/dia)")
+    tip_chunks.append(
+        "Apl. = typeform cruzado por e-mail dos leads do criativo (dedupe e-mail/dia)"
+    )
     card_tip_esc = html_lib.escape(" · ".join(tip_chunks)[:300])
 
     return (
@@ -708,8 +748,8 @@ def _creative_card_html(row) -> str:
         f'<div><div style="{metric_label_css}">CPC</div>'
         f'<div style="{metric_value_css}">{html_lib.escape(cpc_fmt)}</div></div>'
         f'</div>'
-        # Linha 2 — resultado/derivada da mart (Leads · +12 · Não atua · CPL)
-        f'<div style="display:flex;gap:12px;margin-top:8px;'
+        # Linha 2 — leads (Leads · +12 · Não atua · CPL)
+        f'<div style="display:flex;gap:10px;margin-top:8px;'
         f'padding-top:8px;border-top:1px solid {PALETTE["border"]};">'
         f'<div><div style="{metric_label_css}">Leads</div>'
         f'<div style="{metric_value_mart_css}">{html_lib.escape(leads_fmt)}</div></div>'
@@ -719,6 +759,15 @@ def _creative_card_html(row) -> str:
         f'<div style="{metric_value_mart_css}">{html_lib.escape(nao_atua_fmt)}</div></div>'
         f'<div><div style="{metric_label_css}">CPL</div>'
         f'<div style="{metric_value_mart_css}">{html_lib.escape(cpl_fmt)}</div></div>'
+        f'</div>'
+        # Linha 3 — aplicações typeform (Apl. · Apl +12 · Apl -12)
+        f'<div style="display:flex;gap:10px;margin-top:6px;">'
+        f'<div><div style="{metric_label_css}">Apl.</div>'
+        f'<div style="{metric_value_mart_css}">{html_lib.escape(apl_fmt)}</div></div>'
+        f'<div><div style="{metric_label_css}">Apl +12</div>'
+        f'<div style="{metric_value_mart_css}">{html_lib.escape(apl12_fmt)}</div></div>'
+        f'<div><div style="{metric_label_css}">Apl -12</div>'
+        f'<div style="{metric_value_mart_css}">{html_lib.escape(aplmen12_fmt)}</div></div>'
         f'</div>'
         f'</div></div>'
     )

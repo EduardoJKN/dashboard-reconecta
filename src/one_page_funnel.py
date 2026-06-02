@@ -91,7 +91,10 @@ def aplicacoes_kpis(df_one: pd.DataFrame) -> dict:
         "custo_apl_mais_12": safe_div(investimento, apl_mais12),
         "custo_apl_menos_12": safe_div(investimento, apl_menos12),
         "agendamentos_legacy": agendamentos,
+        # Volume total / aplicações (pode passar de 100% — não usar como conversão).
         "pct_agendamento": safe_div(agendamentos, aplicacoes) * 100,
+        "aplicacoes_com_agendamento": apl_total_ag,
+        # Conversão real: aplicações do período que viraram agendamento (match e-mail).
         "pct_agendamento_apl": safe_div(apl_total_ag, aplicacoes) * 100,
         "pct_agendamento_apl_mais_12": safe_div(apl_m12_ag, apl_mais12) * 100,
         "pct_agendamento_apl_menos_12": safe_div(apl_n12_ag, apl_menos12) * 100,
@@ -138,6 +141,7 @@ def load_one_page_funnel(
     investimento = float(k_apl["investimento"])
     leads = float(k_apl["leads_totais"])
     aplicacoes = float(k_apl["aplicacoes"])
+    aplicacoes_com_agendamento = float(k_apl["aplicacoes_com_agendamento"])
     agendamentos = float(k_prev["agendamentos_exibidos"])
     comparecimento = float(k_prev["comparecimentos"])
     vendas = float(k_vend["vendas"])
@@ -153,7 +157,8 @@ def load_one_page_funnel(
         montante=montante,
         custo_lead=safe_div(investimento, leads),
         pct_la=safe_div(aplicacoes, leads),
-        pct_a_ag=safe_div(agendamentos, aplicacoes),
+        # Mesma regra da One Page (`pct_agendamento_apl`): match por e-mail, 1x por aplicação.
+        pct_a_ag=safe_div(aplicacoes_com_agendamento, aplicacoes),
         pct_ag_c=safe_div(comparecimento, agendamentos),
         pct_c_v=safe_div(vendas, comparecimento),
         ticket=safe_div(montante, vendas),

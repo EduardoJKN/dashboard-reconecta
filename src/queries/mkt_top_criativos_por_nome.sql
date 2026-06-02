@@ -4,11 +4,14 @@
 -- Mídia: fdw_reconecta.anuncios agregada por LOWER(TRIM(ad_name)).
 -- Leads reais: ext_reconecta.leads (mesmo universo que lp_form no Railway;
 -- o role do app costuma não ter permissão em lp_form.leads).
+-- Aplicações: fdw_reconecta.typeform_aplicacoes cruzadas pelos e-mails dos
+-- leads do criativo (utm_content = ad_name), mesma regra do One Page legado.
 -- Join APÓS agregação — evita multiplicar leads por múltiplos ad_id.
 --
 -- Classificação (valores reais no banco, case-insensitive):
 --   Atua +12, Atua -12, Não atua, ...
 -- Leads: e-mail único por dia (COUNT DISTINCT chave email|dia).
+-- Aplicações: dedupe e-mail+dia (mais recente), depois COUNT DISTINCT e-mail.
 --
 -- CPL real = investimento / leads_reais
 -- CPL +12  = investimento / leads_mais_12
@@ -44,6 +47,67 @@ WITH leads AS (
       AND lower(l.email) NOT LIKE '%smarts%'
       AND lower(l.email) NOT LIKE '%reconecta%'
     GROUP BY LOWER(TRIM(l.utm_content))
+),
+
+-- E-mails dos leads por criativo (período) — base do cruzamento com typeform.
+leads_emails AS (
+    SELECT DISTINCT
+        LOWER(TRIM(l.utm_content)) AS ad_name_norm,
+        LOWER(TRIM(l.email))       AS email_norm
+    FROM ext_reconecta.leads l
+    WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
+      AND l.utm_content IS NOT NULL
+      AND TRIM(l.utm_content) <> ''
+      AND l.email IS NOT NULL
+      AND TRIM(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+),
+
+-- Aplicações deduplicadas por e-mail+dia (mais recente), fuso -3h.
+aplicacoes_dedup AS (
+    SELECT
+        email_norm,
+        classificado_norm
+    FROM (
+        SELECT
+            LOWER(TRIM(ta.email)) AS email_norm,
+            LOWER(TRIM(ta.classificado)) AS classificado_norm,
+            ROW_NUMBER() OVER (
+                PARTITION BY LOWER(TRIM(ta.email)),
+                             (ta.created_at - INTERVAL '3 hours')::date
+                ORDER BY ta.created_at DESC
+            ) AS rn
+        FROM fdw_reconecta.typeform_aplicacoes ta
+        WHERE (ta.created_at - INTERVAL '3 hours')::date BETWEEN :data_ini AND :data_fim
+          AND ta.dados_completos IS TRUE
+          AND ta.email IS NOT NULL
+          AND TRIM(ta.email) <> ''
+          AND LOWER(TRIM(ta.email)) NOT LIKE '%@teste%'
+          AND LOWER(TRIM(ta.email)) NOT LIKE '%teste@%'
+          AND LOWER(TRIM(ta.email)) NOT LIKE '%smarts%'
+          AND LOWER(TRIM(ta.email)) NOT LIKE '%reconecta%'
+    ) sub
+    WHERE rn = 1
+),
+
+aplicacoes AS (
+    SELECT
+        le.ad_name_norm,
+        COUNT(DISTINCT a.email_norm) AS aplicacoes,
+        COUNT(DISTINCT CASE
+            WHEN a.classificado_norm IN ('atua +12', 'atua+12', '+12')
+            THEN a.email_norm
+        END) AS aplicacoes_mais_12,
+        COUNT(DISTINCT CASE
+            WHEN a.classificado_norm IN ('atua -12', 'atua-12', '-12')
+            THEN a.email_norm
+        END) AS aplicacoes_menos_12
+    FROM leads_emails le
+    INNER JOIN aplicacoes_dedup a ON a.email_norm = le.email_norm
+    GROUP BY le.ad_name_norm
 ),
 
 midia AS (
@@ -103,6 +167,10 @@ SELECT
     COALESCE(l.leads_menos_12, 0)::bigint AS leads_menos_12,
     COALESCE(l.leads_nao_atua, 0)::bigint AS leads_nao_atua,
 
+    COALESCE(a.aplicacoes, 0)::bigint         AS aplicacoes,
+    COALESCE(a.aplicacoes_mais_12, 0)::bigint AS aplicacoes_mais_12,
+    COALESCE(a.aplicacoes_menos_12, 0)::bigint AS aplicacoes_menos_12,
+
     CASE
         WHEN COALESCE(l.leads_reais, 0) > 0
         THEN m.investimento / NULLIF(l.leads_reais::numeric, 0)
@@ -120,4 +188,5 @@ SELECT
 
 FROM midia m
 LEFT JOIN leads l ON l.ad_name_norm = m.ad_name_norm
+LEFT JOIN aplicacoes a ON a.ad_name_norm = m.ad_name_norm
 ORDER BY leads_reais DESC NULLS LAST, m.investimento DESC NULLS LAST;

@@ -20,7 +20,9 @@ from __future__ import annotations
 import html
 from dataclasses import asdict, dataclass
 from datetime import date
+from typing import Any
 
+import pandas as pd
 import streamlit as st
 
 from src.funil_export import (
@@ -28,6 +30,14 @@ from src.funil_export import (
     export_funil_csv,
     export_funil_excel,
     export_funil_pdf,
+)
+from src.funil_benchmark import (
+    BENCHMARK_METRIC_SPECS,
+    HISTORICO_PERIODOS,
+    classify_realism,
+    compute_funil_benchmark,
+    resolve_historical_window,
+    scenario_field_value,
 )
 from src.funil_meta_store import (
     PERIODO_TIPO_PADRAO,
@@ -104,7 +114,7 @@ ETAPAS = [
 # =============================================================================
 
 def calcular_funil(s: Scenario, periodo: str) -> dict:
-    """Cascata do funil para o período escolhido."""
+    """Cascata do funil para o período escolhido (valores contínuos internos)."""
     div = PERIODOS[periodo]["divisor"]
     investimento = s.investimento / div
     leads = investimento / s.custo_lead if s.custo_lead > 0 else 0.0
@@ -124,10 +134,212 @@ def calcular_funil(s: Scenario, periodo: str) -> dict:
     }
 
 
+def calcular_funil_exibicao(s: Scenario, periodo: str) -> dict:
+    """Volumes para tela/export (Simulador e Meta).
+
+    Vendas são arredondadas para inteiro; faturamento usa o mesmo inteiro
+    × ticket — evita «Vendas = 0» com faturamento > 0 por fração decimal.
+    """
+    calc = calcular_funil(s, periodo)
+    vendas_int = int(round(calc["vendas"]))
+    return {
+        **calc,
+        "vendas": float(vendas_int),
+        "faturamento": float(vendas_int) * float(s.ticket),
+    }
+
+
+def _calc_atual_para_tela(
+    snapshot: FunnelSnapshot | None,
+    atual_s: Scenario,
+    periodo: str,
+) -> dict:
+    """Atual na escala da visualização; vendas inteiras; faturamento real (montante)."""
+    if snapshot is not None:
+        calc = snapshot_calc_display(snapshot, periodo, PERIODOS)
+        vendas_int = int(round(calc["vendas"]))
+        return {**calc, "vendas": float(vendas_int)}
+    return calcular_funil_exibicao(atual_s, periodo)
+
+
+def _gargalo_impacto_exibicao(impacto_mensal: float, periodo: str) -> float:
+    """Escala o impacto mensal para a visualização Mês / Semana / Dia."""
+    return float(impacto_mensal) / PERIODOS[periodo]["divisor"]
+
+
+# Simulador — edição por taxa ou por volume (pares de etapas)
+_SIM_EDIT_STAGES = ("leads", "la", "a_ag", "ag_c", "c_v")
+_SIM_STAGE_VOLUME_FIELD = {
+    "leads": "leads",
+    "la": "aplicacoes",
+    "a_ag": "agendamentos",
+    "ag_c": "comparecimento",
+    "c_v": "vendas",
+}
+_SIM_STAGE_PCT_FIELD = {
+    "la": "pct_la",
+    "a_ag": "pct_a_ag",
+    "ag_c": "pct_ag_c",
+    "c_v": "pct_c_v",
+}
+_DEFAULT_SIM_EDIT_MODES: dict[str, str] = {
+    "leads": "derivado",
+    "la": "taxa",
+    "a_ag": "taxa",
+    "ag_c": "taxa",
+    "c_v": "taxa",
+}
+
+
+def _sim_mode_options(stage: str) -> tuple[tuple[str, ...], str]:
+    if stage == "leads":
+        return ("derivado", "volume"), "derivado"
+    return ("taxa", "volume"), "taxa"
+
+
+def _coerce_sim_mode_value(stage: str, value: object) -> str:
+    """Converte valor legado (ex.: índice 0) para 'taxa' | 'volume' | 'derivado'."""
+    options, fallback = _sim_mode_options(stage)
+    if value in options:
+        return str(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        idx = int(value)
+        if 0 <= idx < len(options):
+            return options[idx]
+    return fallback
+
+
+def _sim_mode_widget_key(key_prefix: str, stage: str) -> str:
+    return f"{key_prefix}_edit_mode_select_{stage}"
+
+
+def _purge_legacy_sim_mode_widget_keys() -> None:
+    """Remove keys antigas de toggles/segmented (antes de qualquer widget)."""
+    for k in list(st.session_state.keys()):
+        if not isinstance(k, str):
+            continue
+        if k.startswith("simulador_mode_"):
+            del st.session_state[k]
+        elif (
+            k.startswith("simulador_edit_mode_")
+            and not k.startswith("simulador_edit_mode_select_")
+        ):
+            del st.session_state[k]
+
+
+def _sanitize_sim_edit_modes() -> None:
+    """Sanitiza apenas o dict interno — nunca keys de widget após render."""
+    if "funil_sim_edit_modes" not in st.session_state:
+        st.session_state["funil_sim_edit_modes"] = dict(_DEFAULT_SIM_EDIT_MODES)
+    modes = st.session_state["funil_sim_edit_modes"]
+    for stage in _SIM_EDIT_STAGES:
+        modes[stage] = _coerce_sim_mode_value(stage, modes.get(stage))
+
+
+def _ensure_sim_edit_modes() -> dict[str, str]:
+    """Chamar uma vez no topo do rerun, antes de widgets do simulador."""
+    _purge_legacy_sim_mode_widget_keys()
+    _sanitize_sim_edit_modes()
+    return st.session_state["funil_sim_edit_modes"]
+
+
+def _sim_edit_mode_for_stage(
+    stage: str,
+    key_prefix: str = "simulador",
+) -> str:
+    """Modo ativo da etapa (lê widget se já existir no session_state)."""
+    options, fallback = _sim_mode_options(stage)
+    wkey = _sim_mode_widget_key(key_prefix, stage)
+    if wkey in st.session_state:
+        return _coerce_sim_mode_value(stage, st.session_state[wkey])
+    modes = st.session_state.get("funil_sim_edit_modes", _DEFAULT_SIM_EDIT_MODES)
+    return _coerce_sim_mode_value(stage, modes.get(stage, fallback))
+
+
+def _safe_ratio(num: float, den: float) -> float:
+    d = float(den or 0)
+    if d <= 0:
+        return 0.0
+    return max(0.0, float(num or 0) / d)
+
+
+def _apply_sim_volume_mensal(stage: str, volume_mensal: float, state: dict) -> None:
+    """Ajusta taxas (ou CPL) para atingir o volume mensal informado."""
+    vol = max(0.0, float(volume_mensal))
+    base = calcular_funil(Scenario(**state), "mes")
+    if stage == "leads":
+        inv = float(state["investimento"])
+        if vol > 0:
+            state["custo_lead"] = inv / vol
+        return
+    pct_key = _SIM_STAGE_PCT_FIELD.get(stage)
+    if not pct_key:
+        return
+    upstream = {
+        "la": base["leads"],
+        "a_ag": base["aplicacoes"],
+        "ag_c": base["agendamentos"],
+        "c_v": base["comparecimento"],
+    }.get(stage, 0.0)
+    state[pct_key] = _safe_ratio(vol, upstream)
+
+
+def _apply_simulator_from_session(
+    sim_state: dict,
+    periodo: str,
+    div: int,
+    key_prefix: str,
+) -> None:
+    """Lê widgets do rerun anterior e atualiza `funil_simulador` sem conflito."""
+    rows = _vitrine_row_specs(periodo)
+
+    for spec in rows:
+        rid = spec["id"]
+        if spec.get("sim_stage") is None and spec.get("sim_editable"):
+            wkey = _sim_widget_key(spec, key_prefix)
+            if wkey in st.session_state:
+                _apply_sim_editable(
+                    spec, sim_state, float(st.session_state[wkey]), div=div,
+                )
+
+    for stage in _SIM_EDIT_STAGES:
+        smode = _sim_edit_mode_for_stage(stage, key_prefix)
+        if stage == "leads":
+            if smode == "volume":
+                wkey = f"{key_prefix}_vol_{stage}"
+                if wkey in st.session_state:
+                    _apply_sim_volume_mensal(
+                        stage, float(st.session_state[wkey]) * div, sim_state,
+                    )
+            continue
+        if smode == "volume":
+            wkey = f"{key_prefix}_vol_{stage}"
+            if wkey in st.session_state:
+                _apply_sim_volume_mensal(
+                    stage, float(st.session_state[wkey]) * div, sim_state,
+                )
+        elif smode == "taxa":
+            pct_spec_id = {
+                "la": "pct_la",
+                "a_ag": "pct_a_ag",
+                "ag_c": "pct_ag_c",
+                "c_v": "pct_c_v",
+            }.get(stage)
+            if pct_spec_id:
+                wkey = _sim_widget_key({"id": pct_spec_id}, key_prefix)
+                if wkey in st.session_state:
+                    raw = float(st.session_state[wkey])
+                    field = _SIM_STAGE_PCT_FIELD[stage]
+                    sim_state[field] = raw / 100.0
+
+
 def identificar_gargalos(atual: Scenario, meta: Scenario) -> list[dict]:
-    """Lista de etapas ordenadas pelo impacto que teriam no faturamento
-    mensal se fossem niveladas ao valor da meta. Inclui também Custo
-    por Lead e Ticket Médio (impactos não-percentuais)."""
+    """Etapas ordenadas pelo ganho em faturamento projetado (base mensal).
+
+    Para cada etapa abaixo da meta, simula só aquela taxa no nível da meta
+    (demais parâmetros do Atual iguais) e mede Δ faturamento no mês inteiro.
+    A UI escala esse valor pela visualização (÷ 4 / ÷ 28).
+    """
     base_fat = calcular_funil(atual, "mes")["faturamento"]
     impactos: list[dict] = []
 
@@ -203,6 +415,162 @@ def _format_vitrine_value(rid: str, value: float) -> str:
     if rid in ("pct_la", "pct_a_ag", "pct_ag_c", "pct_c_v"):
         return format_display_value(value, is_percent=True)
     return format_display_value(value)
+
+
+_SPEC_ID_TO_BENCHMARK_KEY: dict[str, str] = {
+    "cl": "custo_lead",
+    "pct_la": "pct_la",
+    "pct_a_ag": "pct_a_ag",
+    "pct_ag_c": "pct_ag_c",
+    "pct_c_v": "pct_c_v",
+    "ticket": "ticket",
+}
+
+
+def _format_benchmark_value(kind: str, value: float | None) -> str:
+    if value is None:
+        return "—"
+    if kind == "money":
+        return brl(float(value))
+    return pct_fmt(float(value))
+
+
+def _scenario_metric_value(s: Scenario, key: str) -> float:
+    return float(getattr(s, key))
+
+
+def _label_with_realism_badge(
+    label: str,
+    *,
+    spec_id: str | None,
+    value: float,
+    benchmark_metrics: dict[str, dict[str, Any]] | None,
+) -> str:
+    """Label com badge de realismo (Simulador) quando há benchmark."""
+    base = html.escape(label)
+    if not spec_id or not benchmark_metrics:
+        return base
+    bkey = _SPEC_ID_TO_BENCHMARK_KEY.get(spec_id)
+    if not bkey or bkey not in benchmark_metrics:
+        return base
+    bm = benchmark_metrics[bkey]
+    text, cls = classify_realism(
+        value,
+        float(bm["mean"]),
+        higher_is_better=bool(bm["higher_is_better"]),
+    )
+    if cls == "neutral":
+        return base
+    return (
+        f'{base}<span class="fr-realism fr-realism-{html.escape(cls)}" '
+        f'title="{html.escape(text)}">{html.escape(text)}</span>'
+    )
+
+
+def _apply_benchmark_scenario_to_sim(
+    benchmark_metrics: dict[str, dict[str, Any]],
+    mode: str,
+) -> None:
+    """Preenche o Simulador com cenário conservador / provável / otimista."""
+    sim = dict(st.session_state.get("funil_simulador", {}))
+    inv = sim.get("investimento")
+    for key, _label, _hib, _kind in BENCHMARK_METRIC_SPECS:
+        metric = benchmark_metrics.get(key)
+        if metric:
+            sim[key] = scenario_field_value(metric, mode)
+    if inv is not None:
+        sim["investimento"] = inv
+    st.session_state["funil_simulador"] = sim
+
+
+def _render_benchmark_historico(
+    benchmark_raw: dict[str, Any],
+    *,
+    snapshot: FunnelSnapshot | None,
+    atual_s: Scenario,
+    meta_s: Scenario,
+) -> None:
+    """Seção Benchmark histórico + botões de cenário."""
+    section_title(
+        "Benchmark histórico",
+        "Referência calculada com base no histórico selecionado.",
+    )
+    err = benchmark_raw.get("error")
+    if err:
+        st.info(err)
+        return
+
+    metrics = benchmark_raw.get("metrics") or {}
+    if not metrics:
+        st.info("Sem métricas históricas para o intervalo.")
+        return
+
+    hist_ini = date.fromisoformat(benchmark_raw["hist_ini"])
+    hist_fim = date.fromisoformat(benchmark_raw["hist_fim"])
+    st.caption(
+        f'Janela: {hist_ini.strftime("%d/%m/%Y")} – {hist_fim.strftime("%d/%m/%Y")} '
+        f'({benchmark_raw.get("monthly_count", 0)} mês(es) com dados). '
+        "Mesmas regras da One Page e do Atual."
+    )
+
+    rows: list[dict[str, str]] = []
+    for key, label, _hib, kind in BENCHMARK_METRIC_SPECS:
+        bm = metrics.get(key, {})
+        atual_val = (
+            _scenario_metric_value(
+                Scenario(**snapshot_to_scenario_dict(snapshot)), key,
+            )
+            if snapshot is not None
+            else _scenario_metric_value(atual_s, key)
+        )
+        meta_val = _scenario_metric_value(meta_s, key)
+        rows.append({
+            "Métrica": label,
+            "Média histórica": _format_benchmark_value(kind, bm.get("mean")),
+            "Mediana": _format_benchmark_value(kind, bm.get("median")),
+            "P75": _format_benchmark_value(kind, bm.get("p75")),
+            "Melhor período": (
+                f'{_format_benchmark_value(kind, bm.get("best"))} '
+                f'({bm.get("best_period", "—")})'
+            ),
+            "Pior período": (
+                f'{_format_benchmark_value(kind, bm.get("worst"))} '
+                f'({bm.get("worst_period", "—")})'
+            ),
+            "Atual": _format_benchmark_value(kind, atual_val),
+            "Meta oficial": _format_benchmark_value(kind, meta_val),
+        })
+
+    st.dataframe(
+        pd.DataFrame(rows),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Métrica": st.column_config.TextColumn(width="medium"),
+        },
+    )
+
+    st.markdown("**Cenários no Simulador**")
+    b1, b2, b3, _ = st.columns([2, 2, 2, 3], gap="small")
+    with b1:
+        if st.button("Aplicar cenário conservador", use_container_width=True):
+            _apply_benchmark_scenario_to_sim(metrics, "conservador")
+            _clear_funil_widget_keys(sim_only=True)
+            st.rerun()
+    with b2:
+        if st.button("Aplicar cenário provável", use_container_width=True):
+            _apply_benchmark_scenario_to_sim(metrics, "provavel")
+            _clear_funil_widget_keys(sim_only=True)
+            st.rerun()
+    with b3:
+        if st.button("Aplicar cenário otimista", use_container_width=True):
+            _apply_benchmark_scenario_to_sim(metrics, "otimista")
+            _clear_funil_widget_keys(sim_only=True)
+            st.rerun()
+    st.caption(
+        "Conservador: ~90% das taxas (ou CPL +10%). Provável: mediana histórica. "
+        "Otimista: P75 nas taxas (ou P25 no CPL). Investimento do simulador não muda."
+    )
 
 
 # =============================================================================
@@ -390,6 +758,13 @@ _FUNIL_CSS = """
     color: rgba(48, 20, 30, 0.9);
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.015em;
+}
+.fr-fatu-hint {
+    font-size: 0.65rem;
+    line-height: 1.35;
+    margin-top: 6px;
+    color: rgba(48, 20, 30, 0.62);
+    max-width: 240px;
 }
 
 /* Alerta de gargalo */
@@ -668,6 +1043,52 @@ _FUNIL_CSS = """
     margin: 0 !important;
     padding: 0 !important;
 }
+.fr-sim-readonly-val {
+    display: block;
+    font-family: ui-monospace, "IBM Plex Mono", monospace;
+    font-size: 0.86rem;
+    font-weight: 700;
+    text-align: right;
+    padding: 0 4px 0 0;
+    color: rgba(255, 255, 255, 0.88);
+    font-variant-numeric: tabular-nums;
+    line-height: 22px;
+}
+/* Selectbox compacto — modo Auto / % / Nº */
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-sim-mode-row)
+    > div[data-testid="column"]:has(.fr-sim-mode-select-wrap) {
+    flex: 0 0 68px !important;
+    min-width: 68px !important;
+    max-width: 76px !important;
+    width: 68px !important;
+    padding: 0 !important;
+    align-self: center !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-sim-mode-row)
+    [data-testid="stSelectbox"] {
+    margin: 0 !important;
+    width: 100% !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-sim-mode-row)
+    [data-testid="stSelectbox"] > div {
+    gap: 0 !important;
+    min-height: 0 !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-sim-mode-row)
+    [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    min-height: 22px !important;
+    max-height: 22px !important;
+    font-size: 0.68rem !important;
+    font-weight: 700 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-sim-mode-row)
+    [data-testid="stSelectbox"] [data-baseweb="select"] span {
+    font-size: 0.68rem !important;
+    font-weight: 700 !important;
+    line-height: 1.2 !important;
+}
 .fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row) {
     display: flex !important;
     align-items: center !important;
@@ -716,6 +1137,12 @@ _FUNIL_CSS = """
     flex: 0 0 42% !important;
     max-width: 42% !important;
     justify-content: flex-end !important;
+}
+.fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-sim-mode-row)
+    > div[data-testid="column"]:last-child {
+    flex: 1 1 auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
 }
 .fr-vitrine-sync [data-testid="stHorizontalBlock"]:has(.fr-vitrine-editable-row) .lbl-chip {
     max-width: 100% !important;
@@ -834,6 +1261,25 @@ _FUNIL_CSS = """
     margin: 0 0 12px 0;
     line-height: 1.45;
 }
+.fr-realism {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.58rem;
+    font-weight: 700;
+    line-height: 1.2;
+    vertical-align: middle;
+    white-space: nowrap;
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fr-realism-ok { background: rgba(4, 120, 87, 0.35); color: #a7f3d0; }
+.fr-realism-good { background: rgba(4, 120, 87, 0.45); color: #d1fae5; }
+.fr-realism-warn { background: rgba(180, 120, 20, 0.35); color: #fde68a; }
+.fr-realism-bad { background: rgba(153, 27, 27, 0.4); color: #fecaca; }
+.fr-realism-neutral { display: none; }
 </style>
 """
 
@@ -875,8 +1321,17 @@ def _clear_funil_widget_keys(*, sim_only: bool = False) -> None:
             if not sim_only:
                 del st.session_state[k]
             continue
+        if (
+            k.startswith("simulador_mode_")
+            or k.startswith("simulador_edit_mode_")
+            or k.startswith("simulador_vol_")
+        ):
+            del st.session_state[k]
+            continue
         if k.endswith(_WIDGET_SUFFIXES):
             del st.session_state[k]
+    if "funil_sim_edit_modes" in st.session_state:
+        del st.session_state["funil_sim_edit_modes"]
 
 
 def _clear_meta_editor_widget_keys() -> None:
@@ -914,6 +1369,22 @@ def _get_meta_oficial() -> Scenario:
     return Scenario(
         **st.session_state.get("funil_meta_oficial", asdict(_BASE_META)),
     )
+
+
+def _meta_draft_differs_from_official() -> bool:
+    """True se o rascunho do editor difere da meta oficial em vigor."""
+    draft = st.session_state.get("funil_meta_draft")
+    official = st.session_state.get("funil_meta_oficial")
+    if draft is None or official is None:
+        return False
+    keys = (
+        "investimento", "custo_lead", "pct_la", "pct_a_ag",
+        "pct_ag_c", "pct_c_v", "ticket",
+    )
+    for k in keys:
+        if abs(float(draft.get(k, 0)) - float(official.get(k, 0))) > 1e-9:
+            return True
+    return False
 
 
 def _build_export_bundle(
@@ -1059,16 +1530,25 @@ def _render_scenario_row_editable(
     max_value: float | None = None,
     step: float = 1.0,
     is_percent: bool = False,
+    spec_id: str | None = None,
+    realism_value: float | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> float:
     """Linha editável — mesma altura/tipografia; input compacto à direita."""
     col_l, col_r = st.columns(
         [1.55, 1], gap="small", vertical_alignment="center",
     )
+    lbl_html = _label_with_realism_badge(
+        label,
+        spec_id=spec_id,
+        value=realism_value if realism_value is not None else value,
+        benchmark_metrics=benchmark_metrics,
+    )
     with col_l:
         st.markdown(
             f'<span class="fr-vitrine-editable-row {html.escape(cell_class)}" '
             f'aria-hidden="true"></span>'
-            f'<span class="lbl bold lbl-chip">{html.escape(label)}</span>',
+            f'<span class="lbl bold lbl-chip">{lbl_html}</span>',
             unsafe_allow_html=True,
         )
     with col_r:
@@ -1089,6 +1569,239 @@ def _render_scenario_row_editable(
         return float(st.number_input(**kwargs))
 
 
+def _sim_mode_label(option: str) -> str:
+    return {"derivado": "Auto", "taxa": "%", "volume": "Nº"}.get(option, option)
+
+
+def _sim_mode_select(stage: str, key_prefix: str) -> str:
+    """Selectbox compacto: leads → Auto|Nº; demais → %|Nº."""
+    options, fallback = _sim_mode_options(stage)
+    wkey = _sim_mode_widget_key(key_prefix, stage)
+
+    modes = st.session_state.setdefault(
+        "funil_sim_edit_modes", dict(_DEFAULT_SIM_EDIT_MODES),
+    )
+    current = _coerce_sim_mode_value(stage, modes.get(stage, fallback))
+
+    if wkey in st.session_state and st.session_state[wkey] not in options:
+        del st.session_state[wkey]
+    if wkey not in st.session_state:
+        st.session_state[wkey] = current
+
+    chosen = st.selectbox(
+        "Modo",
+        options=list(options),
+        format_func=_sim_mode_label,
+        key=wkey,
+        label_visibility="collapsed",
+    )
+    result = _coerce_sim_mode_value(stage, chosen) if chosen in options else current
+    modes[stage] = result
+    return result
+
+
+def _render_sim_inline_row(
+    label: str,
+    *,
+    cell_class: str,
+    stage: str,
+    key_prefix: str,
+    show_toggle: bool,
+    widget: str,
+    sim_state: dict | None = None,
+    calc_s: dict | None = None,
+    spec: dict | None = None,
+    readonly_text: str = "",
+    sim_s: Scenario | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
+) -> str | float | None:
+    """Linha compacta do Simulador: label | [modo] | valor (uma linha, altura fixa)."""
+    row_marker = f"fr-sim-mode-row {cell_class}" if show_toggle else cell_class
+    if show_toggle:
+        col_l, mode_col, input_col = st.columns(
+            [1.55, 0.62, 1.08], gap="small", vertical_alignment="center",
+        )
+    else:
+        col_l, input_col = st.columns(
+            [1.55, 1], gap="small", vertical_alignment="center",
+        )
+        mode_col = None
+
+    spec_id = spec["id"] if spec else None
+    realism_val: float | None = None
+    if sim_s is not None and spec_id in _SPEC_ID_TO_BENCHMARK_KEY:
+        realism_val = _scenario_metric_value(sim_s, _SPEC_ID_TO_BENCHMARK_KEY[spec_id])
+    lbl_html = _label_with_realism_badge(
+        label,
+        spec_id=spec_id,
+        value=realism_val if realism_val is not None else 0.0,
+        benchmark_metrics=benchmark_metrics,
+    )
+    with col_l:
+        st.markdown(
+            f'<span class="fr-vitrine-editable-row {html.escape(row_marker)}" '
+            f'aria-hidden="true"></span>'
+            f'<span class="lbl bold lbl-chip">{lbl_html}</span>',
+            unsafe_allow_html=True,
+        )
+
+    smode = _sim_edit_mode_for_stage(stage, key_prefix)
+    if mode_col is not None:
+        with mode_col:
+            st.markdown(
+                '<span class="fr-sim-mode-select-wrap" aria-hidden="true"></span>',
+                unsafe_allow_html=True,
+            )
+            smode = _sim_mode_select(stage, key_prefix)
+
+    with input_col:
+        if widget == "readonly":
+            st.markdown(
+                f'<div class="fr-sim-readonly-val">{html.escape(readonly_text)}</div>',
+                unsafe_allow_html=True,
+            )
+            return smode
+        if widget == "pct" and spec is not None and sim_state is not None:
+            pct_field = _SIM_STAGE_PCT_FIELD[stage]
+            valor_inicial = float(sim_state[pct_field]) * 100
+            return float(st.number_input(
+                label,
+                value=valor_inicial,
+                min_value=0.0,
+                max_value=_editable_pct_max(valor_inicial),
+                step=0.5,
+                format="%.2f",
+                key=_sim_widget_key(spec, key_prefix),
+                label_visibility="collapsed",
+            ))
+        if widget == "vol":
+            vol_field = _SIM_STAGE_VOLUME_FIELD[stage]
+            base = float((calc_s or {}).get(vol_field, 0))
+            return float(st.number_input(
+                label,
+                value=base,
+                min_value=0.0,
+                step=1.0,
+                format="%.2f",
+                key=f"{key_prefix}_vol_{stage}",
+                label_visibility="collapsed",
+            ))
+    return smode
+
+
+def _render_sim_vitrine_row(
+    spec: dict,
+    label: str,
+    *,
+    sim_state: dict,
+    calc_s: dict,
+    sim_s: Scenario,
+    div: int,
+    cell_class: str,
+    key_prefix: str,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    """Célula do Simulador — taxa ou volume conforme modo da etapa."""
+    stage = spec.get("sim_stage")
+    role = spec.get("sim_role")
+    rid = spec["id"]
+
+    if stage is None:
+        inp = spec["input"]
+        step = 100.0 if inp == "inv_period" else (0.5 if inp == "pct" else 1.0)
+        rid = spec["id"]
+        _render_scenario_row_editable(
+            label,
+            _sim_widget_key(spec, key_prefix),
+            _sim_editable_value(spec, sim_state, div=div),
+            cell_class=cell_class,
+            step=step,
+            is_percent=(inp == "pct"),
+            spec_id=rid if rid in _SPEC_ID_TO_BENCHMARK_KEY else None,
+            realism_value=_scenario_metric_value(
+                sim_s, _SPEC_ID_TO_BENCHMARK_KEY[rid],
+            ) if rid in _SPEC_ID_TO_BENCHMARK_KEY else None,
+            benchmark_metrics=benchmark_metrics,
+        )
+        return
+
+    smode = _sim_edit_mode_for_stage(stage, key_prefix)
+
+    if role == "pct":
+        if smode == "taxa":
+            _render_sim_inline_row(
+                label,
+                cell_class=cell_class,
+                stage=stage,
+                key_prefix=key_prefix,
+                show_toggle=True,
+                widget="pct",
+                sim_state=sim_state,
+                spec=spec,
+                sim_s=sim_s,
+                benchmark_metrics=benchmark_metrics,
+            )
+        else:
+            _render_scenario_row_readonly(
+                label,
+                _format_vitrine_value(
+                    rid, float(sim_state[_SIM_STAGE_PCT_FIELD[stage]]),
+                ),
+                computed=False,
+                cell_class=cell_class,
+            )
+        return
+
+    if role == "volume":
+        vol_field = _SIM_STAGE_VOLUME_FIELD[stage]
+        if stage == "leads":
+            if smode == "volume":
+                _render_sim_inline_row(
+                    label,
+                    cell_class=cell_class,
+                    stage=stage,
+                    key_prefix=key_prefix,
+                    show_toggle=True,
+                    widget="vol",
+                    calc_s=calc_s,
+                    sim_s=sim_s,
+                    benchmark_metrics=benchmark_metrics,
+                )
+            else:
+                _render_sim_inline_row(
+                    label,
+                    cell_class=cell_class,
+                    stage=stage,
+                    key_prefix=key_prefix,
+                    show_toggle=True,
+                    widget="readonly",
+                    readonly_text=_format_vitrine_value("leads", calc_s["leads"]),
+                    sim_s=sim_s,
+                    benchmark_metrics=benchmark_metrics,
+                )
+            return
+        if smode == "volume":
+            _render_sim_inline_row(
+                label,
+                cell_class=cell_class,
+                stage=stage,
+                key_prefix=key_prefix,
+                show_toggle=True,
+                widget="vol",
+                calc_s=calc_s,
+                sim_s=sim_s,
+                benchmark_metrics=benchmark_metrics,
+            )
+        else:
+            _render_scenario_row_readonly(
+                label,
+                _format_vitrine_value(vol_field, calc_s[vol_field]),
+                computed=True,
+                cell_class=cell_class,
+            )
+        return
+
+
 def _vitrine_row_specs(periodo: str) -> list[dict]:
     """Ordem fixa dos indicadores — mesma sequência nas três colunas."""
     return [
@@ -1096,22 +1809,24 @@ def _vitrine_row_specs(periodo: str) -> list[dict]:
          "input": "inv_period"},
         {"id": "cl", "label": "Custo por Lead (R$)", "sim_editable": True,
          "input": "money"},
-        {"id": "leads", "label": "Leads", "computed": True, "group_after": True},
-        {"id": "pct_la", "label": "% Lead → Aplicação", "sim_editable": True,
-         "input": "pct"},
+        {"id": "leads", "label": "Leads", "computed": True, "group_after": True,
+         "sim_stage": "leads", "sim_role": "volume"},
+        {"id": "pct_la", "label": "% Lead → Aplicação",
+         "sim_stage": "la", "sim_role": "pct"},
         {"id": "aplicacoes", "label": "Aplicações", "computed": True,
-         "group_after": True},
-        {"id": "pct_a_ag", "label": "% Aplicação → Agendamento", "sim_editable": True,
-         "input": "pct"},
+         "group_after": True, "sim_stage": "la", "sim_role": "volume"},
+        {"id": "pct_a_ag", "label": "% Aplicação → Agendamento",
+         "sim_stage": "a_ag", "sim_role": "pct"},
         {"id": "agendamentos", "label": "Agendamentos", "computed": True,
-         "group_after": True},
+         "group_after": True, "sim_stage": "a_ag", "sim_role": "volume"},
         {"id": "pct_ag_c", "label": "% Agendamento → Comparecimento",
-         "sim_editable": True, "input": "pct"},
-        {"id": "comparecimento", "label": "Comparecimento", "computed": True},
-        {"id": "pct_c_v", "label": "% Comparecimento → Venda", "sim_editable": True,
-         "input": "pct"},
+         "sim_stage": "ag_c", "sim_role": "pct"},
+        {"id": "comparecimento", "label": "Comparecimento", "computed": True,
+         "sim_stage": "ag_c", "sim_role": "volume"},
+        {"id": "pct_c_v", "label": "% Comparecimento → Venda",
+         "sim_stage": "c_v", "sim_role": "pct"},
         {"id": "vendas", "label": "Vendas", "computed": True, "highlight": True,
-         "group_after": True},
+         "group_after": True, "sim_stage": "c_v", "sim_role": "volume"},
         {"id": "ticket", "label": "Ticket Médio (R$)", "sim_editable": True,
          "input": "money", "group_after": True},
     ]
@@ -1158,9 +1873,7 @@ def _calc_atual_display(
     atual_s: Scenario,
     periodo: str,
 ) -> dict:
-    if snapshot is not None:
-        return snapshot_calc_display(snapshot, periodo, PERIODOS)
-    return calcular_funil(atual_s, periodo)
+    return _calc_atual_para_tela(snapshot, atual_s, periodo)
 
 
 def _vitrine_readonly_value(
@@ -1261,6 +1974,7 @@ def _render_vitrine_comparison(
     *,
     atual_s: Scenario,
     snapshot: FunnelSnapshot | None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[Scenario, Scenario, Scenario]:
     """Comparativo em grade: uma linha horizontal por indicador (Atual | Sim | Meta)."""
     st.markdown('<div class="fr-vitrine-sync">', unsafe_allow_html=True)
@@ -1269,7 +1983,7 @@ def _render_vitrine_comparison(
     div = PERIODOS[periodo]["divisor"]
     rows = _vitrine_row_specs(periodo)
     n_rows = len(rows)
-    calc_atual_display = _calc_atual_display(snapshot, atual_s, periodo)
+    calc_atual_display = _calc_atual_para_tela(snapshot, atual_s, periodo)
 
     h_atual, h_sim, h_meta = st.columns(3, gap="medium")
     with h_atual:
@@ -1296,11 +2010,12 @@ def _render_vitrine_comparison(
 
     sim_state = _ensure_scenario("funil_simulador", atual_s)
     meta_s = _get_meta_oficial()
+    _apply_simulator_from_session(sim_state, periodo, div, key_prefix)
 
     for idx, spec in enumerate(rows):
         sim_s = Scenario(**sim_state)
-        calc_s = calcular_funil(sim_s, periodo)
-        calc_m = calcular_funil(meta_s, periodo)
+        calc_s = calcular_funil_exibicao(sim_s, periodo)
+        calc_m = calcular_funil_exibicao(meta_s, periodo)
 
         label = spec["label"]
         is_first = idx == 0
@@ -1336,18 +2051,18 @@ def _render_vitrine_comparison(
                 group_after=group_after, group_start=group_start,
                 zebra=zebra,
             )
-            if spec.get("sim_editable"):
-                inp = spec["input"]
-                step = 100.0 if inp == "inv_period" else (0.5 if inp == "pct" else 1.0)
-                raw = _render_scenario_row_editable(
+            if spec.get("sim_editable") or spec.get("sim_stage"):
+                _render_sim_vitrine_row(
+                    spec,
                     label,
-                    _sim_widget_key(spec, key_prefix),
-                    _sim_editable_value(spec, sim_state, div=div),
+                    sim_state=sim_state,
+                    calc_s=calc_s,
+                    sim_s=sim_s,
+                    div=div,
                     cell_class=cell_sim,
-                    step=step,
-                    is_percent=(inp == "pct"),
+                    key_prefix=key_prefix,
+                    benchmark_metrics=benchmark_metrics,
                 )
-                _apply_sim_editable(spec, sim_state, raw, div=div)
             else:
                 val_s, comp_s, hi_s = _vitrine_readonly_value(spec, sim_s, calc_s)
                 _render_scenario_row_readonly(
@@ -1369,8 +2084,8 @@ def _render_vitrine_comparison(
     st.session_state["funil_simulador"] = sim_state
 
     sim_s = Scenario(**sim_state)
-    calc_s = calcular_funil(sim_s, periodo)
-    calc_m = calcular_funil(meta_s, periodo)
+    calc_s = calcular_funil_exibicao(sim_s, periodo)
+    calc_m = calcular_funil_exibicao(meta_s, periodo)
 
     f_atual, f_sim, f_meta = st.columns(3, gap="medium")
     with f_atual:
@@ -1378,21 +2093,21 @@ def _render_vitrine_comparison(
             '<div class="fr-vitrine-fatu-shell col-atual">',
             unsafe_allow_html=True,
         )
-        _render_faturamento_block(calc_atual_display)
+        _render_faturamento_block(calc_atual_display, modo="real")
         st.markdown("</div></div>", unsafe_allow_html=True)
     with f_sim:
         st.markdown(
             '<div class="fr-vitrine-fatu-shell col-sim">',
             unsafe_allow_html=True,
         )
-        _render_faturamento_block(calc_s)
+        _render_faturamento_block(calc_s, modo="projetado")
         st.markdown("</div></div>", unsafe_allow_html=True)
     with f_meta:
         st.markdown(
             '<div class="fr-vitrine-fatu-shell col-meta">',
             unsafe_allow_html=True,
         )
-        _render_faturamento_block(calc_m)
+        _render_faturamento_block(calc_m, modo="projetado")
         st.markdown("</div></div>", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -1418,12 +2133,20 @@ def _render_scenario_header(titulo: str, periodo: str, accent: str, *,
     )
 
 
-def _render_faturamento_block(calc: dict) -> None:
+def _render_faturamento_block(calc: dict, *, modo: str = "projetado") -> None:
+    """modo: 'real' (Atual/montante) | 'projetado' (vendas × ticket)."""
+    if modo == "real":
+        titulo = "Faturamento (real)"
+        hint = "Montante de vendas no período — dado real, não é vendas × ticket."
+    else:
+        titulo = "Faturamento projetado"
+        hint = "Vendas estimadas (inteiro) × ticket médio do cenário."
     st.markdown(
         f'<div class="fr-card fr-fatu-card">'
         f'  <div class="fr-fatu">'
-        f'    <div class="lbl">Faturamento</div>'
+        f'    <div class="lbl">{html.escape(titulo)}</div>'
         f'    <div class="val">{html.escape(brl(calc["faturamento"]))}</div>'
+        f'    <div class="fr-fatu-hint">{html.escape(hint)}</div>'
         f'  </div>'
         f'</div>',
         unsafe_allow_html=True,
@@ -1540,6 +2263,13 @@ def _render_meta_editor(
     )
     st.session_state["funil_meta_draft"] = asdict(draft)
 
+    if _meta_draft_differs_from_official():
+        st.warning(
+            "Há alterações no rascunho que ainda não foram aplicadas. "
+            "A coluna Meta, o gargalo, os gaps e os exports continuam usando "
+            "a meta oficial salva até você clicar em «Aplicar metas oficiais»."
+        )
+
     st.warning(
         "Você está prestes a alterar as metas oficiais do período selecionado "
         f"({data_ini.strftime('%d/%m/%Y')}–{data_fim.strftime('%d/%m/%Y')}). "
@@ -1590,44 +2320,50 @@ def _render_meta_editor(
 
 
 def _render_alerta_gargalo(impactos: list[dict], periodo: str) -> None:
-    """Bloco de alerta com a etapa de maior impacto + ranking dos top-5."""
+    """Alerta — meta oficial; ganho em faturamento projetado (base mensal)."""
     top = impactos[0] if impactos else None
-    div = PERIODOS[periodo]["divisor"]
     p_label = PERIODOS[periodo]["label"].lower()
 
     if not top or top["impacto"] <= 0:
         st.markdown(
             '<div class="fr-alert healthy">'
             '  <div class="kicker">↑ Funil saudável</div>'
-            '  <h4>Cenário acima ou alinhado com a meta</h4>'
-            '  <p class="note">Em todas as etapas, o cenário Atual está '
-            'pelo menos no nível da meta. Não há gargalo a ser endereçado.</p>'
+            '  <h4>Cenário acima ou alinhado com a meta oficial</h4>'
+            '  <p class="note">Comparado à meta salva para este período, o '
+            'Atual está em dia em todas as etapas. Não há gargalo crítico.</p>'
             '</div>',
             unsafe_allow_html=True,
         )
         return
 
-    ganho_periodo = top["impacto"] / div
+    ganho_mes = float(top["impacto"])
+    ganho_view = _gargalo_impacto_exibicao(ganho_mes, periodo)
     fmt_atual = brl(top["atual"]) if top.get("is_money") else pct_fmt(top["atual"])
     fmt_meta  = brl(top["meta"])  if top.get("is_money") else pct_fmt(top["meta"])
+    ganho_k = (
+        f"Ganho na visualização ({p_label})"
+        if periodo != "mes"
+        else "Ganho potencial (mês)"
+    )
 
     pri_rows = []
     for idx, i in enumerate(
         [x for x in impactos[:5] if x["impacto"] > 0], start=1
     ):
+        imp_v = _gargalo_impacto_exibicao(float(i["impacto"]), periodo)
         pri_rows.append(
             f'<div class="pri-row">'
             f'  <span class="left">'
             f'    <span class="badge">{idx}</span>{html.escape(i["label"])}'
             f'  </span>'
-            f'  <span class="right">+ {html.escape(brl(i["impacto"]))}</span>'
+            f'  <span class="right">+ {html.escape(brl(imp_v))}</span>'
             f'</div>'
         )
     pri_block = ""
     if len(pri_rows) > 1:
         pri_block = (
             '<div class="pri">'
-            '  <div class="pri-title">Ordem de prioridade (impacto mensal)</div>'
+            f'  <div class="pri-title">Ordem de prioridade ({p_label})</div>'
             + "".join(pri_rows)
             + '</div>'
         )
@@ -1638,15 +2374,16 @@ def _render_alerta_gargalo(impactos: list[dict], periodo: str) -> None:
         f'  <h4>{html.escape(top["label"])}</h4>'
         f'  <div class="grid">'
         f'    <div><div class="k">Atual</div><div class="v">{html.escape(fmt_atual)}</div></div>'
-        f'    <div><div class="k">Meta</div><div class="v">{html.escape(fmt_meta)}</div></div>'
+        f'    <div><div class="k">Meta oficial</div><div class="v">{html.escape(fmt_meta)}</div></div>'
         f'    <div>'
-        f'      <div class="k">Ganho se ajustar ({html.escape(p_label)})</div>'
-        f'      <div class="v accent">+ {html.escape(brl(ganho_periodo))}</div>'
+        f'      <div class="k">{html.escape(ganho_k)}</div>'
+        f'      <div class="v accent">+ {html.escape(brl(ganho_view))}</div>'
         f'    </div>'
         f'  </div>'
-        f'  <p class="note">Esta é a etapa com maior alavancagem: '
-        f'levando ela ao nível da meta (mantendo o resto igual), o '
-        f'faturamento já saltaria pelo valor acima.</p>'
+        f'  <p class="note">Simulação: só esta etapa sobe até a meta oficial; '
+        f'demais parâmetros do Atual permanecem iguais. Ganho em '
+        f'<strong>faturamento projetado</strong> (vendas × ticket). '
+        f'Base mensal: + {html.escape(brl(ganho_mes))}/mês.</p>'
         f'  {pri_block}'
         f'</div>',
         unsafe_allow_html=True,
@@ -1655,22 +2392,26 @@ def _render_alerta_gargalo(impactos: list[dict], periodo: str) -> None:
 
 def _render_gap_card(label: str, atual: float, meta: float,
                      periodo: str, is_money: bool = False) -> None:
+    """Gap Atual → meta oficial na escala da visualização (entrada já mensal)."""
     div = PERIODOS[periodo]["divisor"]
     gap = meta - atual
-    pct = (gap / atual * 100) if atual > 0 else 0
     positivo = gap > 0
-    valor = brl(gap / div) if is_money else int_br(gap / div)
-    atual_f = brl(atual / div) if is_money else int_br(atual / div)
-    meta_f  = brl(meta  / div) if is_money else int_br(meta  / div)
-    delta_cls = "up" if positivo else "down"
-    arrow = "↑" if positivo else "↓"
+    gap_view = gap / div
+    atual_view = atual / div
+    meta_view = meta / div
+    if is_money:
+        faltam = brl(abs(gap_view)) if positivo else brl(0)
+        atual_f, meta_f = brl(atual_view), brl(meta_view)
+    else:
+        faltam = int_br(abs(gap_view)) if positivo else int_br(0)
+        atual_f, meta_f = int_br(atual_view), int_br(meta_view)
+    status = "Faltam" if positivo else ("Sobra" if gap < 0 else "No alvo")
 
     st.markdown(
         f'<div class="fr-gap">'
         f'  <div class="lbl">{html.escape(label)}</div>'
         f'  <div class="row1">'
-        f'    <span class="big">{html.escape(valor)}</span>'
-        f'    <span class="delta {delta_cls}">{arrow} {abs(pct):.0f}%</span>'
+        f'    <span class="big">{html.escape(status)} {html.escape(faltam)}</span>'
         f'  </div>'
         f'  <div class="row2">'
         f'    <span>Atual: <span class="v">{html.escape(atual_f)}</span></span>'
@@ -1697,8 +2438,8 @@ def _render_compare(calc_atual: dict, calc_sim: dict, calc_meta: dict) -> None:
         f'    <div>'
         f'      <div class="kicker">Simulador vs Atual</div>'
         f'      {title_html}'
-        f'      <p class="note">Diferença de faturamento entre o que você '
-        f'está simulando e o cenário Atual real.</p>'
+        f'      <p class="note">Diferença de faturamento projetado '
+        f'(vendas × ticket) entre Simulador e Atual real.</p>'
         f'    </div>'
         f'    <div class="right">'
         f'      <div class="col"><div class="k">Atual</div>'
@@ -1733,9 +2474,38 @@ excluir_testes_aplicacoes = st.checkbox(
     key="onepage_excluir_testes_aplicacoes",
     help=(
         "Remove e-mails de teste das aplicações (Typeform). "
-        "Mesma regra da One Page."
+        "Mesma regra da One Page — afeta Atual, % Aplicação → Agendamento e exports."
     ),
 )
+
+st.session_state.setdefault("funil_hist_base", "90")
+hist_base_key = st.selectbox(
+    "Base histórica de comparação",
+    options=list(HISTORICO_PERIODOS.keys()),
+    format_func=lambda k: HISTORICO_PERIODOS[k]["label"],
+    key="funil_hist_base",
+    help=(
+        "Não altera o período principal da página. "
+        "Usa o intervalo imediatamente anterior ao filtro global."
+    ),
+)
+_hist_days = int(HISTORICO_PERIODOS[hist_base_key]["days"])
+_hist_window = resolve_historical_window(ctx.data_ini, _hist_days)
+_benchmark_raw: dict[str, Any] = {}
+_benchmark_metrics: dict[str, dict[str, Any]] | None = None
+if _hist_window is None:
+    _benchmark_raw = {"error": "Período principal sem histórico anterior suficiente."}
+else:
+    _h_ini, _h_fim = _hist_window
+    with st.spinner("Calculando benchmark histórico…"):
+        _benchmark_raw = compute_funil_benchmark(
+            _h_ini.isoformat(),
+            _h_fim.isoformat(),
+            hist_base_key,
+            excluir_testes_aplicacoes,
+        )
+    if not _benchmark_raw.get("error"):
+        _benchmark_metrics = _benchmark_raw.get("metrics")
 
 _funnel_snapshot: FunnelSnapshot | None = None
 try:
@@ -1777,26 +2547,41 @@ with c_reset:
 with c_export:
     _export_top_slot = st.empty()
 
-# Alerta de gargalo (Atual real vs Meta oficial).
+# Alerta de gargalo (Atual real vs Meta oficial salva).
 impactos = identificar_gargalos(atual_s, meta_oficial_s)
 _render_alerta_gargalo(impactos, periodo)
+st.caption(
+    "Gargalo e gaps comparam o Atual (dados reais) com a **meta oficial** "
+    "salva para este período — não o rascunho do editor até você aplicar."
+)
+
+_render_benchmark_historico(
+    _benchmark_raw,
+    snapshot=_funnel_snapshot,
+    atual_s=atual_s,
+    meta_s=meta_oficial_s,
+)
 
 section_title(
     "Comparativo de cenários",
-    "Compare Atual, Simulador e Meta — ajuste o cenário na coluna central.",
+    "Simulador: em cada etapa escolha «Editar %» ou «Editar vol.» — o outro valor recalcula",
 )
+_ensure_sim_edit_modes()
 atual_s, sim_s, meta_s = _render_vitrine_comparison(
-    periodo, atual_s=atual_s, snapshot=_funnel_snapshot,
+    periodo,
+    atual_s=atual_s,
+    snapshot=_funnel_snapshot,
+    benchmark_metrics=_benchmark_metrics,
 )
 
-calc_atual = _calc_atual_display(_funnel_snapshot, atual_s, periodo)
-calc_sim   = calcular_funil(sim_s, periodo)
-calc_meta  = calcular_funil(meta_s, periodo)
+calc_atual = _calc_atual_para_tela(_funnel_snapshot, atual_s, periodo)
+calc_sim = calcular_funil_exibicao(sim_s, periodo)
+calc_meta = calcular_funil_exibicao(meta_oficial_s, periodo)
 
 # Gap até a meta — 4 cards lado a lado.
 section_title(
     "Gap até a meta",
-    f"diferença Atual → Meta no período ({PERIODOS[periodo]['label'].lower()})",
+    "quanto falta do Atual até a meta oficial — valores na escala da visualização",
 )
 g1, g2, g3, g4 = st.columns(4, gap="small")
 with g1:
@@ -1849,8 +2634,8 @@ st.markdown(
     f'Atual: dados reais do período ({ctx.data_ini.strftime("%d/%m/%Y")}'
     f'–{ctx.data_fim.strftime("%d/%m/%Y")}), mesmas regras da One Page. '
     'Semana e Dia são aproximações proporcionais (÷ 4 e ÷ 28). '
-    'Edite o Simulador na coluna central; metas oficiais no editor abaixo '
-    '(salvas ao clicar em Aplicar).'
+    'Simulador: projeção com vendas inteiras e faturamento = vendas × ticket. '
+    'Atual: faturamento real (montante). Metas oficiais no editor abaixo.'
     '</div>',
     unsafe_allow_html=True,
 )

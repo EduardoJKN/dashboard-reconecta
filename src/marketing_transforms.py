@@ -1835,12 +1835,13 @@ def criativos_top_por_nome_ranking(
                  "thumbnail_url", "image_url", "permalink_url",
                  "effective_status", "status_label"]
     cols_extra = ["qtd_ad_ids", "qtd_campaigns", "qtd_adsets", "leads_meta", "cpl_meta"]
+    cols_aplicacoes = ["aplicacoes", "aplicacoes_mais_12", "aplicacoes_menos_12"]
     cols_resultado = ["leads_total", "leads_mais_12", "leads_menos_12",
                       "leads_nao_atua",
                       "agendamentos", "comparecimentos", "no_shows",
                       "deals", "deals_ganhos", "vendas", "valor_receita",
                       "cpl", "cpl_mais_12", "cac", "roas"]
-    cols = cols_base + cols_extra + cols_resultado
+    cols = cols_base + cols_extra + cols_aplicacoes + cols_resultado
 
     empty = pd.DataFrame(columns=cols)
     if df_top_nome is None or df_top_nome.empty:
@@ -1866,6 +1867,12 @@ def criativos_top_por_nome_ranking(
             base[lc] = pd.to_numeric(base[lc], errors="coerce").fillna(0)
         else:
             base[lc] = 0.0
+
+    for ac in cols_aplicacoes:
+        if ac in base.columns:
+            base[ac] = pd.to_numeric(base[ac], errors="coerce").fillna(0)
+        else:
+            base[ac] = 0.0
 
     if "cpl_real" in base.columns:
         base["cpl"] = pd.to_numeric(base["cpl_real"], errors="coerce")
