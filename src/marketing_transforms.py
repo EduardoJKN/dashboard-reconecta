@@ -2446,9 +2446,14 @@ _CRI_FUNIL_ZEROS = {
     "leads_totais": 0, "leads_qualificados": 0,
     "leads_mais_12": 0, "leads_menos_12": 0, "leads_nao_atua": 0,
     "agendamentos": 0, "comparecimentos": 0, "vendas_novas": 0,
+    "aplicacoes": 0, "aplicacoes_mais_12": 0, "aplicacoes_menos_12": 0,
+    "agendamentos_apl": 0, "comparecimentos_apl": 0, "vendas_aplicacoes": 0,
     "taxa_qualificacao": 0.0, "taxa_mais_12": 0.0,
     "taxa_lead_agendamento": 0.0, "taxa_lead_comparecimento": 0.0,
     "taxa_lead_venda_nova": 0.0,
+    "taxa_aplicacao_mais_12": 0.0,
+    "taxa_apl_agendamento": 0.0, "taxa_apl_comparecimento": 0.0,
+    "taxa_apl_venda_nova": 0.0,
     "cpl": 0.0, "cpl_mais_12": 0.0, "cac": 0.0,
 }
 
@@ -2457,6 +2462,78 @@ _TODOS_AD_NAME_NORM = "__todos__"
 _VINCULADOS_AD_NAME_NORM = "__vinculados__"
 _SEM_CRIATIVO_AD_NAME_NORM = "__sem_criativo_identificado__"
 _SEM_CAMPANHA_NAME_NORM = "__sem_campanha_identificada__"
+
+
+def _fmt_inv_funil(v: float) -> str:
+    return f"R$ {v:,.0f}".replace(",", ".") if v >= 1 else "R$ 0"
+
+
+def formatar_label_funil_opcao(
+    nome: str,
+    invest: float,
+    leads: int,
+    aplicacoes: int,
+    vendas: int,
+) -> str:
+    """Label unificado do selectbox do funil (lista + valor selecionado).
+
+    Formato: ``Nome · R$ X · Y leads · Z apl. · W vendas``."""
+    return (
+        f"{nome} · {_fmt_inv_funil(invest)} · "
+        f"{leads} lead{'s' if leads != 1 else ''} · "
+        f"{aplicacoes} apl. · "
+        f"{vendas} venda{'s' if vendas != 1 else ''}"
+    )
+
+
+def formatar_label_funil_row(row) -> str:
+    """Monta label a partir de uma row do df_funil ou opções sintéticas."""
+    nome = (row.get("ad_name") or row.get("ad_name_norm") or "(sem nome)")
+    nome_short = nome if len(str(nome)) <= 56 else str(nome)[:53] + "…"
+    return formatar_label_funil_opcao(
+        nome_short,
+        float(row.get("investimento") or 0),
+        int(row.get("leads_totais") or 0),
+        int(row.get("aplicacoes") or 0),
+        int(row.get("vendas_novas") or 0),
+    )
+
+
+def _recompute_aplicacoes_taxas(out: dict) -> None:
+    """Taxas do funil de aplicações — denominador = aplicacoes."""
+    apl = int(out.get("aplicacoes") or 0)
+    apl12 = int(out.get("aplicacoes_mais_12") or 0)
+    agend = int(out.get("agendamentos_apl") or 0)
+    compar = int(out.get("comparecimentos_apl") or 0)
+    vendas = int(out.get("vendas_aplicacoes") or 0)
+    out["taxa_aplicacao_mais_12"] = (apl12 / apl * 100) if apl > 0 else 0.0
+    out["taxa_apl_agendamento"] = (agend / apl * 100) if apl > 0 else 0.0
+    out["taxa_apl_comparecimento"] = (compar / apl * 100) if apl > 0 else 0.0
+    out["taxa_apl_venda_nova"] = (vendas / apl * 100) if apl > 0 else 0.0
+
+
+def _aplicacoes_kpis_from_row(row: dict | pd.Series, prefix: str) -> dict:
+    """Extrai KPIs de aplicações de colunas globais/vinculados (1ª row do df)."""
+    sfx = f"_{prefix}" if prefix else ""
+    return {
+        "aplicacoes": int(row.get(f"aplicacoes{sfx}") or 0),
+        "aplicacoes_mais_12": int(row.get(f"aplicacoes_mais_12{sfx}") or 0),
+        "aplicacoes_menos_12": int(row.get(f"aplicacoes_menos_12{sfx}") or 0),
+        "agendamentos_apl": int(row.get(f"agendamentos_apl{sfx}") or 0),
+        "comparecimentos_apl": int(row.get(f"comparecimentos_apl{sfx}") or 0),
+        "vendas_aplicacoes": int(row.get(f"vendas_aplicacoes{sfx}") or 0),
+    }
+
+
+def _overlay_aplicacoes_kpis(out: dict, df_funil: pd.DataFrame, scope: str) -> dict:
+    """Sobrepõe KPIs de aplicações a partir de colunas globais do SQL."""
+    if df_funil is None or df_funil.empty:
+        return out
+    row = df_funil.iloc[0]
+    apl = _aplicacoes_kpis_from_row(row, scope)
+    out.update(apl)
+    _recompute_aplicacoes_taxas(out)
+    return out
 
 
 def lista_criativos_funil(
@@ -2500,19 +2577,27 @@ def lista_criativos_funil(
     if df.empty:
         return pd.DataFrame(columns=["ad_name_norm", "ad_name", "label"])
 
-    def _label(row) -> str:
-        nome = (row.get("ad_name") or row.get("ad_name_norm") or "(sem nome)")
-        nome_short = nome if len(nome) <= 56 else nome[:53] + "…"
-        invest = float(row.get("investimento") or 0)
-        leads = int(row.get("leads_totais") or 0)
-        if invest >= 1:
-            inv_fmt = f"R$ {invest:,.0f}".replace(",", ".")
-        else:
-            inv_fmt = "R$ 0"
-        return f"{nome_short} · {inv_fmt} · {leads} lead{'s' if leads != 1 else ''}"
-
     def _fmt_inv(v: float) -> str:
-        return f"R$ {v:,.0f}".replace(",", ".") if v >= 1 else "R$ 0"
+        return _fmt_inv_funil(v)
+
+    def _apl_globais(source: pd.DataFrame) -> int:
+        if source is None or source.empty:
+            return 0
+        row = source.iloc[0]
+        if "aplicacoes_globais" in row.index:
+            return int(row.get("aplicacoes_globais") or 0)
+        return 0
+
+    def _apl_vinculados(source: pd.DataFrame) -> int:
+        if source is None or source.empty:
+            return 0
+        row = source.iloc[0]
+        if "aplicacoes_vinculados" in row.index:
+            return int(row.get("aplicacoes_vinculados") or 0)
+        return 0
+
+    def _label(row) -> str:
+        return formatar_label_funil_row(row)
 
     # Agregados do df:
     #   - "Todos" (fallback do df quando não vêm oficiais) inclui TUDO.
@@ -2537,23 +2622,26 @@ def lista_criativos_funil(
                 else leads_sum_todos)
     vendas_t = (int(vendas_novas_oficial) if vendas_novas_oficial is not None
                 else vendas_sum_todos)
+    apl_t = _apl_globais(df)
     sinteticas.append({
         "ad_name_norm": _TODOS_AD_NAME_NORM,
         "ad_name":      "Todos os resultados",
-        "label":        f"Todos os resultados · {_fmt_inv(invest_t)} · "
-                        f"{leads_t} lead{'s' if leads_t != 1 else ''} · "
-                        f"{vendas_t} venda{'s' if vendas_t != 1 else ''}",
+        "label":        formatar_label_funil_opcao(
+            "Todos os resultados", invest_t, leads_t, apl_t, vendas_t,
+        ),
     })
 
     # 2) "Totais vinculados aos leads" — soma per-criativo do df_funil,
     # EXCLUINDO o bucket sem identificado. Universo rastreável por origem
     # de marketing. Por construção: vinculados ≤ todos.
+    apl_vinc = _apl_vinculados(df)
     sinteticas.append({
         "ad_name_norm": _VINCULADOS_AD_NAME_NORM,
         "ad_name":      "Totais vinculados aos leads",
-        "label":        f"Totais vinculados aos leads · {_fmt_inv(invest_sum_vinc)} · "
-                        f"{leads_sum_vinc} lead{'s' if leads_sum_vinc != 1 else ''} · "
-                        f"{vendas_sum_vinc} venda{'s' if vendas_sum_vinc != 1 else ''}",
+        "label":        formatar_label_funil_opcao(
+            "Totais vinculados aos leads",
+            invest_sum_vinc, leads_sum_vinc, apl_vinc, vendas_sum_vinc,
+        ),
     })
 
     # "Sem criativo/campanha identificad{o,a}" — aparece quando o bucket
@@ -2572,16 +2660,15 @@ def lista_criativos_funil(
         row_sc = df[sem_mask].iloc[0]
         vendas_sc = int(row_sc.get("vendas_novas") or 0)
         leads_sc  = int(row_sc.get("leads_totais") or 0)
-        if vendas_sc > 0 or leads_sc > 0:
-            partes = []
-            if leads_sc > 0:
-                partes.append(f"{leads_sc} lead{'s' if leads_sc != 1 else ''}")
-            if vendas_sc > 0:
-                partes.append(f"{vendas_sc} venda{'s' if vendas_sc != 1 else ''}")
+        apl_sc    = int(row_sc.get("aplicacoes") or 0)
+        if vendas_sc > 0 or leads_sc > 0 or apl_sc > 0:
+            invest_sc = float(row_sc.get("investimento") or 0)
             sinteticas.append({
                 "ad_name_norm": bucket_norm,
                 "ad_name":      bucket_label,
-                "label":        f"{bucket_label} · " + " · ".join(partes),
+                "label":        formatar_label_funil_opcao(
+                    bucket_label, invest_sc, leads_sc, apl_sc, vendas_sc,
+                ),
             })
         break
 
@@ -2688,7 +2775,7 @@ def _criativo_funil_kpis_todos(
     pra soma do df. Demais cards (Leads +12, Não atua, Agendamentos,
     Comparecimentos) continuam vindo da soma — não há fonte oficial
     direta pra eles no contexto de Marketing."""
-    return _kpis_funil_agregado(
+    out = _kpis_funil_agregado(
         df_funil,
         ad_name_norm_out=_TODOS_AD_NAME_NORM,
         ad_name_out="Todos os resultados",
@@ -2696,6 +2783,7 @@ def _criativo_funil_kpis_todos(
         vendas_novas_oficial=vendas_novas_oficial,
         investimento_oficial=investimento_oficial,
     )
+    return _overlay_aplicacoes_kpis(out, df_funil, "globais")
 
 
 def _criativo_funil_kpis_vinculados(df_funil: pd.DataFrame) -> dict:
@@ -2707,11 +2795,12 @@ def _criativo_funil_kpis_vinculados(df_funil: pd.DataFrame) -> dict:
     (linhas com utm preenchido). Sem overrides. Por construção, esse
     total nunca fica maior que 'Todos os resultados'."""
     df = _excluir_bucket_sem_identificado(df_funil)
-    return _kpis_funil_agregado(
+    out = _kpis_funil_agregado(
         df,
         ad_name_norm_out=_VINCULADOS_AD_NAME_NORM,
         ad_name_out="Totais vinculados aos leads",
     )
+    return _overlay_aplicacoes_kpis(out, df_funil, "vinculados")
 
 
 def _excluir_bucket_sem_identificado(df_funil: pd.DataFrame) -> pd.DataFrame:
@@ -2773,11 +2862,15 @@ def criativo_funil_kpis(df_funil: pd.DataFrame,
     int_cols = ("qtd_adids", "impressoes", "cliques", "link_clicks", "alcance",
                 "leads_totais", "leads_qualificados", "leads_mais_12",
                 "leads_menos_12", "leads_nao_atua",
-                "agendamentos", "comparecimentos", "vendas_novas")
+                "agendamentos", "comparecimentos", "vendas_novas",
+                "aplicacoes", "aplicacoes_mais_12", "aplicacoes_menos_12",
+                "agendamentos_apl", "comparecimentos_apl", "vendas_aplicacoes")
     float_cols = ("investimento", "ctr", "cpc",
                   "taxa_qualificacao", "taxa_mais_12",
                   "taxa_lead_agendamento", "taxa_lead_comparecimento",
                   "taxa_lead_venda_nova",
+                  "taxa_aplicacao_mais_12", "taxa_apl_agendamento",
+                  "taxa_apl_comparecimento", "taxa_apl_venda_nova",
                   "cpl", "cpl_mais_12", "cac")
     for c in row:
         if c in int_cols:
@@ -2786,6 +2879,7 @@ def criativo_funil_kpis(df_funil: pd.DataFrame,
             out[c] = float(row[c]) if row[c] is not None else 0.0
         else:
             out[c] = row[c]
+    _recompute_aplicacoes_taxas(out)
     return out
 
 
@@ -2808,6 +2902,57 @@ def criativo_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
         float(k.get("vendas_novas", 0) or 0),
     ]
     return labels, values
+
+
+def build_funil_trilha_leads_steps(k: dict) -> list[dict]:
+    """4 etapas principais do funil de leads (sem +12 como etapa sequencial).
+
+    Base: Leads (com +12/-12 auxiliar). Demais etapas medidas vs. leads totais."""
+    return [
+        {
+            "label": "Leads",
+            "value": float(k.get("leads_totais") or 0),
+            "mais_12": int(k.get("leads_mais_12") or 0),
+            "menos_12": int(k.get("leads_menos_12") or 0),
+            "is_base": True,
+        },
+        {"label": "Agendamentos", "value": float(k.get("agendamentos") or 0)},
+        {"label": "Comparecimentos", "value": float(k.get("comparecimentos") or 0)},
+        {"label": "Vendas", "value": float(k.get("vendas_novas") or 0)},
+    ]
+
+
+def build_funil_trilha_aplicacoes_steps(k: dict) -> list[dict]:
+    """4 etapas principais do funil de aplicações (sem +12 como etapa sequencial)."""
+    return [
+        {
+            "label": "Aplicações",
+            "value": float(k.get("aplicacoes") or 0),
+            "mais_12": int(k.get("aplicacoes_mais_12") or 0),
+            "menos_12": int(k.get("aplicacoes_menos_12") or 0),
+            "is_base": True,
+        },
+        {"label": "Agend. apl.", "value": float(k.get("agendamentos_apl") or 0)},
+        {"label": "Comp. apl.", "value": float(k.get("comparecimentos_apl") or 0)},
+        {"label": "Vendas apl.", "value": float(k.get("vendas_aplicacoes") or 0)},
+    ]
+
+
+# Mantido para compatibilidade (campanhas / mídia). Criativos dual-track usa
+# ``build_funil_trilha_*_steps`` via ``render_funil_selecionado``.
+_FUNIL_APL_KPI_KEYS = (
+    "aplicacoes",
+    "aplicacoes_mais_12",
+    "agendamentos_apl",
+    "comparecimentos_apl",
+    "vendas_aplicacoes",
+)
+
+
+def criativo_funil_etapas_aplicacoes(k: dict) -> tuple[list[str], list[float]]:
+    """Legado — preferir ``build_funil_trilha_aplicacoes_steps`` na UI dual-track."""
+    steps = build_funil_trilha_aplicacoes_steps(k)
+    return [s["label"] for s in steps], [s["value"] for s in steps]
 
 
 # ---------------------------------------------------------------------------

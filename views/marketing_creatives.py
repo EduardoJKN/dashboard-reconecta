@@ -30,6 +30,7 @@ from src.marketing_transforms import (
     agregar_criativos_por_utm_content,
     compara_criativos_utm_content,
     criativo_funil_etapas,
+    criativo_funil_etapas_aplicacoes,
     criativo_funil_kpis,
     criativo_utm_content_kpis,
     criativos_kpis,
@@ -258,6 +259,7 @@ render_funil_selecionado(
         investimento_oficial=_investimento_oficial,
     ),
     etapas_fn=criativo_funil_etapas,
+    etapas_aplicacoes_fn=criativo_funil_etapas_aplicacoes,
     data_ini=ctx.data_ini,
     data_fim=ctx.data_fim,
     nivel="criativo",
@@ -302,7 +304,12 @@ render_funil_selecionado(
         "  duplicação), `stage IN ('Ganho','Fechado Ganho')` e "
         "  `tipo_venda = 'Novo cliente'`.\n"
         "- **Filtros de e-mail de teste:** `@teste`, `teste@`, `smarts`, "
-        "  `reconecta` removidos do universo de leads em todas as etapas."
+        "  `reconecta` removidos do universo de leads em todas as etapas.\n"
+        "- **Funil de aplicações (trilha complementar):** "
+        "`fdw_reconecta.typeform_aplicacoes` cruzado por e-mail dos leads "
+        "do criativo/seleção (`dados_completos = TRUE`, dedupe e-mail/dia, "
+        "fuso `-3h`). Agend./compar./vendas contam só e-mails que "
+        "também são aplicação no período."
     ),
 )
 

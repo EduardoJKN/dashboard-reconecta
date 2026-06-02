@@ -28,16 +28,86 @@ def _fmt_value(v: float) -> str:
     return int_br(int(v))
 
 
+def _track_funnel_inner_layout() -> str:
+    """Linha principal do funil — etapas distribuídas com gap moderado."""
+    return (
+        "display:flex;align-items:flex-start;justify-content:space-evenly;"
+        "gap:6px;width:100%;flex-wrap:nowrap;padding:4px 0 2px;"
+    )
+
+
+def _track_step_flex() -> str:
+    return "flex:1 1 0;min-width:58px;max-width:108px;"
+
+
+def _funil_leads_summary_items(kf: dict) -> list[str]:
+    return [
+        f"+12: {int_br(int(kf.get('leads_mais_12') or 0))}",
+        f"-12: {int_br(int(kf.get('leads_menos_12') or 0))}",
+        f"Não atua: {int_br(int(kf.get('leads_nao_atua') or 0))}",
+    ]
+
+
+def _funil_aplicacoes_summary_items(kf: dict) -> list[str]:
+    inv = float(kf.get("investimento") or 0)
+    leads = int(kf.get("leads_totais") or 0)
+    apl = int(kf.get("aplicacoes") or 0)
+    apl12 = int(kf.get("aplicacoes_mais_12") or 0)
+    apl_menos = int(kf.get("aplicacoes_menos_12") or 0)
+    pct_apl = pct((apl / leads) * 100) if leads > 0 else "—"
+    cpa = brl(inv / apl, casas=2) if apl > 0 else "—"
+    cpa12 = brl(inv / apl12, casas=2) if apl12 > 0 else "—"
+    return [
+        f"+12: {int_br(apl12)}",
+        f"-12: {int_br(apl_menos)}",
+        f"% aplicação: {pct_apl}",
+        f"CPA: {cpa}",
+        f"CPA +12: {cpa12}",
+    ]
+
+
+def _funnel_summary_pills_html(items: list[str]) -> str:
+    """Linha inferior discreta — métricas auxiliares em pílulas."""
+    if not items:
+        return ""
+    pill_bg = PALETTE.get("bg_soft", PALETTE["card"])
+    pills: list[str] = []
+    for item in items:
+        pills.append(
+            f'<span style="display:inline-block;font-size:0.62em;'
+            f'color:{PALETTE["text_subtle"]};background:{pill_bg};'
+            f'border:1px solid {PALETTE["border"]};border-radius:999px;'
+            f'padding:3px 9px;line-height:1.25;'
+            f'font-variant-numeric:tabular-nums;white-space:nowrap;">'
+            f'{html_lib.escape(item)}</span>'
+        )
+    return (
+        f'<div style="display:flex;flex-wrap:wrap;gap:5px 6px;'
+        f'margin-top:7px;padding-top:6px;'
+        f'border-top:1px solid {PALETTE["border"]};'
+        f'justify-content:flex-start;align-items:center;">'
+        f'{"".join(pills)}</div>'
+    )
+
+
 def _step_html(label: str, value: float,
                bucket_topo: float,
                is_bucket_topo: bool,
-               bucket_topo_label: str) -> str:
+               bucket_topo_label: str,
+               *, compact: bool = False) -> str:
     value_fmt = _fmt_value(value)
     pct_bt = (value / bucket_topo) * 100 if bucket_topo > 0 else 0
     pct_bt_fmt = (
         f"{pct_bt:.1f}% de {bucket_topo_label}".replace(".", ",")
     )
     sub_html = (
+        f'<div style="font-size:0.58em;color:{PALETTE["muted"]};'
+        f'margin-top:1px;">topo do grupo</div>'
+        if is_bucket_topo else
+        f'<div style="font-size:0.58em;color:{PALETTE["text_subtle"]};'
+        f'margin-top:1px;font-variant-numeric:tabular-nums;">'
+        f'{html_lib.escape(pct_bt_fmt)}</div>'
+    ) if compact else (
         f'<div style="font-size:0.66em;color:{PALETTE["muted"]};'
         f'margin-top:2px;">topo do grupo</div>'
         if is_bucket_topo else
@@ -45,16 +115,24 @@ def _step_html(label: str, value: float,
         f'margin-top:2px;font-variant-numeric:tabular-nums;">'
         f'{html_lib.escape(pct_bt_fmt)}</div>'
     )
+    step_flex = _track_step_flex() if compact else "min-width:78px;"
+    pad = "4px 2px" if compact else "6px 4px"
+    val_fs = "1.02em" if compact else "1.15em"
+    lbl_fs = "0.58em" if compact else "0.6em"
+    lbl_mb = "2px" if compact else "4px"
+    lbl_min_h = "" if compact else "min-height:1.2em;"
+    lbl_lh = "1.05" if compact else "1.1"
     return (
         f'<div style="display:flex;flex-direction:column;'
         f'align-items:center;justify-content:center;'
-        f'min-width:78px;padding:6px 4px;text-align:center;">'
-        f'<div style="font-size:0.6em;color:{PALETTE["muted"]};'
-        f'text-transform:uppercase;letter-spacing:0.05em;'
-        f'font-weight:600;line-height:1.1;margin-bottom:4px;'
-        f'min-height:1.2em;">{html_lib.escape(label)}</div>'
-        f'<div style="font-size:1.15em;font-weight:700;'
-        f'color:{PALETTE["text"]};line-height:1.1;'
+        f'{step_flex}padding:{pad};text-align:center;">'
+        f'<div style="font-size:{lbl_fs};color:{PALETTE["muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.04em;'
+        f'font-weight:600;line-height:{lbl_lh};margin-bottom:{lbl_mb};'
+        f'{lbl_min_h}">'
+        f'{html_lib.escape(label)}</div>'
+        f'<div style="font-size:{val_fs};font-weight:700;'
+        f'color:{PALETTE["text"]};line-height:1.05;'
         f'font-variant-numeric:tabular-nums;">'
         f'{html_lib.escape(value_fmt)}</div>'
         f'{sub_html}'
@@ -63,59 +141,372 @@ def _step_html(label: str, value: float,
 
 
 def _arrow_html(prev_value: float, value: float,
-                emphatic: bool = False) -> str:
+                emphatic: bool = False,
+                *, compact: bool = False) -> str:
     if prev_value > 0:
         pct_step = (value / prev_value) * 100
         pct_step_fmt = f"{pct_step:.1f}%".replace(".", ",")
     else:
         pct_step_fmt = "—"
     color = PALETTE["wine_light"] if emphatic else PALETTE["text_subtle"]
-    arrow_size = "1.2em" if emphatic else "1.05em"
+    arrow_size = "1.05em" if compact else ("1.2em" if emphatic else "1.05em")
+    mw = "8px" if compact else "50px"
+    pad = "0" if compact else "0 1px"
     return (
         f'<div style="display:flex;flex-direction:column;'
         f'align-items:center;justify-content:center;'
-        f'padding:0 6px;min-width:50px;">'
+        f'padding:{pad};min-width:{mw};flex:0 0 {mw};">'
         f'<div style="font-size:{arrow_size};color:{color};'
         f'line-height:1;">→</div>'
-        f'<div style="font-size:0.66em;color:{color};'
-        f'margin-top:2px;font-variant-numeric:tabular-nums;'
+        f'<div style="font-size:0.58em;color:{color};'
+        f'margin-top:1px;font-variant-numeric:tabular-nums;'
         f'font-weight:600;">{html_lib.escape(pct_step_fmt)}</div>'
         f'</div>'
     )
 
 
 def _bucket_html(bucket_label: str, indices: list[int],
-                 labels_f: list[str], values_f: list[float]) -> str:
+                 labels_f: list[str], values_f: list[float],
+                 *, full_width: bool = True, compact: bool = False) -> str:
     bt_idx = indices[0]
     bt_val = values_f[bt_idx] if values_f[bt_idx] > 0 else 1.0
     bt_label = labels_f[bt_idx].lower()
     inner: list[str] = []
     for n, i in enumerate(indices):
         if n > 0:
-            inner.append(_arrow_html(values_f[i - 1], values_f[i]))
+            inner.append(_arrow_html(values_f[i - 1], values_f[i], compact=compact))
         inner.append(
             _step_html(
                 labels_f[i], values_f[i],
                 bucket_topo=bt_val,
                 is_bucket_topo=(n == 0),
                 bucket_topo_label=bt_label,
+                compact=compact,
             )
         )
+    if compact:
+        size_css = "width:100%;"
+        pad = "8px 10px 6px"
+        title_mb = "4px"
+        radius = "8px"
+        inner_layout = _track_funnel_inner_layout()
+    else:
+        size_css = "flex:1;" if full_width else "width:100%;min-width:168px;"
+        pad = "8px 10px"
+        title_mb = "6px"
+        radius = "10px"
+        inner_layout = (
+            "display:flex;align-items:stretch;"
+            "justify-content:space-between;flex-wrap:nowrap;"
+        )
     return (
-        f'<div style="flex:1;display:flex;flex-direction:column;'
+        f'<div style="{size_css}display:flex;flex-direction:column;'
         f'background:{PALETTE["card"]};'
-        f'border:1px solid {PALETTE["border"]};border-radius:10px;'
-        f'padding:8px 10px;">'
-        f'<div style="font-size:0.62em;color:{PALETTE["muted"]};'
-        f'text-transform:uppercase;letter-spacing:0.08em;'
-        f'font-weight:600;margin-bottom:6px;">'
+        f'border:1px solid {PALETTE["border"]};border-radius:{radius};'
+        f'padding:{pad};box-sizing:border-box;">'
+        f'<div style="font-size:0.58em;color:{PALETTE["muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.07em;'
+        f'font-weight:600;margin-bottom:{title_mb};line-height:1;">'
         f'{html_lib.escape(bucket_label)}</div>'
-        f'<div style="display:flex;align-items:stretch;'
-        f'justify-content:space-between;flex-wrap:nowrap;">'
+        f'<div style="{inner_layout}">'
         f'{"".join(inner)}'
         f'</div>'
         f'</div>'
     )
+
+
+def _arrow_simple_html(*, compact: bool = False) -> str:
+    """Seta entre etapas — sem % etapa-a-etapa (leitura principal = % da base)."""
+    color = PALETTE["text_subtle"]
+    mw = "12px" if compact else "28px"
+    fs = "1em" if compact else "1.05em"
+    return (
+        f'<div style="display:flex;align-items:center;justify-content:center;'
+        f'padding:0 2px;min-width:{mw};flex:0 0 {mw};align-self:center;">'
+        f'<div style="font-size:{fs};color:{color};line-height:1;">→</div>'
+        f'</div>'
+    )
+
+
+def _step_track_base_html(
+    label: str,
+    value: float,
+    *,
+    compact: bool = False,
+) -> str:
+    """Etapa base da trilha — título + número (sem subinfo na linha principal)."""
+    value_fmt = _fmt_value(value)
+    step_flex = _track_step_flex() if compact else "min-width:88px;"
+    pad = "4px 2px" if compact else "6px 4px"
+    lbl_mb = "4px" if compact else "4px"
+    val_fs = "1.1em" if compact else "1.15em"
+    sub_spacer = (
+        '<div style="min-height:15px;margin-top:3px;"></div>'
+        if compact else
+        '<div style="min-height:18px;margin-top:3px;"></div>'
+    )
+    return (
+        f'<div style="display:flex;flex-direction:column;'
+        f'align-items:center;justify-content:flex-start;'
+        f'{step_flex}padding:{pad};text-align:center;">'
+        f'<div style="font-size:0.6em;color:{PALETTE["muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.04em;'
+        f'font-weight:600;line-height:1.15;margin-bottom:{lbl_mb};'
+        f'min-height:2.2em;display:flex;align-items:flex-end;'
+        f'justify-content:center;">'
+        f'{html_lib.escape(label)}</div>'
+        f'<div style="font-size:{val_fs};font-weight:700;'
+        f'color:{PALETTE["text"]};line-height:1.1;'
+        f'font-variant-numeric:tabular-nums;">'
+        f'{html_lib.escape(value_fmt)}</div>'
+        f'{sub_spacer}'
+        f'</div>'
+    )
+
+
+def _step_conv_base_html(
+    label: str,
+    value: float,
+    base_value: float,
+    base_noun: str,
+    *,
+    compact: bool = False,
+) -> str:
+    """Etapa downstream — total + % em relação à base da trilha (leads/aplicações)."""
+    value_fmt = _fmt_value(value)
+    if base_value > 0:
+        pct_fmt = pct((value / base_value) * 100, casas=1)
+        sub = f"{pct_fmt} de {base_noun}"
+    else:
+        sub = f"— de {base_noun}"
+    step_flex = _track_step_flex() if compact else "min-width:88px;"
+    pad = "4px 2px" if compact else "6px 4px"
+    lbl_mb = "4px" if compact else "4px"
+    val_fs = "1.1em" if compact else "1.15em"
+    sub_mt = "3px" if compact else "3px"
+    sub_fs = "0.62em" if compact else "0.62em"
+    return (
+        f'<div style="display:flex;flex-direction:column;'
+        f'align-items:center;justify-content:flex-start;'
+        f'{step_flex}padding:{pad};text-align:center;">'
+        f'<div style="font-size:0.6em;color:{PALETTE["muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.04em;'
+        f'font-weight:600;line-height:1.15;margin-bottom:{lbl_mb};'
+        f'min-height:2.2em;display:flex;align-items:flex-end;'
+        f'justify-content:center;">'
+        f'{html_lib.escape(label)}</div>'
+        f'<div style="font-size:{val_fs};font-weight:700;'
+        f'color:{PALETTE["text"]};line-height:1.1;'
+        f'font-variant-numeric:tabular-nums;">'
+        f'{html_lib.escape(value_fmt)}</div>'
+        f'<div style="font-size:{sub_fs};color:{PALETTE["text_subtle"]};'
+        f'margin-top:{sub_mt};font-variant-numeric:tabular-nums;'
+        f'line-height:1.25;min-height:15px;">'
+        f'{html_lib.escape(sub)}</div>'
+        f'</div>'
+    )
+
+
+def _funnel_track_bucket_html(
+    bucket_label: str,
+    steps: list[dict],
+    *,
+    base_noun: str,
+    full_width: bool = True,
+    compact: bool = False,
+    summary_items: list[str] | None = None,
+) -> str:
+    """Bucket de trilha — linha principal + resumo auxiliar abaixo."""
+    base_value = float(steps[0]["value"]) if steps else 0.0
+    inner: list[str] = []
+    for i, step in enumerate(steps):
+        if i > 0:
+            inner.append(_arrow_simple_html(compact=compact))
+        if step.get("is_base"):
+            inner.append(_step_track_base_html(
+                step["label"],
+                float(step["value"]),
+                compact=compact,
+            ))
+        else:
+            inner.append(_step_conv_base_html(
+                step["label"],
+                float(step["value"]),
+                base_value,
+                base_noun,
+                compact=compact,
+            ))
+    summary_html = (
+        _funnel_summary_pills_html(summary_items)
+        if summary_items else ""
+    )
+    if compact:
+        size_css = "width:100%;"
+        pad = "8px 12px 7px"
+        title_mb = "5px"
+        radius = "8px"
+        inner_layout = _track_funnel_inner_layout()
+    else:
+        size_css = "flex:1;" if full_width else "width:100%;min-width:168px;"
+        pad = "8px 10px"
+        title_mb = "6px"
+        radius = "10px"
+        inner_layout = (
+            "display:flex;align-items:stretch;"
+            "justify-content:space-between;flex-wrap:nowrap;"
+        )
+    return (
+        f'<div style="{size_css}display:flex;flex-direction:column;'
+        f'background:{PALETTE["card"]};'
+        f'border:1px solid {PALETTE["border"]};border-radius:{radius};'
+        f'padding:{pad};box-sizing:border-box;">'
+        f'<div style="font-size:0.58em;color:{PALETTE["muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.07em;'
+        f'font-weight:600;margin-bottom:{title_mb};line-height:1;">'
+        f'{html_lib.escape(bucket_label)}</div>'
+        f'<div style="{inner_layout}">'
+        f'{"".join(inner)}'
+        f'</div>'
+        f'{summary_html}'
+        f'</div>'
+    )
+
+
+def _media_to_funnel_arrow_html(
+    pct_label: str | None = None,
+    *,
+    branch: str = "leads",
+    compact: bool = False,
+) -> str:
+    """Seta da mídia em direção a um dos funis (leads ou aplicações)."""
+    color = PALETTE["wine_light"] if branch == "leads" else PALETTE["text_subtle"]
+    arrow = "→"
+    pct_html = ""
+    pct_fs = "0.55em" if compact else "0.6em"
+    if pct_label:
+        pct_html = (
+            f'<div style="font-size:{pct_fs};color:{PALETTE["muted"]};'
+            f'margin-top:1px;font-variant-numeric:tabular-nums;'
+            f'white-space:nowrap;line-height:1.1;">'
+            f'{html_lib.escape(pct_label)}</div>'
+        )
+    arrow_fs = "1.05em" if compact else "1.15em"
+    return (
+        f'<div style="display:flex;flex-direction:column;'
+        f'align-items:center;justify-content:center;'
+        f'padding:0;width:100%;">'
+        f'<div style="font-size:{arrow_fs};color:{color};line-height:1;">'
+        f'{arrow}</div>'
+        f'{pct_html}'
+        f'</div>'
+    )
+
+
+def _render_funil_dual_track_html(
+    *,
+    kf: dict,
+    labels_f: list[str],
+    values_f: list[float],
+) -> str:
+    """Layout Mídia → Funil de Leads + Funil de Aplicações (grid 2 linhas)."""
+    from src.marketing_transforms import (
+        build_funil_trilha_aplicacoes_steps,
+        build_funil_trilha_leads_steps,
+    )
+
+    midia_html = _bucket_html(
+        "Mídia", [0, 1], labels_f, values_f, full_width=False, compact=True,
+    )
+    leads_html = _funnel_track_bucket_html(
+        "Funil de leads",
+        build_funil_trilha_leads_steps(kf),
+        base_noun="leads",
+        compact=True,
+        summary_items=_funil_leads_summary_items(kf),
+    )
+    aplicacoes_html = _funnel_track_bucket_html(
+        "Funil de aplicações",
+        build_funil_trilha_aplicacoes_steps(kf),
+        base_noun="aplicações",
+        compact=True,
+        summary_items=_funil_aplicacoes_summary_items(kf),
+    )
+    cliques_leads_pct = (
+        pct((values_f[2] / values_f[1]) * 100, casas=1)
+        if values_f[1] > 0 else None
+    )
+    cliques = values_f[1]
+    aplicacoes_total = float(kf.get("aplicacoes") or 0)
+    cliques_apl_pct = (
+        pct((aplicacoes_total / cliques) * 100, casas=1)
+        if cliques > 0 else None
+    )
+    arrow_leads = _media_to_funnel_arrow_html(
+        cliques_leads_pct, branch="leads", compact=True,
+    )
+    arrow_apl = _media_to_funnel_arrow_html(
+        cliques_apl_pct, branch="aplicacoes", compact=True,
+    )
+    fork_border = PALETTE["border"]
+    tracks_stack = (
+        f'<div style="display:flex;flex-direction:column;gap:8px;'
+        f'width:100%;min-width:0;">'
+        f'{leads_html}{aplicacoes_html}'
+        f'</div>'
+    )
+
+    return (
+        f'<div style="display:grid;'
+        f'grid-template-columns:minmax(118px,16%) 22px 1fr;'
+        f'grid-template-rows:1fr;'
+        f'column-gap:4px;align-items:center;'
+        f'font-family:Inter,sans-serif;margin-top:0;">'
+        f'<div style="grid-column:1;display:flex;align-items:center;'
+        f'justify-content:center;min-width:0;">{midia_html}</div>'
+        f'<div style="grid-column:2;display:flex;flex-direction:column;'
+        f'justify-content:center;gap:8px;align-self:stretch;'
+        f'position:relative;padding:2px 0;">'
+        f'<div style="position:absolute;left:0;top:12%;bottom:12%;'
+        f'width:1px;background:{fork_border};"></div>'
+        f'<div style="position:absolute;left:0;top:12%;width:10px;height:1px;'
+        f'background:{fork_border};"></div>'
+        f'<div style="position:absolute;left:0;bottom:12%;width:10px;height:1px;'
+        f'background:{fork_border};"></div>'
+        f'<div style="flex:1;display:flex;align-items:center;'
+        f'justify-content:center;z-index:1;">{arrow_leads}</div>'
+        f'<div style="flex:1;display:flex;align-items:center;'
+        f'justify-content:center;z-index:1;">{arrow_apl}</div>'
+        f'</div>'
+        f'<div style="grid-column:3;min-width:0;">{tracks_stack}</div>'
+        f'</div>'
+    )
+
+
+def _normalize_funil_select_state(
+    state_key: str,
+    options_norm: list[str],
+    labels_map: dict[str, str],
+) -> None:
+    """Garante que o session_state guarda a norm key, não o label legado.
+
+    Antes das aplicações no label, o widget podia persistir o texto completo
+    (ex.: ``Todos os resultados · R$ … · 76 leads · 3 vendas``). Nesse caso
+    ``format_func`` devolvia o valor antigo no campo fechado."""
+    cur = st.session_state.get(state_key)
+    if cur is None or cur in options_norm:
+        return
+    if isinstance(cur, str):
+        for norm, lbl in labels_map.items():
+            if cur == lbl:
+                st.session_state[state_key] = norm
+                return
+        cur_prefix = cur.split(" · ")[0]
+        for norm, lbl in labels_map.items():
+            if lbl.split(" · ")[0] == cur_prefix:
+                st.session_state[state_key] = norm
+                return
+    if options_norm:
+        st.session_state[state_key] = options_norm[0]
 
 
 def render_funil_selecionado(
@@ -129,6 +520,7 @@ def render_funil_selecionado(
     lista_fn: Callable[[pd.DataFrame, str], pd.DataFrame] | None = None,
     kpis_fn: Callable[[pd.DataFrame, str | None], dict] | None = None,
     etapas_fn: Callable[[dict], tuple[list[str], list[float]]] | None = None,
+    etapas_aplicacoes_fn: Callable[[dict], tuple[list[str], list[float]]] | None = None,
     empty_msg: str | None = None,
     caption: str | None = None,
     expander_md: str | None = None,
@@ -165,12 +557,17 @@ def render_funil_selecionado(
         return
 
     options_norm = funil_opts[key_col].tolist()
-    labels_map = dict(zip(funil_opts[key_col], funil_opts["label"]))
+    labels_map = dict(zip(funil_opts[key_col], funil_opts["label"], strict=False))
+
+    _normalize_funil_select_state(sel_state_key, options_norm, labels_map)
+
+    def _format_funil_select_label(norm: str) -> str:
+        return labels_map.get(str(norm), str(norm))
 
     sel = st.selectbox(
         entity_label,
         options=options_norm,
-        format_func=lambda n: labels_map.get(n, n),
+        format_func=_format_funil_select_label,
         index=0,
         key=sel_state_key,
     )
@@ -226,6 +623,15 @@ def render_funil_selecionado(
 
     if all(v == 0 for v in values_f):
         st.info(f"Sem dados de funil para esta {entity_label.lower()} no período.")
+    elif etapas_aplicacoes_fn is not None:
+        st.markdown(
+            _render_funil_dual_track_html(
+                kf=kf,
+                labels_f=labels_f,
+                values_f=values_f,
+            ),
+            unsafe_allow_html=True,
+        )
     else:
         midia_html = _bucket_html("Mídia", [0, 1], labels_f, values_f)
 
