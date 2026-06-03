@@ -1,0 +1,543 @@
+﻿================================================================================
+executivas_pos_vendas ù colunas
+================================================================================
+(vazio)
+
+================================================================================
+executivas_pos_vendas ù cadastro
+================================================================================
+ERRO: (psycopg2.errors.UndefinedTable) relation "fdw_reconecta.executivas_pos_vendas" does not exist
+LINE 3:         FROM fdw_reconecta.executivas_pos_vendas
+                     ^
+
+[SQL: 
+        SELECT id, nome, email, id_crm, id_clickup, ativo
+        FROM fdw_reconecta.executivas_pos_vendas
+        ORDER BY ativo DESC, nome
+        ]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+
+================================================================================
+colunas candidatas (pos/cs/respons/owner/execut/...)
+================================================================================
+table_schema | table_name | column_name | data_type
+------------------------------------------------------------
+bi | stg_mkt_lead_tracking | deal_executiva_vendas_id | text
+bi | trat_negocios_rw | disposicao_investimento | text
+bi | trat_negocios_rw | executiva_contas | text
+bi | trat_negocios_rw | executiva_vendas | text
+bi | trat_negocios_rw | owner | text
+bi | trat_negocios_rw | status_posvendas | text
+bi | trat_negocios_rw | tempo_primeiro_contato | integer
+bi | trat_negocios_rw | tempo_resposta_lead | integer
+bi | vw_dashboard_comercial_executivas_rw | executiva | text
+bi | vw_dashboard_comercial_executivas_rw_v2 | executiva | text
+bi | vw_mkt_social | post_id | text
+bi | vw_mkt_social | username | character varying
+bi_mkt | stg_leads_tracking | deal_executiva_vendas_id | text
+ext_reconecta | leads | tempo_resposta_lead | text
+ext_reconecta | leads | user_agent | text
+fdw_reconecta | anuncios | actions_onsite_conversion_post_save | integer
+fdw_reconecta | anuncios | actions_post | integer
+fdw_reconecta | anuncios | actions_post_engagement | integer
+fdw_reconecta | anuncios | actions_post_interaction_gross | integer
+fdw_reconecta | anuncios | actions_post_reaction | integer
+fdw_reconecta | anuncios | cost_per_action_type_post_engagement | numeric
+fdw_reconecta | anuncios | cost_per_action_type_post_interaction_gross | numeric
+fdw_reconecta | controle_notificacao_vendas | cs_nome | text
+fdw_reconecta | controle_notificacao_vendas | id_negocio_pos | text
+fdw_reconecta | executivas_pre_vendas | id_crm | text
+fdw_reconecta | executivas_vendas | id_crm | text
+fdw_reconecta | instagram_profile | username | character varying
+fdw_reconecta | typeform_aplicacoes | disposicao_investimento | text
+fdw_reconecta | typeform_aplicacoes | usuario_id | bigint
+public | old_zoho_tasks | id_contato_crm_antigo | text
+public | old_zoho_tasks | id_crm_antigo | text
+public | old_zoho_tasks | owner | bigint
+public | zoho_accounts | id_crm_antigo | text
+public | zoho_accounts | owner | bigint
+public | zoho_accounts | ownership | text
+public | zoho_acompanhamentos | executiva_contas_id | character varying
+public | zoho_acompanhamentos | executiva_contas_name | character varying
+public | zoho_acompanhamentos | owner_email | character varying
+public | zoho_acompanhamentos | owner_id | character varying
+public | zoho_acompanhamentos | owner_name | character varying
+public | zoho_activities | call_purpose | text
+public | zoho_activities | id_contato_crm_antigo | text
+public | zoho_activities | id_crm_antigo | text
+public | zoho_activities | owner | text
+public | zoho_calls | call_purpose | text
+public | zoho_calls | owner | bigint
+public | zoho_campaigns | expected_response | bigint
+public | zoho_campaigns | owner | bigint
+public | zoho_contacts | id_contato_antigo | text
+public | zoho_contacts | owner | text
+public | zoho_contacts | tipo_contato | text
+public | zoho_deals | disposicao_investimento | text
+public | zoho_deals | executiva_contas | text
+public | zoho_deals | executiva_vendas | text
+public | zoho_deals | owner | text
+public | zoho_deals | status_posvendas | text
+public | zoho_deals | tempo_primeiro_contato | integer
+public | zoho_deals | tempo_resposta_lead | integer
+public | zoho_leads | executiva_de_vendas_resposnsavel | bigint
+public | zoho_leads | owner | bigint
+public | zoho_notes | owner | bigint
+public | zoho_products | contato | bigint
+public | zoho_products | id_crm_antigo | text
+public | zoho_products | owner | bigint
+public | zoho_tasks | owner_email | character varying
+public | zoho_tasks | owner_id | character varying
+public | zoho_tasks | owner_name | character varying
+public | zoho_users | photo_user | text
+public | zoho_zohopagesensebeta__goals | owner | bigint
+
+================================================================================
+zoho_deals ù todas colunas
+================================================================================
+column_name | data_type
+------------------------------------------------------------
+id | text
+created_at | timestamp without time zone
+owner | text
+amount | text
+deal_name | text
+stage | text
+created_by | text
+modified_by | text
+created_time | timestamp without time zone
+modified_time | timestamp without time zone
+contact_name | text
+last_activity_time | timestamp without time zone
+lead_conversion_time | bigint
+sales_cycle_duration | bigint
+overall_sales_duration | bigint
+layout | text
+tag | text
+pipeline | text
+change_log_time_s | timestamp without time zone
+locked_s | smallint
+email | text
+telefone | text
+instagram | text
+area_de_atuacao_negocios | text
+ja_atua_na_area | text
+utm_medium | text
+utm_term | text
+utm_campaign | text
+utm_content | text
+utm_source | text
+data_cadastro | timestamp without time zone
+data_candidatura | timestamp without time zone
+data_sessao_agendada | timestamp without time zone
+data_sessao_vai_ocorrer | timestamp without time zone
+origem | text
+qualificacao | text
+executiva_vendas | text
+receita | text
+sdr_ss | text
+data_vencimento | timestamp without time zone
+data_hora_compra | timestamp without time zone
+status_pagamento | text
+oferta | text
+executiva_contas | text
+tipo_venda | text
+tipo_agendamento | text
+observacoes | text
+conhecer_vc | text
+metodo_pagamento | text
+data_aniversario | timestamp without time zone
+comprovante_pagamento | text
+triagem | text
+lista_opcoes_faturamento | text
+email_secundario | text
+produto_novo | text
+instagram_url | text
+compromisso_concluido | timestamp without time zone
+leadchain0_social_lead_id | text
+condicao_pagamento | text
+motivo_perda | text
+notas_do_agendamento | text
+treinamentos_previos | text
+importancia_fatura | text
+disposicao_investimento | text
+faturamento_desejado | text
+tempo_atuacao | text
+status_posvendas | text
+temperatura | text
+ultima_reuniao_agendada | timestamp without time zone
+data_onboarding | timestamp without time zone
+link_acompanhamento | text
+link_onboarding | text
+planilha_checkin_semanal | text
+status_lead | text
+ad_id | text
+campaign_id | text
+adset_id | text
+comunidade_grupo_do_whatsapp | smallint
+contrato_assinado | smallint
+instagram_mentoria | smallint
+acesso_plataforma | smallint
+payback_conclu_do | timestamp without time zone
+utm_campaign_cal | text
+email_typebot_cal | text
+utm_term_cal | text
+instagram_typebot | text
+utm_content_cal | text
+ad_placement_cal | text
+agendado_por | bigint
+ad_placement | text
+fb_click_id_cal | text
+target_monthly_revenue | text
+agendado_em | timestamp without time zone
+fb_click_id | text
+revenue_motivation | text
+agendado_para | timestamp without time zone
+previous_training_experience | text
+link_call | text
+nome_cal | text
+typebot_session_id | text
+nome_typebot | text
+email_cal | text
+session_id | text
+form_submission_date_cal | timestamp without time zone
+telefone_typebot | text
+phone_cal | text
+form_submission_date | timestamp without time zone
+utm_source_cal | text
+email_typebot | text
+utm_medium_cal | text
+classificado_cal | text
+lead_classification | text
+investiment_readiness | text
+years_of_experience | text
+fonte_de_lead | text
+oz_back2crm | smallint
+oz_back2crm_comment | text
+ultimo_acompanhamento | bigint
+oz_back2crm_id | bigint
+transaction_id | text
+desk_id | character varying
+contact_id | text
+vsl_tempo_assistido_segundos | integer
+vsl_porcentagem_assistida | integer
+stage_modified_time | timestamp without time zone
+tempo_primeiro_contato | integer
+tempo_resposta_lead | integer
+cadencia_atual | text
+etapa_cadencia_atual | text
+cadencia_anterior | text
+etapa_cadencia_anterior | text
+forma_venda | text
+msg_planilha | boolean
+nao_disparar | boolean
+motivo_nao_fechamento | text
+
+================================================================================
+zoho_activities ù todas colunas
+================================================================================
+column_name | data_type
+------------------------------------------------------------
+id | text
+created_at | timestamp without time zone
+owner | text
+subject | text
+created_by | text
+modified_by | text
+created_time | timestamp without time zone
+modified_time | timestamp without time zone
+activity_type | text
+description | text
+who_id | text
+what_id | text
+due_date | timestamp without time zone
+status | text
+priority | text
+recurring_activity | text
+closed_time | timestamp without time zone
+tag | text
+locked_s | smallint
+produto | text
+miss_o | text
+grava_o | text
+processo | text
+link_negocio | text
+id_neg_cio_crm_antigo | text
+id_contato_crm_antigo | text
+id_crm_antigo | text
+auxiliar_propriet_rio | text
+hora_da_cria_o_auxiliar | text
+last_activity_time | timestamp without time zone
+venue | text
+all_day | smallint
+participants | bigint
+check_in_time | timestamp without time zone
+check_in_by | bigint
+check_in_comment | text
+check_in_sub_locality | text
+check_in_city | text
+check_in_state | text
+check_in_country | text
+latitude | double precision
+longitude | double precision
+zip_code | text
+check_in_address | text
+check_in_status | text
+start_datetime | timestamp without time zone
+end_datetime | timestamp without time zone
+motivo_cancelamento_e_nao_comparecimento | text
+status_reuniao | text
+tipo_reuniao | text
+link_gravacao_meet | text
+pontos_principais | text
+link_transcricao | text
+status_transcricao | text
+call_type | text
+call_purpose | text
+call_start_time | timestamp without time zone
+call_duration | text
+call_duration_in_seconds | bigint
+call_result | text
+cti_entry | smallint
+reminder | text
+outgoing_call_status | text
+scheduled_in_crm | text
+call_agenda | text
+caller_id | text
+dialled_number | text
+voice_recording_s | text
+from_number_s | text
+to_number_s | text
+telephony_external_id_s | text
+call_transcription_c | text
+oz_back2crm | smallint
+oz_back2crm_comment | text
+motivo_do_no_show | text
+tempo_gravacao | integer
+tempo_reuniao | integer
+oz_back2crm_id | bigint
+faturamento | text
+prevendas | text
+utm_content | text
+utm_term | text
+utm_campaign | text
+utm_source | text
+utm_medium | text
+ad_id | text
+adset_id | text
+fonte_de_lead | text
+
+================================================================================
+fdw controle_notificacao_vendas ù colunas
+================================================================================
+column_name | data_type
+------------------------------------------------------------
+id | integer
+nome | character varying
+email | character varying
+telefone | character varying
+id_negocio | character varying
+id_vendedora | character varying
+dt_criacao | timestamp without time zone
+venda_notificada | character
+timestamp_message | text
+tipo_venda | character varying
+welcome | boolean
+welcome_message | text
+welcome_message_payload | jsonb
+cs_nome | text
+id_negocio_pos | text
+
+================================================================================
+cancelados ù activities no ·ltimo ano (amostra status)
+================================================================================
+status_reuniao | activity_type | n
+------------------------------------------------------------
+Cancelada | Consulta | 1397
+Cancelada | 12 | 99
+Cancelada | None | 18
+Cancelado | Consulta | 16
+Cancelada | Acompanhamento | 5
+Cancelada | Events | 3
+Cancelado | Acompanhamento | 2
+Cancelada | IndicaþÒo | 1
+
+================================================================================
+controle_notificacao ù cs_nome preenchido
+================================================================================
+total | com_cs | com_id_pos
+------------------------------------------------------------
+629 | 114 | 113
+
+================================================================================
+controle_notificacao ù amostra cs_nome
+================================================================================
+cs_nome | id_negocio_pos | email | id_negocio | dt_criacao
+------------------------------------------------------------
+Nathßlia de Moura | 6501842000093272660 | pedromuccillo@gmail.com | 6501842000092572030 | 2026-06-02 21:24:45.054085
+Marcos Paulo | 6501842000093311519 | victoriacessi@gmail.com | 6501842000091721013 | 2026-06-02 13:11:53.947908
+Marcella Jimenez | 6501842000093322406 | carolineelilli@gmail.com | 6501842000032880024 | 2026-06-01 18:02:32.740206
+Nathßlia de Moura | 6501842000093319520 | rossina.pereira@yahoo.com.br | 6501842000093146001 | 2026-06-01 14:36:44.709065
+Marcos Paulo | 6501842000093331136 | junioblack@outlook.com | 6501842000092781006 | 2026-05-29 22:15:34.402199
+Marcella Jimenez | 6501842000093260108 | brunahuescarb@gmail.com | 6501842000081691049 | 2026-05-29 21:11:10.760338
+Nathßlia de Moura | 6501842000093316123 | drsiarapedro@gmail.com | 6501842000070839032 | 2026-05-29 20:54:44.956142
+Marcella Jimenez | 6501842000093315090 | brunahuescarb@gmail.com | 6501842000081691049 | 2026-05-29 19:08:20.816303
+Marcos Paulo | 6501842000093151194 | bethaniatravaglini@gmail.com | 6501842000092545071 | 2026-05-28 20:40:33.915148
+Nathßlia de Moura | 6501842000093111194 | lilianebrino@hotmail.com | 6501842000092600052 | 2026-05-28 18:47:44.100239
+Marcella Jimenez | 6501842000093048145 | m-moralles@hotmail.com | 6501842000092969001 | 2026-05-28 12:56:55.549020
+Marcos Paulo | 6501842000093111039 | draluannacabral@gmail.com | 6501842000073593001 | 2026-05-28 09:27:45.071042
+Nathßlia de Moura | 6501842000092929096 | dr.matheussminucci@gmail.com | 6501842000092476001 | 2026-05-27 19:59:26.395921
+Marcella Jimenez | 6501842000092721019 | leialacerdaher@gmail.com | 6501842000038927041 | 2026-05-26 09:21:10.753894
+Marcos Paulo | 6501842000092434404 | luanibonjorno@hotmail.com | 6501842000071858038 | 2026-05-25 17:19:23.733864
+
+================================================================================
+zoho_activities.owner ù match cadastro pos (amostra nomes distintos)
+================================================================================
+owner_name
+------------------------------------------------------------
+Ana Moraes
+Andrezza Ayuso Serpa
+Bruna Kahne
+Camile Silveira
+Camilla Lyra
+Carolina Falci
+Debora Scariot
+Developers Central
+Emanuelle Alves
+Franciele Leticia Gomes Carneiro
+Hawinne Cristina de Oliveira Freitas
+Henrique Gonþalves
+Ingrid Lorrayne
+Isabela Lopes
+Laura Garcia de Freitas
+Laura Silva
+Leandro Alves
+Leidianne Pimenta Cavalcante
+Leonardo Melo Patriota
+Leonardo Rosso
+LetÝcia Garcia de Freitas
+Marcella Jimenez
+Marcelo Suiama
+Mayana Silva
+Michele Ferrßz
+Nathßlia de Moura
+Nathally Pereira dos Santos
+Nathan Carloto
+Patricia Fernandes de Oliveira
+Stefany Campinas
+Tanielle Almeida da Silva
+ThaÝs Cad¾
+
+================================================================================
+zoho_activities ù activity_type distintos (180d)
+================================================================================
+activity_type | n
+------------------------------------------------------------
+Consulta | 2771
+None | 2428
+Onboarding | 415
+Acompanhamento | 222
+Onboarding-mastermid-reconecta | 9
+Call-asc | 4
+IndicaþÒo | 4
+
+================================================================================
+fdw_reconecta ù foreign tables disponÝveis
+================================================================================
+foreign_table_name
+------------------------------------------------------------
+anuncios
+controle_notificacao_vendas
+executivas_pre_vendas
+executivas_vendas
+google_ads
+images
+instagram_posts
+instagram_profile
+pinterest_ads
+typeform_aplicacoes
+
+================================================================================
+zoho_acompanhamentos ù colunas
+================================================================================
+column_name | data_type
+------------------------------------------------------------
+id | character varying
+name | character varying
+cliente_id | character varying
+cliente_name | character varying
+owner_id | character varying
+owner_name | character varying
+owner_email | character varying
+executiva_contas_id | character varying
+executiva_contas_name | character varying
+periodo_analise | character varying
+resultado | character varying
+humor_cliente | character varying
+qt_novos_pacientes | integer
+qt_pacientes_retorno | integer
+qt_novos_seguidores | integer
+ticket_medio_novos_pacientes | numeric
+ticket_medio_retorno | numeric
+faturamento_total | numeric
+investimento_trafego | numeric
+gravacao | text
+data_1 | date
+created_time | timestamp with time zone
+modified_time | timestamp with time zone
+last_activity_time | timestamp with time zone
+created_by_id | character varying
+created_by_name | character varying
+modified_by_id | character varying
+modified_by_name | character varying
+synced_at | timestamp with time zone
+
+================================================================================
+cancelados Consulta ù deal fields (executiva_contas, status_posvendas)
+================================================================================
+deals_cancelados | com_executiva_contas | com_status_posvendas | com_owner_deal
+------------------------------------------------------------
+741 | 1 | 0 | 740
+
+================================================================================
+amostra cancelados ù deal + closer + executiva_contas
+================================================================================
+deal_id | email | stage | executiva_contas | status_posvendas | owner_activity | closer_name | dt_cancel
+------------------------------------------------------------
+6501842000093539001 | franciellemarini@gmail.com | No-show | None | None | Nathan Carloto | Nathan Carloto | 2026-06-03 10:00:00
+6501842000077215232 | amanda.stefhane.gestora@gmail.com | No-show | None | None | Nathan Carloto | Nathan Carloto | 2026-06-03 08:30:00
+6501842000093403032 | drmatheusbezerra@hotmail.com | ReuniÒo Agendada | None | None | Andrezza Ayuso Serpa | Andrezza Ayuso Serpa | 2026-06-02 17:00:00
+6501842000093258101 | leti.s.m@hotmail.com | ReuniÒo Agendada | None | None | Andrezza Ayuso Serpa | Andrezza Ayuso Serpa | 2026-06-02 15:00:00
+6501842000093364047 | marcos.bergonci@hotmail.com | ReuniÒo ConcluÝda | None | None | Nathan Carloto | Nathan Carloto | 2026-06-02 15:00:00
+6501842000093301118 | cindimf@gmail.com | ReuniÒo Agendada | None | None | Leonardo Melo Patriota | Leonardo Melo Patriota | 2026-06-02 13:30:00
+6501842000093169008 | lyana.rpl@gmail.com | ReuniÒo Agendada | None | None | Hawinne Cristina de Oliveira Freitas | Hawinne Cristina de Oliveira Freitas | 2026-06-02 13:30:00
+6501842000093132026 | mara.pastore@hotmail.com | No-show | None | None | Hawinne Cristina de Oliveira Freitas | Hawinne Cristina de Oliveira Freitas | 2026-06-01 20:00:00
+6501842000093193001 | maiaraantunes97@gmail.com | No-show | None | None | Leandro Alves | Leandro Alves | 2026-06-01 15:00:00
+6501842000093374015 | afmorais68@icloud.com | No-show | None | None | Andrezza Ayuso Serpa | Andrezza Ayuso Serpa | 2026-06-01 15:00:00
+6501842000093196001 | clinicajuliabonatto@gmail.com | No-show | None | None | Leandro Alves | Leandro Alves | 2026-06-01 14:00:00
+6501842000093388012 | thieni_kaefer@hotmail.com | ReuniÒo Agendada | None | None | Andrezza Ayuso Serpa | Andrezza Ayuso Serpa | 2026-06-01 13:30:00
+
+================================================================================
+atividades p¾s (Onboarding/Acompanhamento) por deal cancelado
+================================================================================
+deals_cancelados | com_atividade_pos | com_owner_pos
+------------------------------------------------------------
+741 | 1 | 1
+
+================================================================================
+zoho_acompanhamentos ù volume e link deal
+================================================================================
+total | com_exec_contas
+------------------------------------------------------------
+191 | 191
+
+================================================================================
+cs_nome vs owners em atividades Onboarding (overlap)
+================================================================================
+cs_nome
+------------------------------------------------------------
+Marcella Jimenez
+Marcos Paulo
+Michele Ferrßz
+Nathßlia de Moura
+

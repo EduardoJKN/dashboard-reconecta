@@ -25,12 +25,15 @@ from src.repositories import (
     get_executivas,
     get_investimento_diario,
     get_leads_visao_geral,
+    get_prevendas_overview_diario,
 )
 from src.marketing_transforms import (
+    agendamentos_one_page_oficial,
+    comparecimentos_one_page_oficial,
+    vendas_one_page_oficial,
     agregar_criativos_por_utm_content,
     compara_criativos_utm_content,
     criativo_funil_etapas,
-    criativo_funil_etapas_aplicacoes,
     criativo_funil_kpis,
     criativo_utm_content_kpis,
     criativos_kpis,
@@ -185,7 +188,7 @@ df_cri_funil = safe_run(
 
 # Totais OFICIAIS do período (alinham 'Todos os resultados' do funil com
 # os cards da Visão Geral comercial).
-#   - leads:  COUNT(DISTINCT (created_at::date, lower(trim(email)))) via
+#   - leads:  COUNT(DISTINCT (timestamp::date, lower(trim(email)))) via
 #             get_leads_visao_geral (mesma fonte do card "Leads Totais").
 #   - vendas: SUM(vendas) da bi.vw_dashboard_comercial_executivas_rw
 #             (= total Novo cliente Ganho do período).
@@ -217,6 +220,13 @@ _df_inv_oficial = safe_run(
     lambda: get_investimento_diario(ctx.data_ini, ctx.data_fim),
     view_label="investimento_diario",
 )
+_df_prev_oficial = safe_run(
+    lambda: get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim),
+    view_label="prevendas_overview_diario",
+)
+_agendamentos_oficial = agendamentos_one_page_oficial(_df_prev_oficial)
+_comparecimentos_oficial = comparecimentos_one_page_oficial(_df_prev_oficial)
+_vendas_oficial = vendas_one_page_oficial(_df_prev_oficial)
 _investimento_oficial = (
     float(_df_inv_oficial["investimento_total"].fillna(0).sum())
     if (_df_inv_oficial is not None and not _df_inv_oficial.empty
@@ -230,6 +240,9 @@ _oficiais_status_cri = [
     ("leads",       _leads_totais_oficial),
     ("vendas",      _vendas_novas_oficial),
     ("investimento", _investimento_oficial),
+    ("agendamentos", _agendamentos_oficial),
+    ("comparecimentos", _comparecimentos_oficial),
+    ("vendas", _vendas_oficial or _vendas_novas_oficial),
 ]
 _oficiais_faltando_cri = [k for k, v in _oficiais_status_cri if v is None]
 if _oficiais_faltando_cri:
@@ -257,9 +270,12 @@ render_funil_selecionado(
         leads_totais_oficial=_leads_totais_oficial,
         vendas_novas_oficial=_vendas_novas_oficial,
         investimento_oficial=_investimento_oficial,
+        agendamentos_oficial=_agendamentos_oficial,
+        comparecimentos_oficial=_comparecimentos_oficial,
+        vendas_oficial=_vendas_oficial,
     ),
     etapas_fn=criativo_funil_etapas,
-    etapas_aplicacoes_fn=criativo_funil_etapas_aplicacoes,
+    marketing_funil_unico=True,
     data_ini=ctx.data_ini,
     data_fim=ctx.data_fim,
     nivel="criativo",
@@ -305,11 +321,13 @@ render_funil_selecionado(
         "  `tipo_venda = 'Novo cliente'`.\n"
         "- **Filtros de e-mail de teste:** `@teste`, `teste@`, `smarts`, "
         "  `reconecta` removidos do universo de leads em todas as etapas.\n"
-        "- **Funil de aplicações (trilha complementar):** "
+        "- **Aplicações (contexto no bloco Leads):** "
         "`fdw_reconecta.typeform_aplicacoes` cruzado por e-mail dos leads "
-        "do criativo/seleção (`dados_completos = TRUE`, dedupe e-mail/dia, "
-        "fuso `-3h`). Agend./compar./vendas contam só e-mails que "
-        "também são aplicação no período."
+        "do criativo/seleção (`dados_completos = TRUE`, dedupe e-mail/dia; "
+        "leads `timestamp::date`, typeform `created_at::date`). Em **Todos os resultados**, "
+        "aplicações = todas do Typeform no período (igual One Page); em "
+        "criativo específico, só aplicações com lead no criativo. "
+        "Exibimos quantidade, % sobre leads, +12/-12, CPA e CPA +12."
     ),
 )
 

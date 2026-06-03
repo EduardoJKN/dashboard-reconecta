@@ -10,7 +10,7 @@
 --
 -- Classificação (valores reais no banco, case-insensitive):
 --   Atua +12, Atua -12, Não atua, ...
--- Leads: e-mail único por dia (COUNT DISTINCT chave email|dia).
+-- Leads: e-mail único por dia (COUNT DISTINCT chave email|dia); data = timestamp::date.
 -- Aplicações: dedupe e-mail+dia (mais recente), depois COUNT DISTINCT e-mail.
 --
 -- CPL real = investimento / leads_reais
@@ -21,23 +21,23 @@ WITH leads AS (
     SELECT
         LOWER(TRIM(l.utm_content)) AS ad_name_norm,
 
-        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.created_at::date)::text))
+        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.timestamp::date)::text))
             AS leads_reais,
 
-        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.created_at::date)::text)) FILTER (
+        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.timestamp::date)::text)) FILTER (
             WHERE LOWER(TRIM(l.classificado)) = 'atua +12'
         ) AS leads_mais_12,
 
-        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.created_at::date)::text)) FILTER (
+        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.timestamp::date)::text)) FILTER (
             WHERE LOWER(TRIM(l.classificado)) = 'atua -12'
         ) AS leads_menos_12,
 
-        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.created_at::date)::text)) FILTER (
+        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.timestamp::date)::text)) FILTER (
             WHERE LOWER(TRIM(l.classificado)) = 'não atua'
         ) AS leads_nao_atua
 
     FROM ext_reconecta.leads l
-    WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
+    WHERE l.timestamp::date BETWEEN :data_ini AND :data_fim
       AND l.utm_content IS NOT NULL
       AND TRIM(l.utm_content) <> ''
       AND l.email IS NOT NULL
@@ -55,7 +55,7 @@ leads_emails AS (
         LOWER(TRIM(l.utm_content)) AS ad_name_norm,
         LOWER(TRIM(l.email))       AS email_norm
     FROM ext_reconecta.leads l
-    WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
+    WHERE l.timestamp::date BETWEEN :data_ini AND :data_fim
       AND l.utm_content IS NOT NULL
       AND TRIM(l.utm_content) <> ''
       AND l.email IS NOT NULL
@@ -66,7 +66,7 @@ leads_emails AS (
       AND lower(l.email) NOT LIKE '%reconecta%'
 ),
 
--- Aplicações deduplicadas por e-mail+dia (mais recente), fuso -3h.
+-- Aplicações deduplicadas por e-mail+dia (mais recente); data = created_at::date.
 aplicacoes_dedup AS (
     SELECT
         email_norm,
@@ -77,11 +77,11 @@ aplicacoes_dedup AS (
             LOWER(TRIM(ta.classificado)) AS classificado_norm,
             ROW_NUMBER() OVER (
                 PARTITION BY LOWER(TRIM(ta.email)),
-                             (ta.created_at - INTERVAL '3 hours')::date
+                             ta.created_at::date
                 ORDER BY ta.created_at DESC
             ) AS rn
         FROM fdw_reconecta.typeform_aplicacoes ta
-        WHERE (ta.created_at - INTERVAL '3 hours')::date BETWEEN :data_ini AND :data_fim
+        WHERE ta.created_at::date BETWEEN :data_ini AND :data_fim
           AND ta.dados_completos IS TRUE
           AND ta.email IS NOT NULL
           AND TRIM(ta.email) <> ''

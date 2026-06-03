@@ -11,10 +11,10 @@
 --   (ambos normalizados via LOWER(BTRIM(...)). Sem UTM no lead ⇒ fora.
 --
 -- Regras de leads (período-distinct, mesma Visão Geral):
---   - Janela: l.created_at::date BETWEEN :data_ini AND :data_fim
+--   - Janela: l.timestamp::date BETWEEN :data_ini AND :data_fim
 --   - Filtros de e-mail: NOT LIKE @teste / teste@ / smarts / reconecta
 --   - leads_totais = COUNT(DISTINCT email) por utm_campaign
---   - classificação = última (created_at DESC) por e-mail no período
+--   - classificação = última (timestamp DESC) por e-mail no período
 --
 -- Regras de CRM/Zoho (mesma regra do funil Growth):
 --   - lead → deal: prioridade zoho_id > session_id > email; tiebreaker
@@ -34,13 +34,13 @@
 WITH leads_clean AS (
     SELECT
         lower(btrim(l.email))                 AS email_norm,
-        l.created_at,
+        l.timestamp,
         l.classificado,
         lower(btrim(l.utm_campaign))          AS utm_norm,
         NULLIF(btrim(l.zoho_id), '')          AS lead_zoho_id,
         l.session_id                          AS lead_session_id
     FROM ext_reconecta.leads l
-    WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
+    WHERE l.timestamp::date BETWEEN :data_ini AND :data_fim
       AND l.email IS NOT NULL
       AND btrim(l.email) <> ''
       AND lower(l.email) NOT LIKE '%@teste%'
@@ -56,7 +56,7 @@ last_classif AS (
         email_norm,
         classificado AS classif_final
     FROM leads_clean
-    ORDER BY email_norm, created_at DESC
+    ORDER BY email_norm, timestamp DESC
 ),
 -- 1 row por e-mail no período pra alimentar o priority match com zoho_deals.
 -- Pega chaves (zoho_id / session_id) do lead row mais recente.
@@ -66,7 +66,7 @@ email_lead_keys AS (
         lead_zoho_id,
         lead_session_id
     FROM leads_clean
-    ORDER BY email_norm, created_at DESC
+    ORDER BY email_norm, timestamp DESC
 ),
 all_deal_matches AS (
     -- UNION ALL de 3 JOINs index-friendly (em vez de OR-predicate, que

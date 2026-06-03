@@ -9,7 +9,8 @@
 -- Por que este formato:
 --   - Total `Todos` = COUNT(*) = leads únicos/dia (mesma regra que a Visão
 --     Geral Marketing já usa em `mkt_visao_geral_diario.sql`). Em abr/2026
---     bate 854.
+--     bate 854. Funis Criativos/Campanhas usam `timestamp::date` em
+--     `ext_reconecta.leads` (regra Looker).
 --   - Filtros de closer/time da página são aplicados em Python via
 --     `ctx.refilter` sobre as colunas `executiva` / `time_vendas`. Leads
 --     com deal-sem-closer ou sem deal nenhum aparecem com `NULL` nessas
@@ -34,21 +35,21 @@
 WITH leads_clean AS (
     -- 1 row por (data_ref, email_norm) — daily-distinct alinhado com a
     -- regra oficial Visão Geral Marketing.
-    SELECT DISTINCT ON (l.created_at::date, lower(btrim(l.email)))
-        l.created_at::date              AS data_ref,
+    SELECT DISTINCT ON (l.timestamp::date, lower(btrim(l.email)))
+        l.timestamp::date              AS data_ref,
         lower(btrim(l.email))           AS email_norm,
         NULLIF(btrim(l.zoho_id), '')    AS lead_zoho_id,
         l.session_id                    AS lead_session_id,
-        l.created_at
+        l.timestamp
     FROM ext_reconecta.leads l
-    WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
+    WHERE l.timestamp::date BETWEEN :data_ini AND :data_fim
       AND l.email IS NOT NULL
       AND btrim(l.email) <> ''
       AND lower(l.email) NOT LIKE '%@teste%'
       AND lower(l.email) NOT LIKE 'teste@%'
       AND lower(l.email) NOT LIKE '%smarts%'
       AND lower(l.email) NOT LIKE '%reconecta%'
-    ORDER BY l.created_at::date, lower(btrim(l.email)), l.created_at
+    ORDER BY l.timestamp::date, lower(btrim(l.email)), l.timestamp
 ),
 all_deal_matches AS (
     -- UNION ALL de 3 INNER JOINs index-friendly (em vez de OR-predicate

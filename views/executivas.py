@@ -3,15 +3,35 @@ import streamlit as st
 
 from src.repositories import (
     get_executivas,
+    get_executivas_churn_pos_venda,
     get_executivas_oficiais,
+    get_executivas_oficiais_todas,
+    get_executivas_pos_vendas_oficiais,
     get_vendas_leads_detalhe_diario,
 )
 from src.transforms import (
+    CHURN_POS_SEM_IDENTIFICADO,
+    EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
+    EXECUTIVAS_RANKING_METRICAS_NEUTRAS,
+    EXECUTIVAS_RANKING_METRIC_OPTIONS,
+    RANKING_EXIBICAO_ATIVOS,
+    RANKING_EXIBICAO_HISTORICO,
+    churn_pos_filtrar_periodo,
+    churn_pos_kpis,
+    churn_pos_ranking,
+    churn_pos_venda_aplicar_cadastro,
+    executivas_churn_agregar_por_executiva,
+    executivas_churn_filtrar_closer,
+    executivas_churn_filtrar_recorte,
+    executivas_churn_total,
     executivas_filtrar_time_oficial,
+    executivas_ranking_base_exibicao,
     executivas_kpis,
     executivas_por_dia,
     executivas_por_time,
     executivas_ranking,
+    executivas_ranking_com_churn,
+    executivas_ranking_plot_churn,
     ranking_dividir_principal_detalhado,
     vendas_detalhe_filtrar_closer,
     vendas_detalhe_filtrar_time,
@@ -134,6 +154,11 @@ except Exception:
     _df_oficiais = None
     _falha_oficiais = True
 
+try:
+    _df_oficiais_todas = get_executivas_oficiais_todas()
+except Exception:
+    _df_oficiais_todas = None
+
 if _df_oficiais is not None and not _df_oficiais.empty:
     df_filtrado = executivas_filtrar_time_oficial(df_bruto, _df_oficiais)
 else:
@@ -147,6 +172,18 @@ else:
 if df_bruto.empty:
     st.warning("Sem dados para o filtro atual.")
     st.stop()
+
+# Churn (stage Churn) — card do funil + métrica do Top Closers; independente
+# da aba Churn por Pós-venda (que usa executiva_contas / pós-venda).
+_times_sel_churn = list(ctx.selections.get("times") or [])
+try:
+    _df_churn_all = get_executivas_churn_pos_venda()
+except Exception:
+    _df_churn_all = pd.DataFrame()
+_df_churn_recorte = executivas_churn_filtrar_recorte(
+    _df_churn_all, ctx.data_ini, ctx.data_fim, _times_sel_churn,
+)
+_churn_funil_total = executivas_churn_total(_df_churn_recorte)
 
 # ---------------------------------------------------------------------------
 # Seletor local de classificação (NÃO usa ctx.apply_filters — o sistema
@@ -242,22 +279,20 @@ with r2c4:
 # ---------------------------------------------------------------------------
 _leads_label = "Leads" if is_todas else f"Oportunidades {classif_sel}"
 _funil_hint  = (
-    "leads → reunião agendada → reunião concluída → cancelados → ganhos → perdidos"
+    "leads → reunião agendada → reunião concluída → cancelados → churn → ganhos → perdidos"
     if is_todas
     else f"oportunidades {classif_sel} → reunião agendada → reunião concluída → "
-         f"cancelados (total geral) → ganhos → perdidos (total geral)"
+         f"cancelados (total geral) → churn (total geral) → ganhos → perdidos (total geral)"
 )
 section_title("Funil (absolutos)", _funil_hint)
-f1, f2, f3, f4, f5, f6 = st.columns(6, gap="small")
+f1, f2, f3, f4, f5, f6, f7 = st.columns(7, gap="small")
 with f1: metric_card_v2(_leads_label, int_br(opor_v))
 with f2: metric_card_v2("Reunião Agendada", int_br(agen_v))
 with f3: metric_card_v2("Reunião Concluída", int_br(comp_v))
-with f4: metric_card_v2(
-    "Cancelados", int_br(k["cancelados"]),
-    hint=None if is_todas else "total geral · sem quebra por classif.",
-)
-with f5: metric_card_v2("Ganhos", int_br(vend_v))
-with f6: metric_card_v2(
+with f4: metric_card_v2("Cancelados", int_br(k["cancelados"]))
+with f5: metric_card_v2("Churn", int_br(_churn_funil_total))
+with f6: metric_card_v2("Ganhos", int_br(vend_v))
+with f7: metric_card_v2(
     "Perdidos", int_br(k["perdidos"]),
     hint=None if is_todas else "total geral · sem quebra por classif.",
 )
@@ -265,7 +300,9 @@ with f6: metric_card_v2(
 # ---------------------------------------------------------------------------
 # Tabs — Ranking / Por time / Evolução
 # ---------------------------------------------------------------------------
-tab_rank, tab_time, tab_temp = st.tabs(["Ranking executivas", "Por time", "Evolução"])
+tab_rank, tab_time, tab_temp, tab_churn_pos = st.tabs(
+    ["Ranking executivas", "Por time", "Evolução", "Churn por Pós-venda"]
+)
 
 with tab_rank:
     # =========================================================================
@@ -279,23 +316,9 @@ with tab_rank:
     # coluna fixa, ignorando o classif (a métrica explícita ganha).
     # =========================================================================
 
-    _RANKING_METRIC_OPTIONS = {
-        "Receita":          "receita",
-        "Montante":         "montante",
-        "Vendas":           "vendas",
-        "Agendamentos":     "agendamentos",
-        "Comparecimentos":  "comparecimentos",
-        "Ganhos +12":       "ganhos_mais_12",
-        "Ganhos -12":       "ganhos_menos_12",
-        "Ganhos Não atua":  "ganhos_nao_atua",
-        "Cancelados":       "cancelados",
-        "Vencidos":         "vencidos",
-    }
-    _METRICAS_NEUTRAS = {"receita", "montante", "vendas",
-                         "agendamentos", "comparecimentos"}
-    _METRICAS_FINANCEIRAS = {"receita", "montante",
-                             "receita_mais_12", "receita_menos_12", "receita_nao_atua",
-                             "montante_mais_12", "montante_menos_12", "montante_nao_atua"}
+    _RANKING_METRIC_OPTIONS = EXECUTIVAS_RANKING_METRIC_OPTIONS
+    _METRICAS_NEUTRAS = EXECUTIVAS_RANKING_METRICAS_NEUTRAS
+    _METRICAS_FINANCEIRAS = EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS
 
     def _resolve_metric_col(metric_base: str) -> str:
         """Aplica o classif local nas métricas neutras (cmap mapeia opor/
@@ -330,17 +353,75 @@ with tab_rank:
         det_norm = det_norm.loc[_mask_times].copy()
 
     # ------------------------------------------------------------------------
+    # Seletores do Top Closers (só esta aba + expanders de ranking).
+    # ------------------------------------------------------------------------
+    _SELECTBOX_METRIC_KEY = "executivas_ranking_metric"
+    _metric_keys = list(_RANKING_METRIC_OPTIONS.keys())
+    _default_metric = st.session_state.get(_SELECTBOX_METRIC_KEY, "Receita")
+    if _default_metric not in _RANKING_METRIC_OPTIONS:
+        _default_metric = "Receita"
+    metric_label = st.selectbox(
+        "Métrica do ranking",
+        options=_metric_keys,
+        index=_metric_keys.index(_default_metric),
+        key=_SELECTBOX_METRIC_KEY,
+    )
+    _exibicao_label = st.radio(
+        "Exibição do ranking",
+        options=("Ativos", "Todos / Histórico"),
+        index=0,
+        horizontal=True,
+        key="executivas_ranking_modo_exibicao",
+        help=(
+            "Ativos: apenas executivas com `ativo='y'` no cadastro oficial.\n"
+            "Todos / Histórico: closers com dados no período, inclusive "
+            "inativos. O filtro de TIMES do header vale nos dois modos."
+        ),
+    )
+    exibicao_ranking = (
+        RANKING_EXIBICAO_HISTORICO
+        if _exibicao_label == "Todos / Histórico"
+        else RANKING_EXIBICAO_ATIVOS
+    )
+
+    df_ranking_base, _df_cadastro_ranking = executivas_ranking_base_exibicao(
+        exibicao_ranking,
+        df_bruto,
+        df_filtrado,
+        _df_oficiais,
+        _df_oficiais_todas,
+    )
+    if (
+        exibicao_ranking == RANKING_EXIBICAO_HISTORICO
+        and (_df_oficiais_todas is None or _df_oficiais_todas.empty)
+        and _falha_oficiais
+    ):
+        st.caption(
+            "⚠ Cadastro histórico indisponível — exibindo closers da view "
+            "sem normalização pelo FDW."
+        )
+
+    # ------------------------------------------------------------------------
     # Ranking — base vem da view (executivas_ranking) com bucket do classif
     # aplicado. `vencidos` agora vem direto da view (mai/2026) e
     # `agendamentos` já é LÍQUIDO de `Vencida`, então o bucket selecionado
     # propaga corretamente sem ajuste extra. `_apply_classif` não toca em
     # `vencidos` — preservado como veio do groupby.
     # ------------------------------------------------------------------------
-    ranking_raw = executivas_ranking(df_filtrado)
+    _churn_por_exec = executivas_churn_agregar_por_executiva(
+        _df_churn_recorte, _df_cadastro_ranking,
+    )
+
+    ranking_raw = executivas_ranking_com_churn(
+        executivas_ranking(df_ranking_base),
+        _churn_por_exec,
+    )
     if ranking_raw.empty:
         ranking = ranking_raw
     else:
         ranking = _apply_classif(ranking_raw, cmap)
+        if "churn" in ranking_raw.columns:
+            ranking["churn"] = ranking_raw["churn"]
         # Recompõe pcts e ticket pra refletir o bucket selecionado.
         ranking["pct_conversao"] = ranking.apply(
             lambda r: _safe_pct(r.get("vendas", 0), r.get("agendamentos", 0)), axis=1)
@@ -358,20 +439,11 @@ with tab_rank:
             ranking["pct_recebimento"] = 0.0
             ranking["ticket_medio"]    = 0.0
 
-    # ------------------------------------------------------------------------
-    # Filtro do time oficial JÁ FOI APLICADO no topo da página, no grão
-    # linha-a-linha (sobre `df_filtrado`). Logo, `ranking` aqui já só tem
-    # oficiais com nome canônico — não é preciso chamar
-    # `executivas_ranking_oficiais` de novo nem repetir o try/except da FDW.
-    # ------------------------------------------------------------------------
-    # Header — label da métrica precisa ser resolvido ANTES das colunas
-    # (o selectbox vive em col_grafico, mas o título fica acima das duas).
-    # ------------------------------------------------------------------------
-    _SELECTBOX_METRIC_KEY = "executivas_ranking_metric"
-    _label_atual = st.session_state.get(_SELECTBOX_METRIC_KEY, "Receita")
-    if _label_atual not in _RANKING_METRIC_OPTIONS:
-        _label_atual = "Receita"
-    section_title("Top Closers", f"ranking do período · {_label_atual.lower()} · {classif_sel}")
+    section_title(
+        "Top Closers",
+        f"ranking do período · {metric_label.lower()} · {classif_sel} · "
+        f"{_exibicao_label.lower()}",
+    )
 
     if ranking is None or ranking.empty:
         st.info("Sem dados de ranking no período/filtros atuais.")
@@ -385,12 +457,6 @@ with tab_rank:
         ranking_plot = pd.DataFrame()
         metric_col = "receita"
         with col_grafico:
-            metric_label = st.selectbox(
-                "Métrica do ranking",
-                options=list(_RANKING_METRIC_OPTIONS.keys()),
-                index=list(_RANKING_METRIC_OPTIONS.keys()).index(_label_atual),
-                key=_SELECTBOX_METRIC_KEY,
-            )
             metric_base = _RANKING_METRIC_OPTIONS[metric_label]
             metric_col = _resolve_metric_col(metric_base)
             is_money = metric_col in _METRICAS_FINANCEIRAS
@@ -409,8 +475,13 @@ with tab_rank:
                     "Pode ser efeito do classif='Sem classificação' em métrica financeira."
                 )
             else:
-                ranking_plot = ranking[ranking[metric_col].fillna(0) > 0].copy()
-                ranking_plot = ranking_plot.sort_values(metric_col, ascending=False)
+                if metric_col == "churn":
+                    ranking_plot = executivas_ranking_plot_churn(_churn_por_exec)
+                else:
+                    ranking_plot = ranking[ranking[metric_col].fillna(0) > 0].copy()
+                    ranking_plot = ranking_plot.sort_values(
+                        metric_col, ascending=False,
+                    )
 
                 if ranking_plot.empty:
                     st.info(f"Sem **{metric_label.lower()}** no período.")
@@ -495,37 +566,72 @@ with tab_rank:
                         key=SELECTBOX_KEY,
                     )
 
-                    mask_metrica = vendas_detalhe_mask_por_metrica(
-                        det_norm, metric_col, ctx.data_ini, ctx.data_fim,
-                    )
-                    detalhe_disponivel = bool(mask_metrica.any())
-
-                    if closer_escolhido == OPCAO_TODAS:
-                        contagem_grafico = int(ranking_plot[metric_col].fillna(0).sum())
-                        mask_closer = pd.Series(True, index=det_norm.index)
-                    else:
-                        try:
-                            contagem_grafico = int(
-                                ranking_plot.loc[
-                                    ranking_plot["executiva"] == closer_escolhido,
-                                    metric_col,
-                                ].iloc[0]
-                            )
-                        except (IndexError, KeyError):
-                            contagem_grafico = 0
-                        mask_closer = vendas_detalhe_filtrar_closer(
-                            det_norm, closer_escolhido,
+                    if metric_col == "churn":
+                        detalhe_disponivel = (
+                            _df_churn_recorte is not None
+                            and not _df_churn_recorte.empty
                         )
+                        if closer_escolhido == OPCAO_TODAS:
+                            contagem_grafico = int(
+                                ranking_plot[metric_col].fillna(0).sum()
+                            )
+                            linhas_brutas = (
+                                _df_churn_recorte.copy()
+                                if detalhe_disponivel else pd.DataFrame()
+                            )
+                        else:
+                            try:
+                                contagem_grafico = int(
+                                    ranking_plot.loc[
+                                        ranking_plot["executiva"] == closer_escolhido,
+                                        metric_col,
+                                    ].iloc[0]
+                                )
+                            except (IndexError, KeyError):
+                                contagem_grafico = 0
+                            if detalhe_disponivel:
+                                _m = executivas_churn_filtrar_closer(
+                                    _df_churn_recorte,
+                                    closer_escolhido,
+                                    _df_cadastro_ranking,
+                                )
+                                linhas_brutas = _df_churn_recorte.loc[_m].copy()
+                            else:
+                                linhas_brutas = pd.DataFrame()
+                        unidade_col = "deal_id"
+                    else:
+                        mask_metrica = vendas_detalhe_mask_por_metrica(
+                            det_norm, metric_col, ctx.data_ini, ctx.data_fim,
+                        )
+                        detalhe_disponivel = bool(mask_metrica.any())
 
-                    linhas_brutas = det_norm[mask_closer & mask_metrica].copy()
+                        if closer_escolhido == OPCAO_TODAS:
+                            contagem_grafico = int(
+                                ranking_plot[metric_col].fillna(0).sum()
+                            )
+                            mask_closer = pd.Series(True, index=det_norm.index)
+                        else:
+                            try:
+                                contagem_grafico = int(
+                                    ranking_plot.loc[
+                                        ranking_plot["executiva"] == closer_escolhido,
+                                        metric_col,
+                                    ].iloc[0]
+                                )
+                            except (IndexError, KeyError):
+                                contagem_grafico = 0
+                            mask_closer = vendas_detalhe_filtrar_closer(
+                                det_norm, closer_escolhido,
+                            )
 
-                    # Dedup pela unidade da métrica: vendas/montante/receita
-                    # contam deal distinto; resto conta activity distinct.
-                    unidade_col = ("deal_id"
-                                   if metric_col in _METRICAS_FINANCEIRAS
-                                      or metric_col.startswith("ganhos_")
-                                      or metric_col == "vendas"
-                                   else "activity_id")
+                        linhas_brutas = det_norm[mask_closer & mask_metrica].copy()
+
+                        # Dedup: vendas/financeiro por deal; resto por activity.
+                        unidade_col = ("deal_id"
+                                       if metric_col in _METRICAS_FINANCEIRAS
+                                          or metric_col.startswith("ganhos_")
+                                          or metric_col == "vendas"
+                                       else "activity_id")
                     if unidade_col in linhas_brutas.columns:
                         contagem_tabela = int(linhas_brutas[unidade_col].nunique(dropna=False))
                         linhas = linhas_brutas.drop_duplicates(
@@ -593,7 +699,8 @@ with tab_rank:
                         st.warning(
                             f"⚠ Métrica **{metric_label}** não tem detalhe linha-a-linha "
                             "disponível neste período (universos cobertos: agendamentos, "
-                            "comparecimentos, vendas/ganhos, montante/receita, cancelados, vencidos)."
+                            "comparecimentos, vendas/ganhos, montante/receita, cancelados, "
+                            "churn, vencidos)."
                         )
                     elif contagem_tabela != contagem_grafico:
                         delta = contagem_tabela - contagem_grafico
@@ -627,8 +734,9 @@ with tab_rank:
                         )
                     else:
                         sort_cols = [
-                            c for c in ("data_agendamento", "data_criacao",
-                                        "data_venda", "deal_id", "activity_id")
+                            c for c in ("data_churn", "data_agendamento",
+                                        "data_criacao", "data_venda",
+                                        "deal_id", "activity_id")
                             if c in linhas.columns
                         ]
                         linhas = linhas.sort_values(
@@ -636,16 +744,27 @@ with tab_rank:
                         ).reset_index(drop=True)
                         linhas.insert(0, "#", range(1, len(linhas) + 1))
 
-                        cols_map_resumo = [
-                            ("#",                    "#"),
-                            ("nome_cliente_view",    "Nome do cliente/lead"),
-                            ("email_lead",           "E-mail"),
-                            ("classificacao_filtro", "Classificação"),
-                            ("status_filtro",        "Status reunião"),
-                            ("origem_fonte",         "Origem/fonte"),
-                            ("data_agendamento",     "Data agendamento"),
-                            ("sdr_filtro",           "SDR"),
-                        ]
+                        if metric_col == "churn":
+                            cols_map_resumo = [
+                                ("#",              "#"),
+                                ("nome_cliente",   "Cliente"),
+                                ("email",          "E-mail"),
+                                ("data_churn",     "Data churn"),
+                                ("closer_nome",    "Closer"),
+                                ("montante",       "Montante"),
+                                ("receita",        "Receita"),
+                            ]
+                        else:
+                            cols_map_resumo = [
+                                ("#",                    "#"),
+                                ("nome_cliente_view",    "Nome do cliente/lead"),
+                                ("email_lead",           "E-mail"),
+                                ("classificacao_filtro", "Classificação"),
+                                ("status_filtro",        "Status reunião"),
+                                ("origem_fonte",         "Origem/fonte"),
+                                ("data_agendamento",     "Data agendamento"),
+                                ("sdr_filtro",           "SDR"),
+                            ]
                         cols_resumo = [c for c, _ in cols_map_resumo
                                        if c in linhas.columns]
                         tabela_resumo = linhas[cols_resumo].rename(
@@ -657,6 +776,15 @@ with tab_rank:
                             cfg_resumo["Data agendamento"] = st.column_config.DateColumn(
                                 "Data agendamento", format="DD/MM/YYYY"
                             )
+                        if "Data churn" in tabela_resumo.columns:
+                            cfg_resumo["Data churn"] = st.column_config.DateColumn(
+                                "Data churn", format="DD/MM/YYYY"
+                            )
+                        for _ml in ("Montante", "Receita"):
+                            if _ml in tabela_resumo.columns:
+                                cfg_resumo[_ml] = st.column_config.NumberColumn(
+                                    _ml, format="R$ %.0f"
+                                )
                         st.dataframe(
                             tabela_resumo,
                             use_container_width=True,
@@ -805,3 +933,292 @@ with tab_temp:
             "📊 Receita × Montante não disponível para **Sem classificação** — "
             "a view só expõe valores financeiros para os buckets +12, -12 e Não atua."
         )
+
+with tab_churn_pos:
+    # =========================================================================
+    # Churn por Pós-venda — deals `zoho_deals.stage = 'Churn'` (não reuniões
+    # canceladas do funil). Cards/rankings das outras abas não são alterados.
+    # =========================================================================
+    _CHURN_VISAO_KEY = "executivas_churn_pos_visao"
+    visao_churn = st.radio(
+        "Visão",
+        ["Período selecionado", "Histórico total"],
+        horizontal=True,
+        key=_CHURN_VISAO_KEY,
+        help="Período usa o filtro global de datas (data do churn). "
+             "Histórico considera todos os deals em stage Churn.",
+    )
+    visao_periodo = visao_churn == "Período selecionado"
+
+    try:
+        df_churn_raw = get_executivas_churn_pos_venda()
+    except Exception as e:
+        st.error(f"Falha ao carregar churns: {e}")
+        df_churn_raw = None
+
+    _falha_cadastro_pos = False
+    try:
+        _df_pos_oficiais = get_executivas_pos_vendas_oficiais()
+    except Exception:
+        _df_pos_oficiais = None
+        _falha_cadastro_pos = True
+
+    if _falha_cadastro_pos or _df_pos_oficiais is None or _df_pos_oficiais.empty:
+        st.caption(
+            "⚠ Cadastro `fdw_reconecta.executivas_pos_vendas` indisponível — "
+            "nomes canônicos e flag Ativo? usam fallback (`zoho_users` / activities)."
+        )
+        _df_pos_oficiais = _df_pos_oficiais if _df_pos_oficiais is not None else pd.DataFrame()
+
+    if df_churn_raw is None or df_churn_raw.empty:
+        st.info("Sem dados de churn (stage Churn) para exibir.")
+    else:
+        df_churn_hist = churn_pos_venda_aplicar_cadastro(df_churn_raw, _df_pos_oficiais)
+        df_churn_periodo = churn_pos_filtrar_periodo(
+            df_churn_hist, ctx.data_ini, ctx.data_fim,
+        )
+        df_churn_view = df_churn_periodo if visao_periodo else df_churn_hist
+
+        if df_churn_view.empty:
+            st.info(
+                "Nenhum churn no recorte atual."
+                if visao_periodo
+                else "Nenhum deal em stage Churn na base."
+            )
+        else:
+            kpi_periodo = churn_pos_kpis(df_churn_periodo)
+        kpi_hist = churn_pos_kpis(df_churn_hist)
+        kpi_view = churn_pos_kpis(df_churn_view)
+        tem_fin_churn = (
+            kpi_view["montante"] > 0 or kpi_view["receita"] > 0
+        )
+
+        _cap_visao = (
+            f"{ctx.data_ini:%d/%m/%Y} – {ctx.data_fim:%d/%m/%Y} · data do churn"
+            if visao_periodo
+            else "todos os deals stage = Churn"
+        )
+        section_title("Churn por Pós-venda", _cap_visao)
+        st.caption(
+            "Fonte: `zoho_deals` com **stage = Churn**. Data do churn: "
+            "`stage_modified_time` → `modified_time` → `data_hora_compra` "
+            "(campo usado em `data_churn_fonte`)."
+        )
+
+        # --- Cards (sempre mostram período + histórico quando em visão período)
+        if visao_periodo:
+            c1, c2, c3, c4 = st.columns(4, gap="small")
+            with c1:
+                metric_card_v2(
+                    "Churns no período",
+                    int_br(kpi_periodo["total"]),
+                    accent=True,
+                )
+            with c2:
+                metric_card_v2(
+                    "Com pós identificado",
+                    int_br(kpi_periodo["com_pos"]),
+                    hint=f"{pct(kpi_periodo['pct_com_pos'])} do período",
+                )
+            with c3:
+                metric_card_v2(
+                    "Sem pós identificado",
+                    int_br(kpi_periodo["sem_pos"]),
+                )
+            with c4:
+                metric_card_v2(
+                    "% com pós identificado",
+                    pct(kpi_periodo["pct_com_pos"]),
+                )
+
+            h1, h2, h3, h4 = st.columns(4, gap="small")
+            with h1:
+                metric_card_v2("Churns históricos", int_br(kpi_hist["total"]))
+            with h2:
+                metric_card_v2(
+                    "Históricos com pós",
+                    int_br(kpi_hist["com_pos"]),
+                )
+            with h3:
+                metric_card_v2(
+                    "Históricos sem pós",
+                    int_br(kpi_hist["sem_pos"]),
+                )
+            with h4:
+                metric_card_v2(
+                    "% hist. com pós",
+                    pct(kpi_hist["pct_com_pos"]),
+                )
+        else:
+            c1, c2, c3, c4 = st.columns(4, gap="small")
+            with c1:
+                metric_card_v2(
+                    "Churns históricos",
+                    int_br(kpi_hist["total"]),
+                    accent=True,
+                )
+            with c2:
+                metric_card_v2(
+                    "Com pós identificado",
+                    int_br(kpi_hist["com_pos"]),
+                )
+            with c3:
+                metric_card_v2(
+                    "Sem pós identificado",
+                    int_br(kpi_hist["sem_pos"]),
+                )
+            with c4:
+                metric_card_v2(
+                    "% com pós identificado",
+                    pct(kpi_hist["pct_com_pos"]),
+                )
+
+        if tem_fin_churn:
+            f1, f2, f3 = st.columns(3, gap="small")
+            _kf = kpi_view
+            with f1:
+                metric_card_v2("Montante churn", brl(_kf["montante"]))
+            with f2:
+                metric_card_v2("Receita churn", brl(_kf["receita"]))
+            with f3:
+                metric_card_v2(
+                    "Ticket médio churn",
+                    brl(_kf["ticket_medio"]) if _kf["ticket_medio"] else "—",
+                    hint="montante ÷ churns no recorte",
+                )
+
+        # --- Ranking + gráfico
+        ranking_pos = churn_pos_ranking(df_churn_periodo, df_churn_hist)
+        if not ranking_pos.empty:
+            _metric_graf = st.selectbox(
+                "Métrica do gráfico",
+                ["Churns no período", "Churns históricos"],
+                key="executivas_churn_pos_metric_graf",
+            )
+            col_y = (
+                "churns_periodo"
+                if _metric_graf == "Churns no período"
+                else "churns_historicos"
+            )
+            section_title(
+                "Top Pós-vendas por churn",
+                _metric_graf.lower(),
+            )
+            plot_df = ranking_pos[ranking_pos[col_y].fillna(0) > 0].copy()
+            if plot_df.empty:
+                st.info(f"Sem dados para **{_metric_graf.lower()}**.")
+            else:
+                st.plotly_chart(
+                    bar_ranked(
+                        plot_df, "pos_venda", col_y,
+                        top_n=12, height=320, money=False,
+                    ),
+                    use_container_width=True,
+                    key="executivas_churn_pos_chart",
+                )
+
+            section_title("Ranking por pós-venda", "período vs histórico")
+            rank_show = ranking_pos.copy()
+            rank_show["pos_ativo"] = rank_show["pos_ativo"].apply(
+                lambda a: (
+                    "Sim" if str(a).lower() == "y"
+                    else ("Não" if str(a).lower() == "n" else "—")
+                )
+            )
+            rank_display = rank_show.rename(columns={
+                "pos_venda": "Pós-venda",
+                "pos_ativo": "Ativo?",
+                "churns_periodo": "Churns no período",
+                "pct_churn_periodo": "% do churn no período",
+                "churns_historicos": "Churns históricos",
+                "ultimo_contato_pos": "Último contato pós",
+                "qtd_contatos_pos": "Qtd. contatos pós",
+                "montante_churn": "Montante churn",
+                "receita_churn": "Receita churn",
+                "ticket_medio": "Ticket médio",
+            })
+            cfg_rank = {}
+            if "Último contato pós" in rank_display.columns:
+                cfg_rank["Último contato pós"] = st.column_config.DatetimeColumn(
+                    format="DD/MM/YYYY",
+                )
+            for col_m in ("Montante churn", "Receita churn", "Ticket médio"):
+                if col_m in rank_display.columns:
+                    cfg_rank[col_m] = st.column_config.NumberColumn(format="R$ %.0f")
+            if "% do churn no período" in rank_display.columns:
+                cfg_rank["% do churn no período"] = st.column_config.NumberColumn(
+                    format="%.2f%%",
+                )
+            st.dataframe(
+                rank_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config=cfg_rank,
+            )
+
+        # --- Tabela detalhada
+        section_title("Detalhe linha a linha", _cap_visao)
+        det = df_churn_view.copy()
+        det["pos_ativo_label"] = det["pos_ativo"].apply(
+            lambda a: (
+                "Sim" if str(a).lower() == "y"
+                else ("Não" if str(a).lower() == "n" else "—")
+            )
+        )
+        cols_map = [
+            ("nome_cliente", "Cliente"),
+            ("email", "Email"),
+            ("deal_id", "Deal ID"),
+            ("data_churn", "Data do churn"),
+            ("data_churn_fonte", "Fonte data churn"),
+            ("closer_nome", "Closer"),
+            ("pos_venda", "Pós-venda identificado"),
+            ("pos_ativo_label", "Ativo no pós?"),
+            ("origem_vinculo", "Origem do vínculo"),
+            ("ultimo_contato_pos", "Último contato pós"),
+            ("qtd_contatos_pos", "Qtd. contatos pós"),
+            ("stage", "Stage"),
+            ("montante", "Montante"),
+            ("receita", "Receita"),
+            ("motivo_perda", "Motivo perda"),
+        ]
+        cols_ok = [c for c, _ in cols_map if c in det.columns]
+        tabela = det[cols_ok].rename(
+            columns={c: lbl for c, lbl in cols_map if c in cols_ok}
+        )
+        cfg_det = {}
+        if "Data do churn" in tabela.columns:
+            cfg_det["Data do churn"] = st.column_config.DateColumn(format="DD/MM/YYYY")
+        if "Último contato pós" in tabela.columns:
+            cfg_det["Último contato pós"] = st.column_config.DatetimeColumn(
+                format="DD/MM/YYYY HH:mm",
+            )
+        for col_m in ("Montante", "Receita"):
+            if col_m in tabela.columns:
+                cfg_det[col_m] = st.column_config.NumberColumn(format="R$ %.0f")
+        st.dataframe(
+            tabela,
+            use_container_width=True,
+            hide_index=True,
+            column_config=cfg_det,
+        )
+
+        with st.expander("Diagnóstico / validação"):
+            st.markdown(
+                f"- Deals stage **Churn** (histórico): **{int_br(len(df_churn_hist))}**\n"
+                f"- No período global: **{int_br(len(df_churn_periodo))}**\n"
+                f"- Sem pós (`{CHURN_POS_SEM_IDENTIFICADO}`): "
+                f"**{int_br(kpi_hist['sem_pos'])}** histórico · "
+                f"**{int_br(kpi_periodo['sem_pos'])}** no período\n"
+                f"- Cadastro oficial: "
+                f"{'OK' if not _falha_cadastro_pos and _df_pos_oficiais is not None and not _df_pos_oficiais.empty else 'indisponível'}"
+            )
+            if "data_churn_fonte" in df_churn_hist.columns:
+                st.caption("Distribuição da fonte da data do churn (histórico):")
+                _vc_fonte = (
+                    df_churn_hist["data_churn_fonte"]
+                    .value_counts()
+                    .reset_index()
+                )
+                _vc_fonte.columns = ["fonte", "qtd"]
+                st.dataframe(_vc_fonte, hide_index=True)

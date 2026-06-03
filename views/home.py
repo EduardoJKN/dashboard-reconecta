@@ -5,16 +5,28 @@ import streamlit as st
 
 from src.repositories import (
     get_executivas,
+    get_executivas_churn_pos_venda,
     get_executivas_oficiais,
+    get_executivas_oficiais_todas,
     get_investimento_diario,
     get_leads_visao_geral,
     get_media_movel_vendas,
     get_vendas_leads_detalhe_diario,
 )
 from src.transforms import (
+    EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
+    EXECUTIVAS_RANKING_METRIC_OPTIONS,
     delta_pct,
+    executivas_churn_agregar_por_executiva,
+    executivas_churn_filtrar_closer,
+    executivas_churn_filtrar_recorte,
+    RANKING_EXIBICAO_ATIVOS,
+    RANKING_EXIBICAO_HISTORICO,
     executivas_filtrar_time_oficial,
     executivas_ranking,
+    executivas_ranking_base_exibicao,
+    executivas_ranking_com_churn,
+    executivas_ranking_plot_churn,
     ranking_dividir_principal_detalhado,
     receita_por_mes,
     vendas_detalhe_filtrar_closer,
@@ -109,6 +121,11 @@ except Exception:
     _df_oficiais_home = None
     _falha_oficiais_home = True
 
+try:
+    _df_oficiais_todas_home = get_executivas_oficiais_todas()
+except Exception:
+    _df_oficiais_todas_home = None
+
 if _df_oficiais_home is not None and not _df_oficiais_home.empty:
     df_exec_filtrado = executivas_filtrar_time_oficial(
         df_exec_bruto, _df_oficiais_home,
@@ -124,6 +141,13 @@ else:
 if df_exec_bruto.empty:
     st.warning("Nenhum registro para o filtro atual.")
     st.stop()
+
+_times_sel_home_churn = list(ctx.selections.get("times") or [])
+_closers_sel_home_churn = list(ctx.selections.get("closer") or [])
+try:
+    _df_churn_all_home = get_executivas_churn_pos_venda()
+except Exception:
+    _df_churn_all_home = pd.DataFrame()
 
 # Período anterior (mesmo tamanho) para os deltas. Mantém as duas
 # bases pareadas (apples-to-apples): KPIs comparam bruto×bruto,
@@ -269,23 +293,8 @@ else:
 # (replicado abaixo via vendas_detalhe_filtrar_*).
 # ---------------------------------------------------------------------------
 
-_RANKING_METRIC_OPTIONS = {
-    "Receita":          "receita",
-    "Montante":         "montante",
-    "Vendas":           "vendas",
-    "Agendamentos":     "agendamentos",
-    "Comparecimentos":  "comparecimentos",
-    "Ganhos +12":       "ganhos_mais_12",
-    "Ganhos -12":       "ganhos_menos_12",
-    "Ganhos Não atua":  "ganhos_nao_atua",
-    "Cancelados":       "cancelados",
-    "Vencidos":         "vencidos",
-}
-_METRICAS_FINANCEIRAS = {
-    "receita", "montante",
-    "receita_mais_12", "receita_menos_12", "receita_nao_atua",
-    "montante_mais_12", "montante_menos_12", "montante_nao_atua",
-}
+_RANKING_METRIC_OPTIONS = EXECUTIVAS_RANKING_METRIC_OPTIONS
+_METRICAS_FINANCEIRAS = EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS
 
 
 def _safe_pct(num, den) -> float:
@@ -327,28 +336,78 @@ if det_norm is not None and not det_norm.empty:
         det_norm = det_norm.loc[_mask_t].copy()
 
 # ---------------------------------------------------------------------------
-# Ranking — `vencidos`, `agendamentos` (já líquido de `Vencida`) e todas as
-# demais métricas vêm direto da view `bi.vw_dashboard_comercial_executivas_rw`
-# (atualizada em mai/2026). Não há mais injeção do detalhe — `executivas_
-# ranking` agrega tudo num só groupby. `det_norm` continua sendo carregado
-# acima porque alimenta o painel de detalhe nome-a-nome do gráfico clicável.
-# ---------------------------------------------------------------------------
-ranking_home = executivas_ranking(df_exec_filtrado)
-
-# Filtro do time oficial JÁ FOI APLICADO no topo da página, no grão
-# linha-a-linha (sobre `df_exec_filtrado`). Logo `ranking_home` só tem
-# oficiais com nome canônico — não é preciso chamar
-# `executivas_ranking_oficiais` de novo.
-
-# ---------------------------------------------------------------------------
-# Header — label da métrica precisa ser resolvido ANTES das colunas
-# (mesmo padrão do tab_rank de Executivas e do Top SDRs de Pré-vendas).
+# Seletores do Top Closers (só ranking + expanders; KPIs usam df_exec_bruto).
 # ---------------------------------------------------------------------------
 _HOME_SELECTBOX_METRIC_KEY = "home_top_closer_metric"
+_metric_keys_home = list(_RANKING_METRIC_OPTIONS.keys())
 _label_atual_home = st.session_state.get(_HOME_SELECTBOX_METRIC_KEY, "Receita")
 if _label_atual_home not in _RANKING_METRIC_OPTIONS:
     _label_atual_home = "Receita"
-section_title("Top Closers", f"ranking do período · {_label_atual_home.lower()}")
+metric_label_home = st.selectbox(
+    "Métrica do ranking",
+    options=_metric_keys_home,
+    index=_metric_keys_home.index(_label_atual_home),
+    key=_HOME_SELECTBOX_METRIC_KEY,
+)
+_exibicao_label_home = st.radio(
+    "Exibição do ranking",
+    options=("Ativos", "Todos / Histórico"),
+    index=0,
+    horizontal=True,
+    key="home_ranking_modo_exibicao",
+    help=(
+        "Ativos: apenas executivas com `ativo='y'` no cadastro oficial.\n"
+        "Todos / Histórico: closers com dados no período, inclusive "
+        "inativos. O filtro de Closer/Times do header vale nos dois modos."
+    ),
+)
+exibicao_ranking_home = (
+    RANKING_EXIBICAO_HISTORICO
+    if _exibicao_label_home == "Todos / Histórico"
+    else RANKING_EXIBICAO_ATIVOS
+)
+
+df_ranking_base_home, _df_cadastro_ranking_home = executivas_ranking_base_exibicao(
+    exibicao_ranking_home,
+    df_exec_bruto,
+    df_exec_filtrado,
+    _df_oficiais_home,
+    _df_oficiais_todas_home,
+)
+if (
+    exibicao_ranking_home == RANKING_EXIBICAO_HISTORICO
+    and (_df_oficiais_todas_home is None or _df_oficiais_todas_home.empty)
+    and _falha_oficiais_home
+):
+    st.caption(
+        "⚠ Cadastro histórico indisponível — exibindo closers da view "
+        "sem normalização pelo FDW."
+    )
+
+_df_churn_home = executivas_churn_filtrar_recorte(
+    _df_churn_all_home, ctx.data_ini, ctx.data_fim, _times_sel_home_churn,
+)
+if _closers_sel_home_churn:
+    _mask_ch = pd.Series(False, index=_df_churn_home.index)
+    for _c in _closers_sel_home_churn:
+        _mask_ch |= executivas_churn_filtrar_closer(
+            _df_churn_home, _c, _df_cadastro_ranking_home,
+        )
+    _df_churn_home = _df_churn_home.loc[_mask_ch].copy()
+
+_churn_por_exec_home = executivas_churn_agregar_por_executiva(
+    _df_churn_home, _df_cadastro_ranking_home,
+)
+ranking_home = executivas_ranking_com_churn(
+    executivas_ranking(df_ranking_base_home),
+    _churn_por_exec_home,
+)
+
+section_title(
+    "Top Closers",
+    f"ranking do período · {metric_label_home.lower()} · "
+    f"{_exibicao_label_home.lower()}",
+)
 
 if ranking_home is None or ranking_home.empty:
     st.info("Sem dados de ranking no período/filtros atuais.")
@@ -362,12 +421,6 @@ else:
     ranking_plot_home = pd.DataFrame()
     metric_col_home = "receita"
     with col_grafico_h:
-        metric_label_home = st.selectbox(
-            "Métrica do ranking",
-            options=list(_RANKING_METRIC_OPTIONS.keys()),
-            index=list(_RANKING_METRIC_OPTIONS.keys()).index(_label_atual_home),
-            key=_HOME_SELECTBOX_METRIC_KEY,
-        )
         metric_col_home = _RANKING_METRIC_OPTIONS[metric_label_home]
         is_money_home = metric_col_home in _METRICAS_FINANCEIRAS
 
@@ -377,11 +430,16 @@ else:
                 "possível schema drift na view."
             )
         else:
-            ranking_plot_home = (
-                ranking_home[ranking_home[metric_col_home].fillna(0) > 0]
-                .sort_values(metric_col_home, ascending=False)
-                .copy()
-            )
+            if metric_col_home == "churn":
+                ranking_plot_home = executivas_ranking_plot_churn(
+                    _churn_por_exec_home,
+                )
+            else:
+                ranking_plot_home = (
+                    ranking_home[ranking_home[metric_col_home].fillna(0) > 0]
+                    .sort_values(metric_col_home, ascending=False)
+                    .copy()
+                )
             if ranking_plot_home.empty:
                 st.info(f"Sem **{metric_label_home.lower()}** no período.")
             else:
@@ -466,37 +524,69 @@ else:
                     key=SELECTBOX_KEY_H,
                 )
 
-                mask_metrica_h = vendas_detalhe_mask_por_metrica(
-                    det_norm, metric_col_home, ctx.data_ini, ctx.data_fim,
-                )
-                detalhe_disp_h = bool(mask_metrica_h.any())
-
-                if closer_escolhido_h == OPCAO_TODOS_HOME:
-                    contagem_graf_h = int(
-                        ranking_plot_home[metric_col_home].fillna(0).sum()
+                if metric_col_home == "churn":
+                    detalhe_disp_h = (
+                        _df_churn_home is not None and not _df_churn_home.empty
                     )
-                    mask_closer_h = pd.Series(True, index=det_norm.index)
-                else:
-                    try:
+                    if closer_escolhido_h == OPCAO_TODOS_HOME:
                         contagem_graf_h = int(
-                            ranking_plot_home.loc[
-                                ranking_plot_home["executiva"] == closer_escolhido_h,
-                                metric_col_home,
-                            ].iloc[0]
+                            ranking_plot_home[metric_col_home].fillna(0).sum()
                         )
-                    except (IndexError, KeyError):
-                        contagem_graf_h = 0
-                    mask_closer_h = vendas_detalhe_filtrar_closer(
-                        det_norm, closer_escolhido_h,
+                        linhas_brutas_h = (
+                            _df_churn_home.copy() if detalhe_disp_h else pd.DataFrame()
+                        )
+                    else:
+                        try:
+                            contagem_graf_h = int(
+                                ranking_plot_home.loc[
+                                    ranking_plot_home["executiva"] == closer_escolhido_h,
+                                    metric_col_home,
+                                ].iloc[0]
+                            )
+                        except (IndexError, KeyError):
+                            contagem_graf_h = 0
+                        if detalhe_disp_h:
+                            _mh = executivas_churn_filtrar_closer(
+                                _df_churn_home,
+                                closer_escolhido_h,
+                                _df_cadastro_ranking_home,
+                            )
+                            linhas_brutas_h = _df_churn_home.loc[_mh].copy()
+                        else:
+                            linhas_brutas_h = pd.DataFrame()
+                    unidade_col_h = "deal_id"
+                else:
+                    mask_metrica_h = vendas_detalhe_mask_por_metrica(
+                        det_norm, metric_col_home, ctx.data_ini, ctx.data_fim,
                     )
+                    detalhe_disp_h = bool(mask_metrica_h.any())
 
-                linhas_brutas_h = det_norm[mask_closer_h & mask_metrica_h].copy()
+                    if closer_escolhido_h == OPCAO_TODOS_HOME:
+                        contagem_graf_h = int(
+                            ranking_plot_home[metric_col_home].fillna(0).sum()
+                        )
+                        mask_closer_h = pd.Series(True, index=det_norm.index)
+                    else:
+                        try:
+                            contagem_graf_h = int(
+                                ranking_plot_home.loc[
+                                    ranking_plot_home["executiva"] == closer_escolhido_h,
+                                    metric_col_home,
+                                ].iloc[0]
+                            )
+                        except (IndexError, KeyError):
+                            contagem_graf_h = 0
+                        mask_closer_h = vendas_detalhe_filtrar_closer(
+                            det_norm, closer_escolhido_h,
+                        )
 
-                unidade_col_h = ("deal_id"
-                                 if metric_col_home in _METRICAS_FINANCEIRAS
-                                    or metric_col_home.startswith("ganhos_")
-                                    or metric_col_home == "vendas"
-                                 else "activity_id")
+                    linhas_brutas_h = det_norm[mask_closer_h & mask_metrica_h].copy()
+
+                    unidade_col_h = ("deal_id"
+                                     if metric_col_home in _METRICAS_FINANCEIRAS
+                                        or metric_col_home.startswith("ganhos_")
+                                        or metric_col_home == "vendas"
+                                     else "activity_id")
                 if unidade_col_h in linhas_brutas_h.columns:
                     contagem_tab_h = int(
                         linhas_brutas_h[unidade_col_h].nunique(dropna=False)
@@ -567,7 +657,7 @@ else:
                         f"⚠ Métrica **{metric_label_home}** não tem detalhe "
                         "linha-a-linha disponível neste período (universos cobertos: "
                         "agendamentos, comparecimentos, vendas/ganhos, montante/receita, "
-                        "cancelados, vencidos)."
+                        "cancelados, churn, vencidos)."
                     )
                 elif contagem_tab_h != contagem_graf_h:
                     delta_h = contagem_tab_h - contagem_graf_h
@@ -599,8 +689,9 @@ else:
                     )
                 else:
                     sort_cols_h = [
-                        c for c in ("data_agendamento", "data_criacao",
-                                    "data_venda", "deal_id", "activity_id")
+                        c for c in ("data_churn", "data_agendamento",
+                                    "data_criacao", "data_venda",
+                                    "deal_id", "activity_id")
                         if c in linhas_h.columns
                     ]
                     linhas_h = linhas_h.sort_values(
@@ -608,16 +699,27 @@ else:
                     ).reset_index(drop=True)
                     linhas_h.insert(0, "#", range(1, len(linhas_h) + 1))
 
-                    cols_map_resumo_h = [
-                        ("#",                    "#"),
-                        ("nome_cliente_view",    "Nome do cliente/lead"),
-                        ("email_lead",           "E-mail"),
-                        ("classificacao_filtro", "Classificação"),
-                        ("status_filtro",        "Status reunião"),
-                        ("origem_fonte",         "Origem/fonte"),
-                        ("data_agendamento",     "Data agendamento"),
-                        ("sdr_filtro",           "SDR"),
-                    ]
+                    if metric_col_home == "churn":
+                        cols_map_resumo_h = [
+                            ("#",              "#"),
+                            ("nome_cliente",   "Cliente"),
+                            ("email",          "E-mail"),
+                            ("data_churn",     "Data churn"),
+                            ("closer_nome",    "Closer"),
+                            ("montante",       "Montante"),
+                            ("receita",        "Receita"),
+                        ]
+                    else:
+                        cols_map_resumo_h = [
+                            ("#",                    "#"),
+                            ("nome_cliente_view",    "Nome do cliente/lead"),
+                            ("email_lead",           "E-mail"),
+                            ("classificacao_filtro", "Classificação"),
+                            ("status_filtro",        "Status reunião"),
+                            ("origem_fonte",         "Origem/fonte"),
+                            ("data_agendamento",     "Data agendamento"),
+                            ("sdr_filtro",           "SDR"),
+                        ]
                     cols_resumo_h = [c for c, _ in cols_map_resumo_h
                                      if c in linhas_h.columns]
                     tabela_resumo_h = linhas_h[cols_resumo_h].rename(
@@ -629,6 +731,15 @@ else:
                         cfg_resumo_h["Data agendamento"] = st.column_config.DateColumn(
                             "Data agendamento", format="DD/MM/YYYY"
                         )
+                    if "Data churn" in tabela_resumo_h.columns:
+                        cfg_resumo_h["Data churn"] = st.column_config.DateColumn(
+                            "Data churn", format="DD/MM/YYYY"
+                        )
+                    for _mlh in ("Montante", "Receita"):
+                        if _mlh in tabela_resumo_h.columns:
+                            cfg_resumo_h[_mlh] = st.column_config.NumberColumn(
+                                _mlh, format="R$ %.0f"
+                            )
                     st.dataframe(
                         tabela_resumo_h,
                         use_container_width=True,

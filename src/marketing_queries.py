@@ -23,6 +23,70 @@ def _params(data_ini: date, data_fim: date) -> dict:
     return {"data_ini": data_ini, "data_fim": data_fim}
 
 
+_ONE_PAGE_FUNIL_COLS = (
+    "agendamentos_globais",
+    "agendamentos_leads_periodo_globais",
+    "agendamentos_leads_historico_globais",
+    "comparecimentos_globais",
+    "comparecimentos_leads_periodo_globais",
+    "comparecimentos_leads_historico_globais",
+    "vendas_globais",
+    "vendas_leads_periodo_globais",
+    "vendas_leads_historico_globais",
+)
+
+
+def _merge_funil_one_page_globais(
+    df: pd.DataFrame, data_ini: date, data_fim: date,
+) -> pd.DataFrame:
+    """Anexa colunas globais One Page (agend/comp/vendas + decomp) em cada row."""
+    if df is None or df.empty:
+        return df
+    op = get_mkt_funil_one_page_globais(data_ini, data_fim)
+    if not op:
+        return df
+    out = df.copy()
+    for col in _ONE_PAGE_FUNIL_COLS:
+        out[col] = op.get(col, 0)
+    return out
+
+
+def _merge_funil_one_page_agend(
+    df: pd.DataFrame, data_ini: date, data_fim: date,
+) -> pd.DataFrame:
+    """Alias legado — delega para ``_merge_funil_one_page_globais``."""
+    return _merge_funil_one_page_globais(df, data_ini, data_fim)
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo totais One Page do funil…")
+def get_mkt_funil_one_page_globais(
+    data_ini: date, data_fim: date,
+) -> dict:
+    """1 row — agendamentos, comparecimentos, vendas + decomp período/histórico."""
+    try:
+        df = run_sql_file(
+            "mkt_funil_agend_one_page_globais.sql", _params(data_ini, data_fim),
+        )
+    except (ProgrammingError, OperationalError):
+        return {}
+    if df is None or df.empty:
+        return {}
+    row = df.iloc[0]
+    return {c: int(row[c]) if row[c] is not None else 0 for c in _ONE_PAGE_FUNIL_COLS}
+
+
+def get_mkt_funil_agend_one_page_globais(
+    data_ini: date, data_fim: date,
+) -> dict:
+    """Alias legado — retorna só colunas de agendamento."""
+    op = get_mkt_funil_one_page_globais(data_ini, data_fim)
+    return {k: op[k] for k in (
+        "agendamentos_globais",
+        "agendamentos_leads_periodo_globais",
+        "agendamentos_leads_historico_globais",
+    ) if k in op}
+
+
 def _to_datetime(df: pd.DataFrame, col: str = "data_ref") -> pd.DataFrame:
     if not df.empty and col in df.columns:
         df[col] = pd.to_datetime(df[col])
@@ -268,6 +332,13 @@ def get_mkt_criativos_cobertura(data_ini: date, data_fim: date) -> pd.DataFrame:
     )
 
 
+# Regra oficial dos funis de Marketing (Criativos + Campanhas):
+# leads: ext_reconecta.leads → timestamp::date
+# typeform: created_at::date
+# Aplicações em "Todos os resultados": universo Typeform do período (igual One Page).
+# Aplicações em criativo/campanha específica: ∩ e-mail com leads da seleção.
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo funil por criativo…")
 def get_mkt_criativo_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Funil completo POR CRIATIVO (grão `ad_name` consolidado).
@@ -284,9 +355,10 @@ def get_mkt_criativo_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
     Lead → deal por priority `zoho_id > session_id > email`; deal →
     activity via `what_id`. Mesma regra oficial Visão Geral / Growth.
     """
-    return run_sql_file(
-        "mkt_criativo_funil.sql", _params(data_ini, data_fim)
+    df = run_sql_file(
+        "mkt_criativo_funil.sql", _params(data_ini, data_fim),
     )
+    return _merge_funil_one_page_agend(df, data_ini, data_fim)
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo funil por campanha…")
@@ -306,9 +378,10 @@ def get_mkt_campanha_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
     activity seguem a regra oficial (mesma da Visão Geral / Growth /
     funil de criativos).
     """
-    return run_sql_file(
-        "mkt_campanha_funil.sql", _params(data_ini, data_fim)
+    df = run_sql_file(
+        "mkt_campanha_funil.sql", _params(data_ini, data_fim),
     )
+    return _merge_funil_one_page_agend(df, data_ini, data_fim)
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo auditoria do funil…")

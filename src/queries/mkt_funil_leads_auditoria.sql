@@ -7,6 +7,8 @@
 -- prioridade email > telefone, desempate origem_util DESC + lead mais
 -- recente antes da venda).
 --
+-- Datas (regra oficial): leads `timestamp::date`; vendas `data_hora_compra::date`.
+--
 -- Params:
 --   :data_ini, :data_fim    — janela de vendas (data_hora_compra::date)
 --   :nivel                  — 'criativo' ou 'campanha' (determina a coluna
@@ -51,7 +53,7 @@ leads_atribuicao_vendas AS (
     -- 1:1 a atribuição usada no gráfico/tabela do funil.
     SELECT
         l.id::text                                                   AS lead_id,
-        l.created_at                                                 AS lead_created_at,
+        l.timestamp                                                AS lead_created_at,
         l.first_name                                                 AS lead_first_name,
         l.email                                                      AS lead_email,
         l.phone_number                                               AS lead_phone_number,
@@ -73,7 +75,7 @@ leads_atribuicao_vendas AS (
             ELSE 0
         END                                                          AS origem_util
     FROM ext_reconecta.leads l
-    WHERE l.created_at::date <= :data_fim
+    WHERE l.timestamp::date <= :data_fim
       AND l.email IS NOT NULL
       AND btrim(l.email) <> ''
       AND lower(l.email) NOT LIKE '%@teste%'

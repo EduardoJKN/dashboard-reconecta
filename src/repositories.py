@@ -330,6 +330,29 @@ def get_executivas_oficiais() -> pd.DataFrame:
     return run_sql_file("executivas_oficiais.sql")
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro completo de Vendas…")
+def get_executivas_oficiais_todas() -> pd.DataFrame:
+    """Cadastro ativo + histórico (`executivas_oficiais_todas.sql`)."""
+    return run_sql_file("executivas_oficiais_todas.sql")
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pós-venda…")
+def get_executivas_pos_vendas_oficiais() -> pd.DataFrame:
+    """Cadastro pós-venda ativos + históricos (`executivas_pos_vendas_oficiais.sql`)."""
+    return run_sql_file("executivas_pos_vendas_oficiais.sql")
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo churns (stage Churn)…")
+def get_executivas_churn_pos_venda() -> pd.DataFrame:
+    """1 linha por deal `stage = 'Churn'` para a aba Churn por Pós-venda."""
+    df = run_sql_file("executivas_churn_pos_venda.sql")
+    if not df.empty:
+        for col in ("data_churn", "ultimo_contato_pos", "ts_churn"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (diário por SDR)…")
 def get_prevendas_overview_diario_por_sdr(data_ini: date,
                                           data_fim: date) -> pd.DataFrame:

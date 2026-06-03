@@ -145,11 +145,38 @@ def executivas_por_dia(df: pd.DataFrame) -> pd.DataFrame:
 _RANKING_BASE_COLS = (
     "oportunidades", "agendamentos", "comparecimentos",
     "vendas", "montante", "receita",
-    "perdidos", "cancelados", "vencidos",
+    "perdidos", "cancelados", "churn", "vencidos",
     "novos", "ascensoes", "renovacoes", "indicacoes",
     "lead_in_consultoria_gratuita",
     *_EXEC_CLASSIF_SUM,
 )
+
+# Métricas do Top Closers — fonte única p/ Visão Geral e Executivas & Times.
+EXECUTIVAS_RANKING_METRIC_OPTIONS: dict[str, str] = {
+    "Receita":          "receita",
+    "Montante":         "montante",
+    "Vendas":           "vendas",
+    "Agendamentos":     "agendamentos",
+    "Comparecimentos":  "comparecimentos",
+    "Ganhos +12":       "ganhos_mais_12",
+    "Ganhos -12":       "ganhos_menos_12",
+    "Ganhos Não atua":  "ganhos_nao_atua",
+    "Cancelados":       "cancelados",
+    "Churn":            "churn",
+    "Vencidos":         "vencidos",
+}
+EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS = frozenset({
+    "receita", "montante",
+    "receita_mais_12", "receita_menos_12", "receita_nao_atua",
+    "montante_mais_12", "montante_menos_12", "montante_nao_atua",
+})
+EXECUTIVAS_RANKING_METRICAS_NEUTRAS = frozenset({
+    "receita", "montante", "vendas", "agendamentos", "comparecimentos",
+})
+
+RANKING_EXIBICAO_ATIVOS = "Somente ativos"
+RANKING_EXIBICAO_HISTORICO = "Histórico geral"
+RANKING_EXIBICAO_OPCOES = (RANKING_EXIBICAO_ATIVOS, RANKING_EXIBICAO_HISTORICO)
 _RANKING_DERIVED_COLS = ("pct_agendamento", "pct_comparecimento",
                          "pct_conversao", "pct_vendas",
                          "pct_recebimento", "ticket_medio")
@@ -182,6 +209,179 @@ def executivas_ranking(df: pd.DataFrame) -> pd.DataFrame:
     agg["ticket_medio"]       = agg.apply(lambda r: _safe_div(r["montante"], r["vendas"]), axis=1)
 
     return agg.sort_values("receita", ascending=False).reset_index(drop=True)
+
+
+def _build_executivas_oficiais_tokens(
+    df_oficiais: pd.DataFrame,
+) -> list[tuple[str, set[str]]]:
+    oficiais_tokens: list[tuple[str, set[str]]] = []
+    if df_oficiais is None or df_oficiais.empty or "nome" not in df_oficiais.columns:
+        return oficiais_tokens
+    for nome in df_oficiais["nome"].dropna().tolist():
+        toks = set(_tokens_nome_ranking(nome))
+        if toks:
+            oficiais_tokens.append((nome, toks))
+    return oficiais_tokens
+
+
+def executivas_churn_filtrar_recorte(
+    df_churn: pd.DataFrame,
+    data_ini,
+    data_fim,
+    times_sel: list | None = None,
+) -> pd.DataFrame:
+    """Churns no período + filtro opcional de TIMES (`time_vendas`)."""
+    if df_churn is None or df_churn.empty:
+        return df_churn
+    out = churn_pos_filtrar_periodo(df_churn, data_ini, data_fim)
+    if not times_sel or out.empty or "time_vendas" not in out.columns:
+        return out
+    mask = pd.Series(False, index=out.index)
+    for t in times_sel:
+        mask |= out["time_vendas"].astype(str).str.strip() == str(t).strip()
+    return out.loc[mask].copy()
+
+
+def executivas_churn_total(df_churn: pd.DataFrame) -> int:
+    if df_churn is None or df_churn.empty or "deal_id" not in df_churn.columns:
+        return 0
+    return int(df_churn["deal_id"].nunique())
+
+
+def executivas_churn_resolver_closer(
+    nome,
+    df_oficiais: pd.DataFrame | None,
+) -> str:
+    """Closer do deal Churn — cadastro oficial por tokens; senão nome do Zoho."""
+    raw = (nome if isinstance(nome, str) else "") or ""
+    raw = raw.strip()
+    if not raw:
+        return CHURN_SEM_CLOSER
+    tokens = _build_executivas_oficiais_tokens(df_oficiais)
+    if tokens:
+        canon = _match_oficial_por_tokens(raw, tokens)
+        if canon:
+            return canon
+    return raw
+
+
+def _executivas_churn_nomes_casam(nome_a: str, nome_b: str) -> bool:
+    """True quando os dois nomes são o mesmo closer (exato ou por tokens)."""
+    a = (nome_a or "").strip()
+    b = (nome_b or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    ta = set(_tokens_nome_ranking(a))
+    tb = set(_tokens_nome_ranking(b))
+    if not ta or not tb:
+        return False
+    return ta == tb or ta.issubset(tb) or tb.issubset(ta)
+
+
+def executivas_churn_agregar_por_executiva(
+    df_churn: pd.DataFrame,
+    df_oficiais: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """COUNT DISTINCT deal_id por closer — mesma base do card Churn."""
+    if df_churn is None or df_churn.empty:
+        return pd.DataFrame(columns=["executiva", "churn"])
+    tmp = df_churn.copy()
+    tmp["executiva"] = tmp["closer_nome"].apply(
+        lambda n: executivas_churn_resolver_closer(n, df_oficiais)
+    )
+    return (
+        tmp.groupby("executiva", as_index=False)
+        .agg(churn=("deal_id", "nunique"))
+        .sort_values("churn", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def executivas_churn_contagem_para_executiva(
+    executiva: str,
+    churn_por_executiva: pd.DataFrame,
+) -> int:
+    """Soma churns do agg que casam com `executiva` (nome do ranking)."""
+    if churn_por_executiva is None or churn_por_executiva.empty:
+        return 0
+    total = 0
+    for _, row in churn_por_executiva.iterrows():
+        if _executivas_churn_nomes_casam(executiva, str(row["executiva"])):
+            total += int(row["churn"] or 0)
+    return total
+
+
+def executivas_ranking_com_churn(
+    ranking: pd.DataFrame,
+    churn_por_executiva: pd.DataFrame,
+) -> pd.DataFrame:
+    """Injeta `churn` no ranking e inclui closers que só têm churn no período."""
+    if churn_por_executiva is None or churn_por_executiva.empty:
+        if ranking is None or ranking.empty:
+            return ranking
+        out = ranking.copy()
+        out["churn"] = 0
+        return out
+
+    if ranking is None or ranking.empty:
+        out = churn_por_executiva.copy()
+        for col in _RANKING_BASE_COLS:
+            if col not in out.columns:
+                out[col] = 0
+        return out
+
+    out = ranking.copy()
+    out["churn"] = out["executiva"].apply(
+        lambda ex: executivas_churn_contagem_para_executiva(ex, churn_por_executiva)
+    )
+
+    # Closers presentes só no churn (ex.: sem linha na view no período).
+    extra_rows: list[dict] = []
+    for _, row in churn_por_executiva.iterrows():
+        nom = str(row["executiva"])
+        if int(row["churn"] or 0) <= 0:
+            continue
+        if any(_executivas_churn_nomes_casam(ex, nom) for ex in out["executiva"]):
+            continue
+        extra = {c: 0 for c in out.columns}
+        extra["executiva"] = nom
+        extra["churn"] = int(row["churn"])
+        extra_rows.append(extra)
+
+    if extra_rows:
+        out = pd.concat([out, pd.DataFrame(extra_rows)], ignore_index=True)
+
+    return out
+
+
+def executivas_ranking_plot_churn(churn_por_executiva: pd.DataFrame) -> pd.DataFrame:
+    """DataFrame pronto pro gráfico Top Closers > Churn (mesma base do card)."""
+    if churn_por_executiva is None or churn_por_executiva.empty:
+        return pd.DataFrame(columns=["executiva", "churn"])
+    plot = churn_por_executiva[churn_por_executiva["churn"].fillna(0) > 0].copy()
+    return plot.sort_values("churn", ascending=False).reset_index(drop=True)
+
+
+def executivas_churn_filtrar_closer(
+    df_churn: pd.DataFrame,
+    closer_nome: str,
+    df_oficiais: pd.DataFrame | None,
+) -> pd.Series:
+    """Mask de linhas de churn do closer (nome canônico ou exibido no ranking)."""
+    if df_churn is None or df_churn.empty:
+        idx = df_churn.index if df_churn is not None else []
+        return pd.Series(False, index=idx)
+    nome = (closer_nome or "").strip()
+    if not nome:
+        return pd.Series(False, index=df_churn.index)
+
+    resolved = df_churn["closer_nome"].apply(
+        lambda n: executivas_churn_resolver_closer(n, df_oficiais)
+    )
+    alvo = executivas_churn_resolver_closer(nome, df_oficiais)
+    return resolved.astype(str).str.strip() == alvo.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +507,54 @@ def executivas_filtrar_time_oficial(
         return out.drop(columns=["_nome_oficial"])
     out["executiva"] = out["_nome_oficial"]
     return out.drop(columns=["_nome_oficial"]).reset_index(drop=True)
+
+
+def executivas_canonicalizar_executivas(
+    df: pd.DataFrame,
+    df_oficiais: pd.DataFrame,
+) -> pd.DataFrame:
+    """Normaliza `executiva` pelo cadastro oficial sem remover linhas.
+
+    Modo histórico do Top Closers: mantém qualquer closer com dados no
+    período (já filtrados por TIMES no header) e só troca o nome quando
+    há match por tokens no cadastro (ativo ou inativo).
+    """
+    if df is None or df.empty or "executiva" not in df.columns:
+        return df
+    oficiais_tokens = _build_executivas_oficiais_tokens(df_oficiais)
+    if not oficiais_tokens:
+        return df
+
+    out = df.copy()
+
+    def _nome_exibicao(nome) -> str:
+        raw = (nome if isinstance(nome, str) else "") or ""
+        raw = raw.strip()
+        if not raw:
+            return raw
+        canon = _match_oficial_por_tokens(raw, oficiais_tokens)
+        return canon if canon else raw
+
+    out["executiva"] = out["executiva"].apply(_nome_exibicao)
+    return out.reset_index(drop=True)
+
+
+def executivas_ranking_base_exibicao(
+    exibicao: str,
+    df_bruto: pd.DataFrame,
+    df_filtrado: pd.DataFrame,
+    df_oficiais_ativos: pd.DataFrame | None,
+    df_oficiais_todos: pd.DataFrame | None,
+) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    """Base linha-a-linha do ranking + cadastro usado no match de nomes."""
+    if exibicao == RANKING_EXIBICAO_HISTORICO:
+        cadastro = df_oficiais_todos
+        if cadastro is None or cadastro.empty:
+            cadastro = df_oficiais_ativos
+        base = executivas_canonicalizar_executivas(df_bruto, cadastro)
+        return base, cadastro
+
+    return df_filtrado, df_oficiais_ativos
 
 
 def executivas_ranking_oficiais(
@@ -574,6 +822,10 @@ def vendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
     # ----- status auxiliares
     if metrica == "cancelados":
         return base_atividade & em_agend & status_cancelada
+    if metrica == "churn":
+        # Churn (stage Churn) não vem do detalhe de activities — caller usa
+        # `executivas_churn_filtrar_closer` sobre o dataset de churn deals.
+        return pd.Series(False, index=df_det_norm.index)
     if metrica == "vencidos":
         return base_atividade & em_agend & status_vencida
 
@@ -920,3 +1172,235 @@ def receita_por_mes(df_exec: pd.DataFrame) -> pd.DataFrame:
     )
     agg["var_mom_pct"] = (agg["receita"].pct_change() * 100).round(1)
     return agg.sort_values("mes")
+
+
+# ---------------------------------------------------------------------------
+# Churn por Pós-venda (deals stage = 'Churn') — Executivas & Times
+# ---------------------------------------------------------------------------
+
+CHURN_POS_SEM_IDENTIFICADO = "Sem pós-venda identificado"
+CHURN_SEM_CLOSER = "Sem closer identificado"
+
+
+def _build_pos_venda_oficiais_maps(
+    df_oficiais: pd.DataFrame,
+) -> tuple[dict[str, tuple[str, str]], list[tuple[str, set[str], str]]]:
+    """Retorna (by_id_crm → (nome, ativo), lista (nome, tokens, ativo))."""
+    by_crm: dict[str, tuple[str, str]] = {}
+    tokens_list: list[tuple[str, set[str], str]] = []
+    if df_oficiais is None or df_oficiais.empty or "nome" not in df_oficiais.columns:
+        return by_crm, tokens_list
+    for row in df_oficiais.itertuples(index=False):
+        nome = getattr(row, "nome", None)
+        if not isinstance(nome, str) or not nome.strip():
+            continue
+        ativo = str(getattr(row, "ativo", "") or "").strip().lower() or ""
+        cid = getattr(row, "id_crm", None)
+        if cid is not None and str(cid).strip():
+            by_crm[str(cid).strip()] = (nome, ativo)
+        toks = set(_tokens_nome_ranking(nome))
+        if toks:
+            tokens_list.append((nome, toks, ativo))
+    return by_crm, tokens_list
+
+
+def _match_pos_oficial(
+    *,
+    id_crm: str | None,
+    nome_candidato: str | None,
+    by_crm: dict[str, tuple[str, str]],
+    tokens_list: list[tuple[str, set[str], str]],
+) -> tuple[str, str, str] | None:
+    """Devolve (nome_canônico, ativo, origem) ou None se não casou cadastro."""
+    if id_crm and str(id_crm).strip() in by_crm:
+        nome, ativo = by_crm[str(id_crm).strip()]
+        return nome, ativo, "executiva_contas (id_crm)"
+    if nome_candidato and str(nome_candidato).strip():
+        canon = _match_oficial_por_tokens(
+            str(nome_candidato),
+            [(n, t) for n, t, _a in tokens_list],
+        )
+        if canon:
+            ativo = next((a for n, _t, a in tokens_list if n == canon), "")
+            return canon, ativo, "executiva_contas (nome)"
+    return None
+
+
+def churn_pos_venda_aplicar_cadastro(
+    df: pd.DataFrame,
+    df_oficiais: pd.DataFrame,
+) -> pd.DataFrame:
+    """Resolve pós-venda canônico, ativo e origem do vínculo por deal Churn."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    by_crm, tokens_list = _build_pos_venda_oficiais_maps(df_oficiais)
+
+    pos_venda: list[str] = []
+    pos_ativo: list[str] = []
+    origem: list[str] = []
+
+    for row in out.itertuples(index=False):
+        contas_id = getattr(row, "executiva_contas_id", None)
+        user_nome = getattr(row, "pos_user_nome", None)
+        owner_pos = getattr(row, "ultimo_owner_pos_nome", None)
+        acomp = getattr(row, "acomp_pos_nome", None)
+
+        resolved: tuple[str, str, str] | None = None
+        if contas_id is not None and str(contas_id).strip():
+            resolved = _match_pos_oficial(
+                id_crm=str(contas_id).strip(),
+                nome_candidato=user_nome if isinstance(user_nome, str) else None,
+                by_crm=by_crm,
+                tokens_list=tokens_list,
+            )
+            if resolved is None and user_nome and str(user_nome).strip():
+                pos_venda.append(str(user_nome).strip())
+                pos_ativo.append("")
+                origem.append("executiva_contas (zoho_users)")
+                continue
+
+        if resolved is None and owner_pos and str(owner_pos).strip():
+            resolved = _match_pos_oficial(
+                id_crm=None,
+                nome_candidato=str(owner_pos),
+                by_crm=by_crm,
+                tokens_list=tokens_list,
+            )
+            if resolved is None:
+                pos_venda.append(str(owner_pos).strip())
+                pos_ativo.append("")
+                origem.append("atividade pós-venda")
+                continue
+
+        if resolved is None and acomp and str(acomp).strip():
+            resolved = _match_pos_oficial(
+                id_crm=None,
+                nome_candidato=str(acomp),
+                by_crm=by_crm,
+                tokens_list=tokens_list,
+            )
+            if resolved is None:
+                pos_venda.append(str(acomp).strip())
+                pos_ativo.append("")
+                origem.append("acompanhamento")
+                continue
+
+        if resolved:
+            pos_venda.append(resolved[0])
+            pos_ativo.append(resolved[1])
+            origem.append(resolved[2])
+        else:
+            pos_venda.append(CHURN_POS_SEM_IDENTIFICADO)
+            pos_ativo.append("")
+            origem.append("")
+
+    out["pos_venda"] = pos_venda
+    out["pos_ativo"] = pos_ativo
+    out["origem_vinculo"] = origem
+    out["identificado_pos"] = out["pos_venda"] != CHURN_POS_SEM_IDENTIFICADO
+    if "data_churn" in out.columns:
+        out["data_churn"] = pd.to_datetime(out["data_churn"], errors="coerce")
+    if "ultimo_contato_pos" in out.columns:
+        out["ultimo_contato_pos"] = pd.to_datetime(
+            out["ultimo_contato_pos"], errors="coerce"
+        )
+    return out
+
+
+def churn_pos_filtrar_periodo(
+    df: pd.DataFrame,
+    data_ini,
+    data_fim,
+) -> pd.DataFrame:
+    if df is None or df.empty or "data_churn" not in df.columns:
+        return df
+    ini = pd.Timestamp(data_ini)
+    fim = pd.Timestamp(data_fim)
+    mask = df["data_churn"].notna() & (df["data_churn"] >= ini) & (df["data_churn"] <= fim)
+    return df.loc[mask].copy()
+
+
+def churn_pos_kpis(df: pd.DataFrame) -> dict:
+    """KPIs sobre um subconjunto de churns (período ou histórico)."""
+    empty = {
+        "total": 0,
+        "com_pos": 0,
+        "sem_pos": 0,
+        "pct_com_pos": 0.0,
+        "montante": 0.0,
+        "receita": 0.0,
+        "ticket_medio": None,
+    }
+    if df is None or df.empty:
+        return empty
+    total = len(df)
+    com = int(df["identificado_pos"].sum()) if "identificado_pos" in df.columns else 0
+    mont = float(df["montante"].fillna(0).sum()) if "montante" in df.columns else 0.0
+    rec = float(df["receita"].fillna(0).sum()) if "receita" in df.columns else 0.0
+    ticket = (mont / total) if total and mont else None
+    return {
+        "total": total,
+        "com_pos": com,
+        "sem_pos": total - com,
+        "pct_com_pos": _safe_div(com, total) * 100,
+        "montante": mont,
+        "receita": rec,
+        "ticket_medio": ticket,
+    }
+
+
+def churn_pos_ranking(
+    df_periodo: pd.DataFrame,
+    df_historico: pd.DataFrame,
+) -> pd.DataFrame:
+    """Ranking por pós-venda: métricas do período + churns históricos totais."""
+    cols = [
+        "pos_venda",
+        "pos_ativo",
+        "churns_periodo",
+        "pct_churn_periodo",
+        "churns_historicos",
+        "ultimo_contato_pos",
+        "qtd_contatos_pos",
+        "montante_churn",
+        "receita_churn",
+        "ticket_medio",
+    ]
+    if df_periodo is None or df_periodo.empty:
+        return pd.DataFrame(columns=cols)
+
+    total_periodo = len(df_periodo)
+    g = df_periodo.groupby("pos_venda", as_index=False).agg(
+        churns_periodo=("deal_id", "count"),
+        ultimo_contato_pos=("ultimo_contato_pos", "max"),
+        qtd_contatos_pos=("qtd_contatos_pos", lambda s: int(pd.to_numeric(s, errors="coerce").fillna(0).sum())),
+        montante_churn=("montante", "sum"),
+        receita_churn=("receita", "sum"),
+    )
+    g["pct_churn_periodo"] = g["churns_periodo"].apply(
+        lambda n: _safe_div(n, total_periodo) * 100
+    )
+
+    if df_historico is not None and not df_historico.empty:
+        hist = (
+            df_historico.groupby("pos_venda", as_index=False)
+            .agg(churns_historicos=("deal_id", "count"))
+        )
+        g = g.merge(hist, on="pos_venda", how="left")
+    else:
+        g["churns_historicos"] = 0
+    g["churns_historicos"] = g["churns_historicos"].fillna(0).astype(int)
+
+    ativo_map: dict[str, str] = {}
+    if "pos_ativo" in df_periodo.columns:
+        for pos in g["pos_venda"]:
+            rows = df_periodo.loc[df_periodo["pos_venda"] == pos, "pos_ativo"]
+            vals = [v for v in rows.dropna().astype(str) if v.strip()]
+            ativo_map[pos] = vals[0] if vals else ""
+    g["pos_ativo"] = g["pos_venda"].map(ativo_map).fillna("")
+
+    vendas_pos = g["churns_periodo"].replace(0, pd.NA)
+    g["ticket_medio"] = (g["montante_churn"] / vendas_pos).fillna(0.0)
+
+    return g.sort_values("churns_periodo", ascending=False).reset_index(drop=True)

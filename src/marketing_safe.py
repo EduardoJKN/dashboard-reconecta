@@ -26,6 +26,15 @@ _MISSING_HINTS = (
 
 def looks_like_missing_relation(exc: BaseException) -> bool:
     msg = str(exc).lower()
+    # Erros de query (alias/coluna/sintaxe) não são relação ausente no banco.
+    if any(h in msg for h in (
+        "missing from-clause",
+        "undefined column",
+        "column ",
+        "syntax error",
+        "parse error",
+    )):
+        return False
     return any(h in msg for h in _MISSING_HINTS)
 
 
@@ -44,16 +53,17 @@ def safe_run(
     try:
         return fn()
     except (ProgrammingError, OperationalError) as e:
-        if log_sql_error or "mkt_top_criativos_por_nome" in view_label:
-            print(f"[ERRO safe_run:{view_label}]", repr(e))
-            print(traceback.format_exc())
         if looks_like_missing_relation(e):
+            if log_sql_error:
+                print(f"[ERRO safe_run:{view_label} — relação ausente]", repr(e))
             st.warning(
                 f"Fonte/consulta `{view_label}` ainda indisponível no banco "
                 f"(view ausente, schema ou permissão). Detalhes no terminal do "
                 f"Streamlit. Ajuste a query/objeto e recarregue a página."
             )
             return pd.DataFrame()
+        print(f"[ERRO safe_run:{view_label}]", repr(e))
+        print(traceback.format_exc())
         raise
 
 

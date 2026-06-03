@@ -1,10 +1,9 @@
 """Componentes reutilizáveis das páginas de Marketing.
 
 `render_funil_selecionado` encapsula o bloco "Funil do {entidade}
-selecionado(a)" — selectbox + 6 mini-cards + esteira horizontal (2
-buckets: Mídia | Funil de leads). Reusado pela página Criativos
-(`ad_name`) e pela página Campanhas (`campaign_name`), com a mesma
-estrutura visual e regras de cálculo.
+selecionado(a)" — selectbox + 6 mini-cards + esteira Mídia → Funil de
+Marketing (Leads → Agendamentos → Comparecimentos → Vendas), com dados
+de aplicações acoplados ao bloco de Leads.
 """
 from __future__ import annotations
 
@@ -40,30 +39,41 @@ def _track_step_flex() -> str:
     return "flex:1 1 0;min-width:58px;max-width:108px;"
 
 
-def _funil_leads_summary_items(kf: dict) -> list[str]:
-    return [
-        f"+12: {int_br(int(kf.get('leads_mais_12') or 0))}",
-        f"-12: {int_br(int(kf.get('leads_menos_12') or 0))}",
-        f"Não atua: {int_br(int(kf.get('leads_nao_atua') or 0))}",
-    ]
-
-
-def _funil_aplicacoes_summary_items(kf: dict) -> list[str]:
-    inv = float(kf.get("investimento") or 0)
+def _funil_aplicacoes_leads_subline(kf: dict) -> str:
+    """Linha única de aplicações dentro do bloco Leads."""
     leads = int(kf.get("leads_totais") or 0)
+    apl = int(kf.get("aplicacoes") or 0)
+    pct_apl = pct((apl / leads) * 100, casas=1) if leads > 0 else "—"
+    return f"Aplicações: {int_br(apl)} · {pct_apl}"
+
+
+def _funil_aplicacoes_summary_pills(kf: dict) -> list[str]:
+    """Pílulas acopladas à base do card Funil de Marketing."""
+    inv = float(kf.get("investimento") or 0)
     apl = int(kf.get("aplicacoes") or 0)
     apl12 = int(kf.get("aplicacoes_mais_12") or 0)
     apl_menos = int(kf.get("aplicacoes_menos_12") or 0)
-    pct_apl = pct((apl / leads) * 100) if leads > 0 else "—"
     cpa = brl(inv / apl, casas=2) if apl > 0 else "—"
     cpa12 = brl(inv / apl12, casas=2) if apl12 > 0 else "—"
     return [
-        f"+12: {int_br(apl12)}",
-        f"-12: {int_br(apl_menos)}",
-        f"% aplicação: {pct_apl}",
+        f"Apl. +12: {int_br(apl12)}",
+        f"Apl. -12: {int_br(apl_menos)}",
         f"CPA: {cpa}",
         f"CPA +12: {cpa12}",
     ]
+
+
+def _aplicacoes_context_html(kf: dict, *, compact: bool = False) -> str:
+    """Legenda de aplicações abaixo do número de Leads (apenas total + %)."""
+    subline = _funil_aplicacoes_leads_subline(kf)
+    fs = "0.58em" if compact else "0.62em"
+    mt = "4px" if compact else "5px"
+    return (
+        f'<div style="font-size:{fs};color:{PALETTE["text_subtle"]};'
+        f'margin-top:{mt};font-variant-numeric:tabular-nums;'
+        f'text-align:center;width:100%;line-height:1.3;">'
+        f'{html_lib.escape(subline)}</div>'
+    )
 
 
 def _funnel_summary_pills_html(items: list[str]) -> str:
@@ -228,6 +238,42 @@ def _arrow_simple_html(*, compact: bool = False) -> str:
     )
 
 
+def _step_leads_base_html(
+    label: str,
+    value: float,
+    kf: dict,
+    *,
+    compact: bool = False,
+) -> str:
+    """Etapa Leads — total + contexto de aplicações acoplado."""
+    value_fmt = _fmt_value(value)
+    step_flex = (
+        "flex:1.35 1 0;min-width:88px;max-width:148px;"
+        if compact else "min-width:120px;max-width:160px;"
+    )
+    pad = "4px 3px" if compact else "6px 4px"
+    lbl_mb = "4px" if compact else "4px"
+    val_fs = "1.1em" if compact else "1.15em"
+    ctx_html = _aplicacoes_context_html(kf, compact=compact)
+    return (
+        f'<div style="display:flex;flex-direction:column;'
+        f'align-items:center;justify-content:flex-start;'
+        f'{step_flex}padding:{pad};text-align:center;">'
+        f'<div style="font-size:0.6em;color:{PALETTE["muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.04em;'
+        f'font-weight:600;line-height:1.15;margin-bottom:{lbl_mb};'
+        f'min-height:2.2em;display:flex;align-items:flex-end;'
+        f'justify-content:center;">'
+        f'{html_lib.escape(label)}</div>'
+        f'<div style="font-size:{val_fs};font-weight:700;'
+        f'color:{PALETTE["text"]};line-height:1.1;'
+        f'font-variant-numeric:tabular-nums;">'
+        f'{html_lib.escape(value_fmt)}</div>'
+        f'{ctx_html}'
+        f'</div>'
+    )
+
+
 def _step_track_base_html(
     label: str,
     value: float,
@@ -264,21 +310,71 @@ def _step_track_base_html(
     )
 
 
+def _step_conv_subline_html(
+    step: dict,
+    base_value: float,
+    base_noun: str,
+) -> str:
+    """Subtítulo de conversão — taxa única ou decomposição período/histórico."""
+    if step.get("dual_decomp"):
+        total = float(step.get("value") or 0)
+        if total <= 0:
+            return html_lib.escape("—")
+        cp = int(step.get("count_periodo") or 0)
+        ch = int(step.get("count_historico") or 0)
+        pp = step.get("pct_periodo")
+        ph = step.get("pct_historico")
+        pps = pct(pp, casas=1) if pp is not None else "—"
+        phs = pct(ph, casas=1) if ph is not None else "—"
+        line1 = f"Período: {int_br(cp)} · {pps}"
+        line2 = f"Histórico: {int_br(ch)} · {phs}"
+        scope = step.get("decomp_scope", "agendamentos")
+        if scope == "comparecimentos":
+            tip = (
+                "Dos comparecimentos no período: quantidade e % com lead "
+                "criado no período vs. lead criado antes do período."
+            )
+        elif scope == "vendas":
+            tip = (
+                "Das vendas no período: quantidade e % com lead criado "
+                "no período vs. lead criado antes do período."
+            )
+        elif "aplic" in base_noun:
+            tip = (
+                "Dos agendamentos de aplicações no período: quantidade e % "
+                "com aplicação criada no período vs. aplicação anterior."
+            )
+        else:
+            tip = (
+                "Dos agendamentos no período: quantidade e % com lead criado "
+                "no período vs. lead criado antes do período."
+            )
+        return (
+            f'<div title="{html_lib.escape(tip)}">'
+            f'{html_lib.escape(line1)}<br>{html_lib.escape(line2)}'
+            f'</div>'
+        )
+    if base_value > 0:
+        return html_lib.escape(
+            f"{pct((float(step.get('value') or 0) / base_value) * 100, casas=1)} "
+            f"de {base_noun}"
+        )
+    return html_lib.escape(f"— de {base_noun}")
+
+
 def _step_conv_base_html(
     label: str,
     value: float,
     base_value: float,
     base_noun: str,
     *,
+    step: dict | None = None,
     compact: bool = False,
 ) -> str:
     """Etapa downstream — total + % em relação à base da trilha (leads/aplicações)."""
     value_fmt = _fmt_value(value)
-    if base_value > 0:
-        pct_fmt = pct((value / base_value) * 100, casas=1)
-        sub = f"{pct_fmt} de {base_noun}"
-    else:
-        sub = f"— de {base_noun}"
+    step_ctx = step if step is not None else {"value": value}
+    sub = _step_conv_subline_html(step_ctx, base_value, base_noun)
     step_flex = _track_step_flex() if compact else "min-width:88px;"
     pad = "4px 2px" if compact else "6px 4px"
     lbl_mb = "4px" if compact else "4px"
@@ -301,8 +397,8 @@ def _step_conv_base_html(
         f'{html_lib.escape(value_fmt)}</div>'
         f'<div style="font-size:{sub_fs};color:{PALETTE["text_subtle"]};'
         f'margin-top:{sub_mt};font-variant-numeric:tabular-nums;'
-        f'line-height:1.25;min-height:15px;">'
-        f'{html_lib.escape(sub)}</div>'
+        f'line-height:1.25;min-height:{"28px" if step_ctx.get("dual_decomp") else "15px"};">'
+        f'{sub}</div>'
         f'</div>'
     )
 
@@ -315,25 +411,35 @@ def _funnel_track_bucket_html(
     full_width: bool = True,
     compact: bool = False,
     summary_items: list[str] | None = None,
+    kf: dict | None = None,
 ) -> str:
-    """Bucket de trilha — linha principal + resumo auxiliar abaixo."""
+    """Bucket de trilha — linha principal + resumo auxiliar opcional abaixo."""
     base_value = float(steps[0]["value"]) if steps else 0.0
     inner: list[str] = []
     for i, step in enumerate(steps):
         if i > 0:
             inner.append(_arrow_simple_html(compact=compact))
         if step.get("is_base"):
-            inner.append(_step_track_base_html(
-                step["label"],
-                float(step["value"]),
-                compact=compact,
-            ))
+            if kf is not None:
+                inner.append(_step_leads_base_html(
+                    step["label"],
+                    float(step["value"]),
+                    kf,
+                    compact=compact,
+                ))
+            else:
+                inner.append(_step_track_base_html(
+                    step["label"],
+                    float(step["value"]),
+                    compact=compact,
+                ))
         else:
             inner.append(_step_conv_base_html(
                 step["label"],
                 float(step["value"]),
                 base_value,
                 base_noun,
+                step=step,
                 compact=compact,
             ))
     summary_html = (
@@ -378,7 +484,7 @@ def _media_to_funnel_arrow_html(
     branch: str = "leads",
     compact: bool = False,
 ) -> str:
-    """Seta da mídia em direção a um dos funis (leads ou aplicações)."""
+    """Seta da mídia em direção ao Funil de Marketing (Leads / Cliques)."""
     color = PALETTE["wine_light"] if branch == "leads" else PALETTE["text_subtle"]
     arrow = "→"
     pct_html = ""
@@ -402,57 +508,32 @@ def _media_to_funnel_arrow_html(
     )
 
 
-def _render_funil_dual_track_html(
+def _render_funil_marketing_html(
     *,
     kf: dict,
     labels_f: list[str],
     values_f: list[float],
 ) -> str:
-    """Layout Mídia → Funil de Leads + Funil de Aplicações (grid 2 linhas)."""
-    from src.marketing_transforms import (
-        build_funil_trilha_aplicacoes_steps,
-        build_funil_trilha_leads_steps,
-    )
+    """Layout Mídia → Funil de Marketing (trilha única baseada em Leads)."""
+    from src.marketing_transforms import build_funil_trilha_leads_steps
 
     midia_html = _bucket_html(
         "Mídia", [0, 1], labels_f, values_f, full_width=False, compact=True,
     )
-    leads_html = _funnel_track_bucket_html(
-        "Funil de leads",
+    funnel_html = _funnel_track_bucket_html(
+        "Funil de Marketing",
         build_funil_trilha_leads_steps(kf),
         base_noun="leads",
         compact=True,
-        summary_items=_funil_leads_summary_items(kf),
-    )
-    aplicacoes_html = _funnel_track_bucket_html(
-        "Funil de aplicações",
-        build_funil_trilha_aplicacoes_steps(kf),
-        base_noun="aplicações",
-        compact=True,
-        summary_items=_funil_aplicacoes_summary_items(kf),
+        kf=kf,
+        summary_items=_funil_aplicacoes_summary_pills(kf),
     )
     cliques_leads_pct = (
         pct((values_f[2] / values_f[1]) * 100, casas=1)
         if values_f[1] > 0 else None
     )
-    cliques = values_f[1]
-    aplicacoes_total = float(kf.get("aplicacoes") or 0)
-    cliques_apl_pct = (
-        pct((aplicacoes_total / cliques) * 100, casas=1)
-        if cliques > 0 else None
-    )
-    arrow_leads = _media_to_funnel_arrow_html(
+    arrow_html = _media_to_funnel_arrow_html(
         cliques_leads_pct, branch="leads", compact=True,
-    )
-    arrow_apl = _media_to_funnel_arrow_html(
-        cliques_apl_pct, branch="aplicacoes", compact=True,
-    )
-    fork_border = PALETTE["border"]
-    tracks_stack = (
-        f'<div style="display:flex;flex-direction:column;gap:8px;'
-        f'width:100%;min-width:0;">'
-        f'{leads_html}{aplicacoes_html}'
-        f'</div>'
     )
 
     return (
@@ -463,21 +544,9 @@ def _render_funil_dual_track_html(
         f'font-family:Inter,sans-serif;margin-top:0;">'
         f'<div style="grid-column:1;display:flex;align-items:center;'
         f'justify-content:center;min-width:0;">{midia_html}</div>'
-        f'<div style="grid-column:2;display:flex;flex-direction:column;'
-        f'justify-content:center;gap:8px;align-self:stretch;'
-        f'position:relative;padding:2px 0;">'
-        f'<div style="position:absolute;left:0;top:12%;bottom:12%;'
-        f'width:1px;background:{fork_border};"></div>'
-        f'<div style="position:absolute;left:0;top:12%;width:10px;height:1px;'
-        f'background:{fork_border};"></div>'
-        f'<div style="position:absolute;left:0;bottom:12%;width:10px;height:1px;'
-        f'background:{fork_border};"></div>'
-        f'<div style="flex:1;display:flex;align-items:center;'
-        f'justify-content:center;z-index:1;">{arrow_leads}</div>'
-        f'<div style="flex:1;display:flex;align-items:center;'
-        f'justify-content:center;z-index:1;">{arrow_apl}</div>'
-        f'</div>'
-        f'<div style="grid-column:3;min-width:0;">{tracks_stack}</div>'
+        f'<div style="grid-column:2;display:flex;align-items:center;'
+        f'justify-content:center;">{arrow_html}</div>'
+        f'<div style="grid-column:3;min-width:0;">{funnel_html}</div>'
         f'</div>'
     )
 
@@ -521,6 +590,7 @@ def render_funil_selecionado(
     kpis_fn: Callable[[pd.DataFrame, str | None], dict] | None = None,
     etapas_fn: Callable[[dict], tuple[list[str], list[float]]] | None = None,
     etapas_aplicacoes_fn: Callable[[dict], tuple[list[str], list[float]]] | None = None,
+    marketing_funil_unico: bool = False,
     empty_msg: str | None = None,
     caption: str | None = None,
     expander_md: str | None = None,
@@ -536,7 +606,7 @@ def render_funil_selecionado(
 
     Renderiza section_title → selectbox de entidade → 6 mini-cards
     (Investimento · Leads · Leads +12 · Não atua · Agendamentos · Vendas
-    novas) → esteira horizontal de 2 buckets (Mídia | Funil de leads).
+    novas) → esteira Mídia → Funil de Marketing (trilha única).
     """
     section_title(section_title_text, section_subtitle)
 
@@ -605,10 +675,20 @@ def render_funil_selecionado(
             hint="leads classificados como não atua",
         )
     with rs5:
+        _ag = int(kf.get("agendamentos") or 0)
+        if _ag > 0:
+            _hint_ag = (
+                f"Período: {int_br(kf.get('agendamentos_leads_periodo', 0))} · "
+                f"{pct(kf.get('pct_agend_leads_periodo'), casas=1)} · "
+                f"Histórico: {int_br(kf.get('agendamentos_leads_historico', 0))} · "
+                f"{pct(kf.get('pct_agend_leads_historico'), casas=1)}"
+            )
+        else:
+            _hint_ag = "—"
         metric_card_v2(
             "Agendamentos",
-            int_br(kf["agendamentos"]),
-            hint=f"taxa {pct(kf['taxa_lead_agendamento'], casas=1)}",
+            int_br(_ag),
+            hint=_hint_ag,
         )
     with rs6:
         metric_card_v2(
@@ -618,14 +698,14 @@ def render_funil_selecionado(
             accent=True,
         )
 
-    # Funil horizontal (2 buckets)
+    # Esteira Mídia → Funil de Marketing
     labels_f, values_f = etapas_fn(kf)
 
     if all(v == 0 for v in values_f):
         st.info(f"Sem dados de funil para esta {entity_label.lower()} no período.")
-    elif etapas_aplicacoes_fn is not None:
+    elif marketing_funil_unico or etapas_aplicacoes_fn is not None:
         st.markdown(
-            _render_funil_dual_track_html(
+            _render_funil_marketing_html(
                 kf=kf,
                 labels_f=labels_f,
                 values_f=values_f,

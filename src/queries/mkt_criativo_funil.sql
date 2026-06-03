@@ -4,6 +4,10 @@
 -- 1 linha por `ad_name_norm` no período, com mídia + funil completo até venda
 -- nova. Alimenta a seção "Funil do criativo selecionado" da página Criativos.
 --
+-- Datas (regra oficial, igual Looker): leads `timestamp::date`; typeform
+-- `created_at::date`; atividades `start_datetime::date`; vendas
+-- `data_hora_compra::date`. Sem ajuste de -3 horas.
+--
 -- Match único viável: `lower(btrim(criativos.ad_name)) =
 -- lower(btrim(leads.utm_content))`. Validado em pgAdmin: `ad_id` está vazio
 -- em ext_reconecta.leads / zoho_deals / zoho_activities (0 preenchidos
@@ -22,7 +26,7 @@
 --     (menos confiável que o e-mail na operação). session_id também
 --     removido em iteração anterior.
 --   * Atribuição CROSS-PERÍODO POR DEAL: para cada deal ganho, buscar
---     leads com `l.created_at <= d.data_hora_compra` em
+--     leads com `l.timestamp <= d.data_hora_compra` em
 --     `leads_atribuicao_vendas` (sem corte inferior — uma venda
 --     pode atribuir a lead de qualquer tempo anterior). Antes,
 --     `leads_atribuicao` restringia a `<= :data_fim` global e ainda
@@ -132,10 +136,10 @@ leads_clean AS (
         NULLIF(btrim(l.zoho_id), '')                            AS lead_zoho_id,
         regexp_replace(COALESCE(l.phone_number, ''), '\D', '', 'g') AS phone_clean,
         l.classificado,
-        l.created_at,
+        l.timestamp,
         NULLIF(lower(btrim(l.utm_content)), '')                 AS utm_content_norm
     FROM ext_reconecta.leads l
-    WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
+    WHERE l.timestamp::date BETWEEN :data_ini AND :data_fim
       AND l.email IS NOT NULL
       AND btrim(l.email) <> ''
       AND lower(l.email) NOT LIKE '%@teste%'
@@ -144,7 +148,7 @@ leads_clean AS (
       AND lower(l.email) NOT LIKE '%reconecta%'
 ),
 -- `leads_atribuicao_vendas`: base CROSS-PERÍODO (até :data_fim como
--- pré-filtro de performance; restrição precisa `l.created_at <= d.data_hora_compra`
+-- pré-filtro de performance; restrição precisa `l.timestamp <= d.data_hora_compra`
 -- aplicada no JOIN de `deal_lead_matches`).
 --
 -- Diferença vs `leads_clean`:
@@ -159,7 +163,7 @@ leads_clean AS (
 leads_atribuicao_vendas AS (
     SELECT
         l.id::text                                                   AS lead_id,
-        l.created_at                                                 AS lead_created_at,
+        l.timestamp                                                AS lead_created_at,
         lower(btrim(l.email))                                        AS email_norm,
         regexp_replace(COALESCE(l.phone_number, ''), '\D', '', 'g')  AS phone_clean,
         lower(btrim(l.utm_content))                                  AS utm_content_norm,
@@ -173,7 +177,7 @@ leads_atribuicao_vendas AS (
             ELSE 0
         END                                                          AS origem_util
     FROM ext_reconecta.leads l
-    WHERE l.created_at::date <= :data_fim
+    WHERE l.timestamp::date <= :data_fim
       AND l.email IS NOT NULL
       AND btrim(l.email) <> ''
       AND lower(l.email) NOT LIKE '%@teste%'
@@ -192,6 +196,14 @@ distinct_email_criativo AS (
         email_norm
     FROM leads_clean
 ),
+-- 1 linha por (utm_content_norm, e-mail) — histórico até :data_fim (cross-período).
+distinct_email_criativo_hist AS (
+    SELECT DISTINCT
+        COALESCE(utm_content_norm, '__sem_criativo_identificado__')
+                                                            AS utm_content_norm,
+        email_norm
+    FROM leads_atribuicao_vendas
+),
 -- Última classificação POR E-MAIL no período (regra global, igual à
 -- Visão Geral). Não depende do criativo — vale pra todas as rows do e-mail.
 last_classif AS (
@@ -199,7 +211,7 @@ last_classif AS (
         email_norm,
         classificado AS classif_final
     FROM leads_clean
-    ORDER BY email_norm, created_at DESC
+    ORDER BY email_norm, timestamp DESC
 ),
 -- Chaves do lead (zoho_id / phone_clean) pra alimentar o priority match.
 -- Pega a row mais recente por e-mail (consistente com last_classif).
@@ -210,7 +222,7 @@ email_lead_keys AS (
         lead_zoho_id,
         phone_clean
     FROM leads_clean
-    ORDER BY email_norm, created_at DESC
+    ORDER BY email_norm, timestamp DESC
 ),
 -- Leads por ad_name (todos os filtros + classificação).
 leads_por_criativo AS (
@@ -232,10 +244,9 @@ leads_por_criativo AS (
     GROUP BY dec.utm_content_norm
 ),
 
--- -----------------------------------------------------------------------------
--- 2b) Aplicações (typeform) — cruzamento por e-mail dos leads do criativo.
---     Universo: só e-mails com aplicação completa no período (dedupe/dia).
---     Agend./compar./vendas: subset desse universo (não todos os leads).
+-- 2b) Aplicações (typeform) — dedupe e-mail/dia; totais globais = universo
+--     Typeform no período (igual One Page). Por criativo = ∩ leads.
+--     Typeform: `created_at::date` (sem −3h).
 -- -----------------------------------------------------------------------------
 aplicacoes_dedup AS (
     SELECT
@@ -247,11 +258,37 @@ aplicacoes_dedup AS (
             lower(btrim(ta.classificado))       AS classificado_norm,
             ROW_NUMBER() OVER (
                 PARTITION BY lower(btrim(ta.email)),
-                             (ta.created_at - INTERVAL '3 hours')::date
+                             ta.created_at::date
                 ORDER BY ta.created_at DESC
             ) AS rn
         FROM fdw_reconecta.typeform_aplicacoes ta
-        WHERE (ta.created_at - INTERVAL '3 hours')::date BETWEEN :data_ini AND :data_fim
+        WHERE ta.created_at::date BETWEEN :data_ini AND :data_fim
+          AND ta.dados_completos IS TRUE
+          AND ta.email IS NOT NULL
+          AND btrim(ta.email) <> ''
+          AND lower(btrim(ta.email)) NOT LIKE '%@teste%'
+          AND lower(btrim(ta.email)) NOT LIKE '%teste@%'
+          AND lower(btrim(ta.email)) NOT LIKE '%smarts%'
+          AND lower(btrim(ta.email)) NOT LIKE '%reconecta%'
+    ) sub
+    WHERE rn = 1
+),
+-- Aplicações válidas históricas (até :data_fim) — dedupe e-mail/dia.
+aplicacoes_dedup_hist AS (
+    SELECT
+        email_norm,
+        classificado_norm
+    FROM (
+        SELECT
+            lower(btrim(ta.email))              AS email_norm,
+            lower(btrim(ta.classificado))       AS classificado_norm,
+            ROW_NUMBER() OVER (
+                PARTITION BY lower(btrim(ta.email)),
+                             ta.created_at::date
+                ORDER BY ta.created_at DESC
+            ) AS rn
+        FROM fdw_reconecta.typeform_aplicacoes ta
+        WHERE ta.created_at::date <= :data_fim
           AND ta.dados_completos IS TRUE
           AND ta.email IS NOT NULL
           AND btrim(ta.email) <> ''
@@ -284,13 +321,22 @@ aplicacoes_por_criativo AS (
     FROM aplicacoes_email_criativo
     GROUP BY ad_name_norm
 ),
--- Totais globais — e-mails distintos com lead + aplicação no período.
-aplicacoes_emails_globais AS (
-    SELECT DISTINCT
-        ad.email_norm,
-        ad.classificado_norm
-    FROM leads_clean lc
-    INNER JOIN aplicacoes_dedup ad ON ad.email_norm = lc.email_norm
+-- 1 e-mail no período (BOOL_OR ±12) — alinhado à One Page / Looker.
+aplicacoes_email_periodo AS (
+    SELECT
+        email_norm,
+        BOOL_OR(classificado_norm IN ('atua +12', 'atua+12', '+12')) AS tem_mais_12,
+        BOOL_OR(classificado_norm IN ('atua -12', 'atua-12', '-12')) AS tem_menos_12
+    FROM aplicacoes_dedup
+    GROUP BY email_norm
+),
+-- Totais globais — TODAS as aplicações válidas no período (sem exigir lead).
+aplicacoes_globais AS (
+    SELECT
+        COUNT(*)::bigint                                        AS aplicacoes,
+        COUNT(*) FILTER (WHERE tem_mais_12)::bigint             AS aplicacoes_mais_12,
+        COUNT(*) FILTER (WHERE tem_menos_12)::bigint            AS aplicacoes_menos_12
+    FROM aplicacoes_email_periodo
 ),
 aplicacoes_emails_vinculados AS (
     SELECT DISTINCT
@@ -299,17 +345,6 @@ aplicacoes_emails_vinculados AS (
     FROM leads_clean lc
     INNER JOIN aplicacoes_dedup ad ON ad.email_norm = lc.email_norm
     WHERE lc.utm_content_norm IS NOT NULL
-),
-aplicacoes_globais AS (
-    SELECT
-        COUNT(DISTINCT email_norm)::bigint                      AS aplicacoes,
-        COUNT(DISTINCT email_norm) FILTER (
-            WHERE classificado_norm IN ('atua +12', 'atua+12', '+12')
-        )::bigint                                               AS aplicacoes_mais_12,
-        COUNT(DISTINCT email_norm) FILTER (
-            WHERE classificado_norm IN ('atua -12', 'atua-12', '-12')
-        )::bigint                                               AS aplicacoes_menos_12
-    FROM aplicacoes_emails_globais
 ),
 aplicacoes_vinculados AS (
     SELECT
@@ -418,14 +453,14 @@ agend_compar_aplicacoes AS (
 ),
 agend_compar_aplicacoes_globais AS (
     SELECT
-        COUNT(DISTINCT aeg.email_norm) FILTER (
+        COUNT(DISTINCT ad.email_norm) FILTER (
             WHERE a.activity_id IS NOT NULL
         )::bigint                                               AS agendamentos_apl,
-        COUNT(DISTINCT aeg.email_norm) FILTER (
+        COUNT(DISTINCT ad.email_norm) FILTER (
             WHERE a.status_reuniao = 'Concluída'
         )::bigint                                               AS comparecimentos_apl
-    FROM aplicacoes_emails_globais aeg
-    LEFT JOIN activities_in_window a ON a.email_norm = aeg.email_norm
+    FROM aplicacoes_dedup ad
+    LEFT JOIN activities_in_window a ON a.email_norm = ad.email_norm
 ),
 agend_compar_aplicacoes_vinculados AS (
     SELECT
@@ -437,6 +472,155 @@ agend_compar_aplicacoes_vinculados AS (
         )::bigint                                               AS comparecimentos_apl
     FROM aplicacoes_emails_vinculados aev
     LEFT JOIN activities_in_window a ON a.email_norm = aev.email_norm
+),
+-- Decomposição agendamentos: período + histórico = total (cada % sobre o total).
+leads_periodo_emails AS (
+    SELECT DISTINCT email_norm
+    FROM leads_clean
+),
+aplicacoes_periodo_emails AS (
+    SELECT DISTINCT email_norm
+    FROM aplicacoes_dedup
+),
+aplicacoes_email_criativo_hist AS (
+    SELECT DISTINCT
+        dech.utm_content_norm                                   AS ad_name_norm,
+        ad.email_norm
+    FROM distinct_email_criativo_hist dech
+    INNER JOIN aplicacoes_dedup_hist ad ON ad.email_norm = dech.email_norm
+),
+emails_agend_leads_criativo AS (
+    SELECT dec.utm_content_norm                                  AS ad_name_norm,
+           a.email_norm
+    FROM distinct_email_criativo dec
+    INNER JOIN activities_in_window a ON a.email_norm = dec.email_norm
+    UNION
+    SELECT dech.utm_content_norm, a.email_norm
+    FROM distinct_email_criativo_hist dech
+    INNER JOIN activities_in_window a ON a.email_norm = dech.email_norm
+    WHERE dech.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+),
+agend_leads_decomp_por_criativo AS (
+    SELECT
+        ad_name_norm,
+        COUNT(DISTINCT email_norm)::bigint                      AS agendamentos,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS agendamentos_leads_periodo,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS agendamentos_leads_historico
+    FROM emails_agend_leads_criativo
+    GROUP BY ad_name_norm
+),
+agend_leads_decomp_vinculados AS (
+    SELECT
+        COUNT(DISTINCT e.email_norm)::bigint                    AS agendamentos,
+        COUNT(DISTINCT e.email_norm) FILTER (
+            WHERE e.email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS agendamentos_leads_periodo,
+        COUNT(DISTINCT e.email_norm) FILTER (
+            WHERE e.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS agendamentos_leads_historico
+    FROM emails_agend_leads_criativo e
+    WHERE e.ad_name_norm <> '__sem_criativo_identificado__'
+),
+emails_agend_apl_criativo AS (
+    SELECT aec.ad_name_norm, aec.email_norm
+    FROM aplicacoes_email_criativo aec
+    INNER JOIN activities_in_window a
+        ON a.email_norm = aec.email_norm AND a.activity_id IS NOT NULL
+    UNION
+    SELECT aeh.ad_name_norm, aeh.email_norm
+    FROM aplicacoes_email_criativo_hist aeh
+    INNER JOIN activities_in_window a
+        ON a.email_norm = aeh.email_norm AND a.activity_id IS NOT NULL
+    WHERE aeh.email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
+),
+agend_apl_decomp_por_criativo AS (
+    SELECT
+        ad_name_norm,
+        COUNT(DISTINCT email_norm)::bigint                      AS agendamentos_apl,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
+        )::bigint                                               AS agendamentos_apl_periodo,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
+        )::bigint                                               AS agendamentos_apl_historico
+    FROM emails_agend_apl_criativo
+    GROUP BY ad_name_norm
+),
+emails_agend_apl_globais AS (
+    SELECT ad.email_norm
+    FROM aplicacoes_dedup ad
+    INNER JOIN activities_in_window a
+        ON a.email_norm = ad.email_norm AND a.activity_id IS NOT NULL
+    UNION
+    SELECT ad.email_norm
+    FROM aplicacoes_dedup_hist ad
+    INNER JOIN activities_in_window a
+        ON a.email_norm = ad.email_norm AND a.activity_id IS NOT NULL
+    WHERE ad.email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
+),
+agend_apl_decomp_globais AS (
+    SELECT
+        COUNT(DISTINCT email_norm)::bigint                      AS agendamentos_apl,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
+        )::bigint                                               AS agendamentos_apl_periodo,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
+        )::bigint                                               AS agendamentos_apl_historico
+    FROM emails_agend_apl_globais
+),
+agend_apl_decomp_vinculados AS (
+    SELECT
+        COUNT(DISTINCT e.email_norm)::bigint                    AS agendamentos_apl,
+        COUNT(DISTINCT e.email_norm) FILTER (
+            WHERE e.email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
+        )::bigint                                               AS agendamentos_apl_periodo,
+        COUNT(DISTINCT e.email_norm) FILTER (
+            WHERE e.email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
+        )::bigint                                               AS agendamentos_apl_historico
+    FROM emails_agend_apl_criativo e
+    WHERE e.ad_name_norm <> '__sem_criativo_identificado__'
+),
+
+emails_comp_leads_criativo AS (
+    SELECT dec.utm_content_norm                                    AS ad_name_norm,
+           a.email_norm
+    FROM distinct_email_criativo dec
+    INNER JOIN activities_in_window a ON a.email_norm = dec.email_norm
+    WHERE a.status_reuniao = 'Concluída'
+    UNION
+    SELECT dech.utm_content_norm, a.email_norm
+    FROM distinct_email_criativo_hist dech
+    INNER JOIN activities_in_window a ON a.email_norm = dech.email_norm
+    WHERE a.status_reuniao = 'Concluída'
+      AND dech.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+),
+comp_leads_decomp_por_criativo AS (
+    SELECT
+        ad_name_norm,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS comparecimentos_leads_periodo,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS comparecimentos_leads_historico
+    FROM emails_comp_leads_criativo
+    GROUP BY ad_name_norm
+),
+comp_leads_decomp_vinculados AS (
+    SELECT
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS comparecimentos_leads_periodo,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS comparecimentos_leads_historico
+    FROM emails_comp_leads_criativo
+    WHERE ad_name_norm <> '__sem_criativo_identificado__'
 ),
 
 -- -----------------------------------------------------------------------------
@@ -461,7 +645,7 @@ deal_lead_matches AS (
     -- Regra validada na operação (10-16/mai/2026):
     --   * Match: email primário, telefone como fallback (zoho_id removido —
     --     menos confiável que o e-mail).
-    --   * Restrição cross-período: `l.created_at <= g.data_venda_ts` por
+    --   * Restrição cross-período: `l.timestamp <= g.data_venda_ts` por
     --     deal (não restringe ao período do dashboard) — uma venda do
     --     período pode ter vindo de um lead criado em qualquer momento
     --     antes dela.
@@ -506,6 +690,37 @@ deal_attributed_lead AS (
              lead_created_at DESC,
              lead_id
 ),
+vendas_leads_decomp_por_criativo AS (
+    SELECT
+        COALESCE(dal.utm_content_norm, '__sem_criativo_identificado__')
+                                                                AS ad_name_norm,
+        COUNT(DISTINCT g.deal_id) FILTER (
+            WHERE lav.email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS vendas_leads_periodo,
+        COUNT(DISTINCT g.deal_id) FILTER (
+            WHERE lav.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+             OR lav.email_norm IS NULL OR lav.email_norm = ''
+        )::bigint                                               AS vendas_leads_historico
+    FROM deals_ganhos g
+    LEFT JOIN deal_attributed_lead dal ON dal.deal_id = g.deal_id
+    LEFT JOIN leads_atribuicao_vendas lav ON lav.lead_id = dal.lead_id
+    GROUP BY 1
+),
+vendas_leads_decomp_vinculados AS (
+    SELECT
+        COUNT(DISTINCT g.deal_id) FILTER (
+            WHERE lav.email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+        )::bigint                                               AS vendas_leads_periodo,
+        COUNT(DISTINCT g.deal_id) FILTER (
+            WHERE lav.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+             OR lav.email_norm IS NULL OR lav.email_norm = ''
+        )::bigint                                               AS vendas_leads_historico
+    FROM deals_ganhos g
+    LEFT JOIN deal_attributed_lead dal ON dal.deal_id = g.deal_id
+    LEFT JOIN leads_atribuicao_vendas lav ON lav.lead_id = dal.lead_id
+    WHERE COALESCE(dal.utm_content_norm, '__sem_criativo_identificado__')
+          <> '__sem_criativo_identificado__'
+),
 -- Vendas por criativo via atribuição deal→lead.
 -- Deals sem lead pareável (LEFT JOIN sem match) caem no bucket sintético.
 vendas_por_criativo AS (
@@ -537,7 +752,7 @@ vendas_aplicacoes_globais AS (
     FROM deals_ganhos g
     INNER JOIN deal_attributed_lead dal USING (deal_id)
     INNER JOIN leads_atribuicao_vendas l ON l.lead_id = dal.lead_id
-    WHERE l.email_norm IN (SELECT email_norm FROM aplicacoes_emails_globais)
+    WHERE l.email_norm IN (SELECT email_norm FROM aplicacoes_dedup)
 ),
 vendas_aplicacoes_vinculados AS (
     SELECT COUNT(DISTINCT g.deal_id)::bigint                    AS vendas_aplicacoes
@@ -599,29 +814,49 @@ SELECT
     COALESCE(lpc.leads_menos_12, 0)::bigint                     AS leads_menos_12,
     COALESCE(lpc.leads_nao_atua, 0)::bigint                     AS leads_nao_atua,
     -- Funil — agend/compar (lead-centric) + vendas (deal-centric)
-    COALESCE(acpc.agendamentos, 0)::bigint                      AS agendamentos,
+    COALESCE(ald.agendamentos, acpc.agendamentos, 0)::bigint    AS agendamentos,
+    COALESCE(ald.agendamentos_leads_periodo, 0)::bigint           AS agendamentos_leads_periodo,
+    COALESCE(ald.agendamentos_leads_historico, 0)::bigint         AS agendamentos_leads_historico,
     COALESCE(acpc.comparecimentos, 0)::bigint                   AS comparecimentos,
+    COALESCE(cld.comparecimentos_leads_periodo, 0)::bigint      AS comparecimentos_leads_periodo,
+    COALESCE(cld.comparecimentos_leads_historico, 0)::bigint    AS comparecimentos_leads_historico,
     COALESCE(vpc.vendas_novas, 0)::bigint                       AS vendas_novas,
+    COALESCE(vld.vendas_leads_periodo, 0)::bigint                 AS vendas_leads_periodo,
+    COALESCE(vld.vendas_leads_historico, 0)::bigint               AS vendas_leads_historico,
     -- Funil de aplicações (typeform → subset com agend/compar/venda)
     COALESCE(apc.aplicacoes, 0)::bigint                         AS aplicacoes,
     COALESCE(apc.aplicacoes_mais_12, 0)::bigint                  AS aplicacoes_mais_12,
     COALESCE(apc.aplicacoes_menos_12, 0)::bigint                 AS aplicacoes_menos_12,
-    COALESCE(aapl.agendamentos_apl, 0)::bigint                  AS agendamentos_apl,
+    COALESCE(aad.agendamentos_apl, aapl.agendamentos_apl, 0)::bigint
+                                                                AS agendamentos_apl,
+    COALESCE(aad.agendamentos_apl_periodo, 0)::bigint           AS agendamentos_apl_periodo,
+    COALESCE(aad.agendamentos_apl_historico, 0)::bigint         AS agendamentos_apl_historico,
     COALESCE(aapl.comparecimentos_apl, 0)::bigint               AS comparecimentos_apl,
     COALESCE(vapl.vendas_aplicacoes, 0)::bigint                 AS vendas_aplicacoes,
     -- Totais globais de aplicações (repetidos em cada row — UI usa em opções sintéticas)
     ag.aplicacoes::bigint                                       AS aplicacoes_globais,
     ag.aplicacoes_mais_12::bigint                               AS aplicacoes_mais_12_globais,
     ag.aplicacoes_menos_12::bigint                              AS aplicacoes_menos_12_globais,
-    acag.agendamentos_apl::bigint                               AS agendamentos_apl_globais,
     acag.comparecimentos_apl::bigint                            AS comparecimentos_apl_globais,
     vag.vendas_aplicacoes::bigint                               AS vendas_aplicacoes_globais,
     av.aplicacoes::bigint                                       AS aplicacoes_vinculados,
     av.aplicacoes_mais_12::bigint                               AS aplicacoes_mais_12_vinculados,
     av.aplicacoes_menos_12::bigint                              AS aplicacoes_menos_12_vinculados,
-    acav.agendamentos_apl::bigint                               AS agendamentos_apl_vinculados,
     acav.comparecimentos_apl::bigint                            AS comparecimentos_apl_vinculados,
     vav.vendas_aplicacoes::bigint                               AS vendas_aplicacoes_vinculados,
+    alvin.agendamentos::bigint                                  AS agendamentos_vinculados,
+    alvin.agendamentos_leads_periodo::bigint                    AS agendamentos_leads_periodo_vinculados,
+    alvin.agendamentos_leads_historico::bigint                  AS agendamentos_leads_historico_vinculados,
+    clvin.comparecimentos_leads_periodo::bigint                 AS comparecimentos_leads_periodo_vinculados,
+    clvin.comparecimentos_leads_historico::bigint               AS comparecimentos_leads_historico_vinculados,
+    vldvin.vendas_leads_periodo::bigint                         AS vendas_leads_periodo_vinculados,
+    vldvin.vendas_leads_historico::bigint                       AS vendas_leads_historico_vinculados,
+    aadg.agendamentos_apl::bigint                               AS agendamentos_apl_globais,
+    aadg.agendamentos_apl_periodo::bigint                       AS agendamentos_apl_periodo_globais,
+    aadg.agendamentos_apl_historico::bigint                     AS agendamentos_apl_historico_globais,
+    aadvin.agendamentos_apl::bigint                             AS agendamentos_apl_vinculados,
+    aadvin.agendamentos_apl_periodo::bigint                      AS agendamentos_apl_periodo_vinculados,
+    aadvin.agendamentos_apl_historico::bigint                    AS agendamentos_apl_historico_vinculados,
     -- Derivadas
     CASE WHEN COALESCE(lpc.leads_totais, 0) = 0 THEN 0::numeric
          ELSE COALESCE(lpc.leads_qualificados, 0)::numeric / lpc.leads_totais * 100
@@ -667,13 +902,22 @@ CROSS JOIN agend_compar_aplicacoes_globais acag
 CROSS JOIN agend_compar_aplicacoes_vinculados acav
 CROSS JOIN vendas_aplicacoes_globais vag
 CROSS JOIN vendas_aplicacoes_vinculados vav
+CROSS JOIN agend_leads_decomp_vinculados alvin
+CROSS JOIN comp_leads_decomp_vinculados clvin
+CROSS JOIN vendas_leads_decomp_vinculados vldvin
+CROSS JOIN agend_apl_decomp_globais aadg
+CROSS JOIN agend_apl_decomp_vinculados aadvin
 LEFT JOIN midia_agg                  ma   USING (ad_name_norm)
 LEFT JOIN midia_principal            mp   USING (ad_name_norm)
 LEFT JOIN leads_por_criativo         lpc  USING (ad_name_norm)
 LEFT JOIN agend_compar_por_criativo  acpc USING (ad_name_norm)
+LEFT JOIN agend_leads_decomp_por_criativo ald USING (ad_name_norm)
+LEFT JOIN comp_leads_decomp_por_criativo cld USING (ad_name_norm)
 LEFT JOIN vendas_por_criativo        vpc  USING (ad_name_norm)
+LEFT JOIN vendas_leads_decomp_por_criativo vld USING (ad_name_norm)
 LEFT JOIN aplicacoes_por_criativo    apc  USING (ad_name_norm)
 LEFT JOIN agend_compar_aplicacoes    aapl USING (ad_name_norm)
+LEFT JOIN agend_apl_decomp_por_criativo aad USING (ad_name_norm)
 LEFT JOIN vendas_aplicacoes_por_criativo vapl USING (ad_name_norm)
 ORDER BY investimento DESC NULLS LAST, vendas_novas DESC NULLS LAST,
          leads_totais DESC NULLS LAST;

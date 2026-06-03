@@ -25,9 +25,13 @@ from src.repositories import (
     get_executivas,
     get_investimento_diario,
     get_leads_visao_geral,
+    get_prevendas_overview_diario,
 )
 from src.marketing_transforms import (
     CANAIS_PAGOS,
+    agendamentos_one_page_oficial,
+    comparecimentos_one_page_oficial,
+    vendas_one_page_oficial,
     agregar_campanhas_por_utm,
     campanha_funil_etapas,
     campanha_funil_kpis,
@@ -200,6 +204,7 @@ with s3:
 df_camp_funil = safe_run(
     lambda: get_mkt_campanha_funil(ctx.data_ini, ctx.data_fim),
     view_label="mkt_campanha_funil",
+    log_sql_error=True,
 )
 
 # Totais OFICIAIS do período — mesma lógica documentada em
@@ -228,6 +233,13 @@ _df_inv_oficial_camp = safe_run(
     lambda: get_investimento_diario(ctx.data_ini, ctx.data_fim),
     view_label="investimento_diario",
 )
+_df_prev_oficial_camp = safe_run(
+    lambda: get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim),
+    view_label="prevendas_overview_diario",
+)
+_agendamentos_oficial_camp = agendamentos_one_page_oficial(_df_prev_oficial_camp)
+_comparecimentos_oficial_camp = comparecimentos_one_page_oficial(_df_prev_oficial_camp)
+_vendas_oficial_camp = vendas_one_page_oficial(_df_prev_oficial_camp)
 _investimento_oficial_camp = (
     float(_df_inv_oficial_camp["investimento_total"].fillna(0).sum())
     if (_df_inv_oficial_camp is not None and not _df_inv_oficial_camp.empty
@@ -241,6 +253,9 @@ _oficiais_status_camp = [
     ("leads",       _leads_totais_oficial_camp),
     ("vendas",      _vendas_novas_oficial_camp),
     ("investimento", _investimento_oficial_camp),
+    ("agendamentos", _agendamentos_oficial_camp),
+    ("comparecimentos", _comparecimentos_oficial_camp),
+    ("vendas", _vendas_oficial_camp or _vendas_novas_oficial_camp),
 ]
 _oficiais_faltando_camp = [k for k, v in _oficiais_status_camp if v is None]
 if _oficiais_faltando_camp:
@@ -268,8 +283,12 @@ render_funil_selecionado(
         leads_totais_oficial=_leads_totais_oficial_camp,
         vendas_novas_oficial=_vendas_novas_oficial_camp,
         investimento_oficial=_investimento_oficial_camp,
+        agendamentos_oficial=_agendamentos_oficial_camp,
+        comparecimentos_oficial=_comparecimentos_oficial_camp,
+        vendas_oficial=_vendas_oficial_camp,
     ),
     etapas_fn=campanha_funil_etapas,
+    marketing_funil_unico=True,
     data_ini=ctx.data_ini,
     data_fim=ctx.data_fim,
     nivel="campanha",
@@ -313,6 +332,12 @@ render_funil_selecionado(
         "- **Vendas novas:** deal-centric — 1 row por deal (sem "
         "  duplicação), `stage IN ('Ganho','Fechado Ganho')` e "
         "  `tipo_venda = 'Novo cliente'`.\n"
+        "- **Aplicações (contexto no bloco Leads):** `fdw_reconecta.typeform_aplicacoes` "
+        "  cruzado por e-mail dos leads da campanha (`utm_campaign`); "
+        "`dados_completos = TRUE`, dedupe e-mail/dia; leads `timestamp::date`, "
+        "typeform `created_at::date`. Em **Todos os resultados**, aplicações = todas do Typeform no período "
+        "(igual One Page); em campanha específica, só com lead na campanha. "
+        "Exibimos quantidade, % sobre leads, +12/-12, CPA e CPA +12.\n"
         "- **Filtros de e-mail de teste:** `@teste`, `teste@`, `smarts`, "
         "  `reconecta` removidos do universo de leads em todas as etapas."
     ),

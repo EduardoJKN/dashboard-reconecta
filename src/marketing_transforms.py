@@ -2446,13 +2446,21 @@ _CRI_FUNIL_ZEROS = {
     "leads_totais": 0, "leads_qualificados": 0,
     "leads_mais_12": 0, "leads_menos_12": 0, "leads_nao_atua": 0,
     "agendamentos": 0, "comparecimentos": 0, "vendas_novas": 0,
+    "agendamentos_leads_periodo": 0, "agendamentos_leads_historico": 0,
+    "comparecimentos_leads_periodo": 0, "comparecimentos_leads_historico": 0,
+    "vendas_leads_periodo": 0, "vendas_leads_historico": 0,
     "aplicacoes": 0, "aplicacoes_mais_12": 0, "aplicacoes_menos_12": 0,
+    "agendamentos_apl_periodo": 0, "agendamentos_apl_historico": 0,
     "agendamentos_apl": 0, "comparecimentos_apl": 0, "vendas_aplicacoes": 0,
     "taxa_qualificacao": 0.0, "taxa_mais_12": 0.0,
-    "taxa_lead_agendamento": 0.0, "taxa_lead_comparecimento": 0.0,
+    "taxa_lead_agendamento": 0.0, "taxa_lead_agendamento_periodo": 0.0,
+    "taxa_lead_agendamento_historico": 0.0,
+    "taxa_lead_comparecimento": 0.0,
     "taxa_lead_venda_nova": 0.0,
     "taxa_aplicacao_mais_12": 0.0,
-    "taxa_apl_agendamento": 0.0, "taxa_apl_comparecimento": 0.0,
+    "taxa_apl_agendamento": 0.0, "taxa_apl_agendamento_periodo": 0.0,
+    "taxa_apl_agendamento_historico": 0.0,
+    "taxa_apl_comparecimento": 0.0,
     "taxa_apl_venda_nova": 0.0,
     "cpl": 0.0, "cpl_mais_12": 0.0, "cac": 0.0,
 }
@@ -2499,17 +2507,124 @@ def formatar_label_funil_row(row) -> str:
     )
 
 
+def _recompute_comp_vendas_decomp(out: dict) -> None:
+    """Decomposição comparecimentos/vendas: período + histórico = total."""
+    compar = int(out.get("comparecimentos") or 0)
+    cp = int(out.get("comparecimentos_leads_periodo") or 0)
+    ch = int(out.get("comparecimentos_leads_historico") or 0)
+    if compar > 0 and cp + ch != compar:
+        ch = max(0, compar - cp)
+        out["comparecimentos_leads_historico"] = ch
+    out["pct_comp_leads_periodo"] = (cp / compar * 100) if compar > 0 else None
+    out["pct_comp_leads_historico"] = (ch / compar * 100) if compar > 0 else None
+
+    vendas = int(out.get("vendas_novas") or 0)
+    vp = int(out.get("vendas_leads_periodo") or 0)
+    vh = int(out.get("vendas_leads_historico") or 0)
+    if vendas > 0 and vp + vh != vendas:
+        vh = max(0, vendas - vp)
+        out["vendas_leads_historico"] = vh
+    out["pct_vendas_leads_periodo"] = (vp / vendas * 100) if vendas > 0 else None
+    out["pct_vendas_leads_historico"] = (vh / vendas * 100) if vendas > 0 else None
+
+
+def _recompute_funil_decomp(out: dict) -> None:
+    """Recalcula decomposições período/histórico de agend., comp. e vendas."""
+    _recompute_agend_decomp(out)
+    _recompute_comp_vendas_decomp(out)
+
+
+def _close_funil_decomp_on_totals(out: dict) -> None:
+    """Garante período + histórico = total antes de recalcular %."""
+    for total_key, periodo_key, historico_key in (
+        ("agendamentos", "agendamentos_leads_periodo", "agendamentos_leads_historico"),
+        ("comparecimentos", "comparecimentos_leads_periodo", "comparecimentos_leads_historico"),
+        ("vendas_novas", "vendas_leads_periodo", "vendas_leads_historico"),
+    ):
+        total = int(out.get(total_key) or 0)
+        periodo = int(out.get(periodo_key) or 0)
+        if total > 0:
+            if periodo > total:
+                periodo = total
+                out[periodo_key] = periodo
+            out[historico_key] = total - periodo
+    _recompute_funil_decomp(out)
+
+
+def _recompute_agend_decomp(out: dict) -> None:
+    """Decomposição agendamentos: período + histórico = total (% sobre o total)."""
+    agend = int(out.get("agendamentos") or 0)
+    ap = int(out.get("agendamentos_leads_periodo") or 0)
+    ah = int(out.get("agendamentos_leads_historico") or 0)
+    if agend > 0 and ap + ah != agend:
+        ah = max(0, agend - ap)
+        out["agendamentos_leads_historico"] = ah
+    out["pct_agend_leads_periodo"] = (ap / agend * 100) if agend > 0 else None
+    out["pct_agend_leads_historico"] = (ah / agend * 100) if agend > 0 else None
+
+    leads = int(out.get("leads_totais") or 0)
+    out["taxa_lead_agendamento"] = (agend / leads * 100) if leads > 0 else 0.0
+    out["taxa_lead_agendamento_periodo"] = out["pct_agend_leads_periodo"] or 0.0
+    out["taxa_lead_agendamento_historico"] = out["pct_agend_leads_historico"] or 0.0
+
+    agend_apl = int(out.get("agendamentos_apl") or 0)
+    aap = int(out.get("agendamentos_apl_periodo") or 0)
+    aah = int(out.get("agendamentos_apl_historico") or 0)
+    if agend_apl > 0 and aap + aah != agend_apl:
+        aah = max(0, agend_apl - aap)
+        out["agendamentos_apl_historico"] = aah
+    out["pct_agend_apl_periodo"] = (aap / agend_apl * 100) if agend_apl > 0 else None
+    out["pct_agend_apl_historico"] = (aah / agend_apl * 100) if agend_apl > 0 else None
+
+    apl = int(out.get("aplicacoes") or 0)
+    out["taxa_apl_agendamento"] = (agend_apl / apl * 100) if apl > 0 else 0.0
+    out["taxa_apl_agendamento_periodo"] = out["pct_agend_apl_periodo"] or 0.0
+    out["taxa_apl_agendamento_historico"] = out["pct_agend_apl_historico"] or 0.0
+
+
 def _recompute_aplicacoes_taxas(out: dict) -> None:
     """Taxas do funil de aplicações — denominador = aplicacoes."""
     apl = int(out.get("aplicacoes") or 0)
     apl12 = int(out.get("aplicacoes_mais_12") or 0)
-    agend = int(out.get("agendamentos_apl") or 0)
     compar = int(out.get("comparecimentos_apl") or 0)
     vendas = int(out.get("vendas_aplicacoes") or 0)
     out["taxa_aplicacao_mais_12"] = (apl12 / apl * 100) if apl > 0 else 0.0
-    out["taxa_apl_agendamento"] = (agend / apl * 100) if apl > 0 else 0.0
     out["taxa_apl_comparecimento"] = (compar / apl * 100) if apl > 0 else 0.0
     out["taxa_apl_venda_nova"] = (vendas / apl * 100) if apl > 0 else 0.0
+    _recompute_funil_decomp(out)
+
+
+def _comp_vendas_decomp_from_row(row: dict | pd.Series, scope: str) -> dict:
+    """Decomposição comparecimentos/vendas (globais/vinculados) da 1ª row."""
+    if scope == "vinculados":
+        return {
+            "comparecimentos_leads_periodo": int(
+                row.get("comparecimentos_leads_periodo_vinculados") or 0
+            ),
+            "comparecimentos_leads_historico": int(
+                row.get("comparecimentos_leads_historico_vinculados") or 0
+            ),
+            "vendas_leads_periodo": int(
+                row.get("vendas_leads_periodo_vinculados") or 0
+            ),
+            "vendas_leads_historico": int(
+                row.get("vendas_leads_historico_vinculados") or 0
+            ),
+        }
+    return {
+        "comparecimentos_leads_periodo": int(
+            row.get("comparecimentos_leads_periodo_globais") or 0
+        ),
+        "comparecimentos_leads_historico": int(
+            row.get("comparecimentos_leads_historico_globais") or 0
+        ),
+        "vendas_leads_periodo": int(
+            row.get("vendas_leads_periodo_globais") or 0
+        ),
+        "vendas_leads_historico": int(
+            row.get("vendas_leads_historico_globais") or 0
+        ),
+    }
 
 
 def _aplicacoes_kpis_from_row(row: dict | pd.Series, prefix: str) -> dict:
@@ -2525,13 +2640,58 @@ def _aplicacoes_kpis_from_row(row: dict | pd.Series, prefix: str) -> dict:
     }
 
 
+def _agend_decomp_from_row(row: dict | pd.Series, scope: str) -> dict:
+    """Decomposição agendamentos (globais/vinculados) da 1ª row do df_funil."""
+    if scope == "vinculados":
+        return {
+            "agendamentos": int(row.get("agendamentos_vinculados") or 0),
+            "agendamentos_leads_periodo": int(
+                row.get("agendamentos_leads_periodo_vinculados") or 0
+            ),
+            "agendamentos_leads_historico": int(
+                row.get("agendamentos_leads_historico_vinculados") or 0
+            ),
+            "agendamentos_apl": int(row.get("agendamentos_apl_vinculados") or 0),
+            "agendamentos_apl_periodo": int(
+                row.get("agendamentos_apl_periodo_vinculados") or 0
+            ),
+            "agendamentos_apl_historico": int(
+                row.get("agendamentos_apl_historico_vinculados") or 0
+            ),
+        }
+    return {
+        "agendamentos": int(row.get("agendamentos_globais") or 0),
+        "agendamentos_leads_periodo": int(
+            row.get("agendamentos_leads_periodo_globais") or 0
+        ),
+        "agendamentos_leads_historico": int(
+            row.get("agendamentos_leads_historico_globais") or 0
+        ),
+        "agendamentos_apl": int(row.get("agendamentos_apl_globais") or 0),
+        "agendamentos_apl_periodo": int(
+            row.get("agendamentos_apl_periodo_globais") or 0
+        ),
+        "agendamentos_apl_historico": int(
+            row.get("agendamentos_apl_historico_globais") or 0
+        ),
+    }
+
+
 def _overlay_aplicacoes_kpis(out: dict, df_funil: pd.DataFrame, scope: str) -> dict:
-    """Sobrepõe KPIs de aplicações a partir de colunas globais do SQL."""
+    """Sobrepõe KPIs de aplicações a partir de colunas globais do SQL.
+
+    scope ``globais`` (opção "Todos os resultados"): todas as aplicações
+    Typeform válidas no período — igual One Page; não exige lead.
+    scope ``vinculados``: só aplicações com e-mail presente em leads do período.
+    Criativo/campanha específica: contagens por linha do SQL (lead ∩ typeform).
+    """
     if df_funil is None or df_funil.empty:
         return out
     row = df_funil.iloc[0]
     apl = _aplicacoes_kpis_from_row(row, scope)
     out.update(apl)
+    out.update(_agend_decomp_from_row(row, scope))
+    out.update(_comp_vendas_decomp_from_row(row, scope))
     _recompute_aplicacoes_taxas(out)
     return out
 
@@ -2749,7 +2909,6 @@ def _kpis_funil_agregado(
     out["cpc"]  = (inv / clk) if clk > 0 else 0.0
     out["taxa_qualificacao"]         = (leads_q / leads * 100) if leads > 0 else 0.0
     out["taxa_mais_12"]              = (leads_12 / leads * 100) if leads > 0 else 0.0
-    out["taxa_lead_agendamento"]     = (agend  / leads * 100) if leads > 0 else 0.0
     out["taxa_lead_comparecimento"]  = (compar / leads * 100) if leads > 0 else 0.0
     out["taxa_lead_venda_nova"]      = (vendas / leads * 100) if leads > 0 else 0.0
     out["cpl"]                       = (inv / leads)    if leads > 0    else 0.0
@@ -2758,23 +2917,106 @@ def _kpis_funil_agregado(
     return out
 
 
+def _apply_funil_one_page_kpis(
+    out: dict,
+    df_funil: pd.DataFrame | None,
+    *,
+    agendamentos_oficial: int | None = None,
+    comparecimentos_oficial: int | None = None,
+    vendas_oficial: int | None = None,
+) -> dict:
+    """Totais One Page (agend/comp/vendas) + decomposição período/histórico."""
+    if df_funil is not None and not df_funil.empty:
+        row0 = df_funil.iloc[0]
+        out.update(_agend_decomp_from_row(row0, "globais"))
+        out.update(_comp_vendas_decomp_from_row(row0, "globais"))
+
+    for total_key, official, periodo_key, historico_key in (
+        ("agendamentos", agendamentos_oficial,
+         "agendamentos_leads_periodo", "agendamentos_leads_historico"),
+        ("comparecimentos", comparecimentos_oficial,
+         "comparecimentos_leads_periodo", "comparecimentos_leads_historico"),
+        ("vendas_novas", vendas_oficial,
+         "vendas_leads_periodo", "vendas_leads_historico"),
+    ):
+        if official is not None and official >= 0:
+            out[total_key] = int(official)
+        total = int(out.get(total_key) or 0)
+        periodo = int(out.get(periodo_key) or 0)
+        if total > 0:
+            if periodo > total:
+                periodo = total
+                out[periodo_key] = periodo
+            out[historico_key] = total - periodo
+
+    _recompute_funil_decomp(out)
+    return out
+
+
+def _apply_agendamentos_one_page_kpis(
+    out: dict,
+    df_funil: pd.DataFrame | None,
+    agendamentos_oficial: int | None = None,
+) -> dict:
+    """Alias legado — delega para ``_apply_funil_one_page_kpis``."""
+    return _apply_funil_one_page_kpis(
+        out, df_funil, agendamentos_oficial=agendamentos_oficial,
+    )
+
+
+def agendamentos_one_page_oficial(
+    df_prevendas_diario: pd.DataFrame | None,
+) -> int | None:
+    """Total exibido de agendamentos — mesma regra da One Page."""
+    if df_prevendas_diario is None or df_prevendas_diario.empty:
+        return None
+    from src.prevendas_transforms import prevendas_overview_kpis
+    k = prevendas_overview_kpis(df_prevendas_diario)
+    return int(k.get("agendamentos_exibidos") or 0)
+
+
+def comparecimentos_one_page_oficial(
+    df_prevendas_diario: pd.DataFrame | None,
+) -> int | None:
+    """Total de comparecimentos — mesma regra da One Page / Pré-vendas."""
+    if df_prevendas_diario is None or df_prevendas_diario.empty:
+        return None
+    from src.prevendas_transforms import prevendas_overview_kpis
+    k = prevendas_overview_kpis(df_prevendas_diario)
+    return int(k.get("comparecimentos") or 0)
+
+
+def vendas_one_page_oficial(
+    df_prevendas_diario: pd.DataFrame | None,
+) -> int | None:
+    """Total de vendas novas — mesma regra da One Page / Pré-vendas."""
+    if df_prevendas_diario is None or df_prevendas_diario.empty:
+        return None
+    from src.prevendas_transforms import prevendas_overview_kpis
+    k = prevendas_overview_kpis(df_prevendas_diario)
+    return int(k.get("vendas_novas") or k.get("vendas") or 0)
+
+
 def _criativo_funil_kpis_todos(
     df_funil: pd.DataFrame,
     leads_totais_oficial: int | None = None,
     vendas_novas_oficial: int | None = None,
     investimento_oficial: float | None = None,
+    agendamentos_oficial: int | None = None,
+    comparecimentos_oficial: int | None = None,
+    vendas_oficial: int | None = None,
 ) -> dict:
     """KPIs da opção sintética 'Todos os resultados'.
 
     Representa os TOTAIS OFICIAIS do período (alinhados com a Visão Geral):
     `leads_totais_oficial` = daily-distinct por e-mail
-    (`COUNT(DISTINCT (created_at::date, lower(trim(email))))`);
+    (`COUNT(DISTINCT (timestamp::date, lower(trim(email))))`);
     `vendas_novas_oficial` = total CRM (stage Ganho + Novo cliente);
     `investimento_oficial` = total de mídia do período.
+    `agendamentos_oficial` = `agendamentos_exibidos` da Pré-vendas / One Page.
+    `comparecimentos_oficial` / `vendas_oficial` = totais Pré-vendas / One Page.
     Quando algum oficial vem `None` (fallback p/ cache indisponível), cai
-    pra soma do df. Demais cards (Leads +12, Não atua, Agendamentos,
-    Comparecimentos) continuam vindo da soma — não há fonte oficial
-    direta pra eles no contexto de Marketing."""
+    pra soma do df."""
     out = _kpis_funil_agregado(
         df_funil,
         ad_name_norm_out=_TODOS_AD_NAME_NORM,
@@ -2783,7 +3025,16 @@ def _criativo_funil_kpis_todos(
         vendas_novas_oficial=vendas_novas_oficial,
         investimento_oficial=investimento_oficial,
     )
-    return _overlay_aplicacoes_kpis(out, df_funil, "globais")
+    out = _overlay_aplicacoes_kpis(out, df_funil, "globais")
+    vendas_final = (
+        vendas_oficial if vendas_oficial is not None else vendas_novas_oficial
+    )
+    return _apply_funil_one_page_kpis(
+        out, df_funil,
+        agendamentos_oficial=agendamentos_oficial,
+        comparecimentos_oficial=comparecimentos_oficial,
+        vendas_oficial=vendas_final,
+    )
 
 
 def _criativo_funil_kpis_vinculados(df_funil: pd.DataFrame) -> dict:
@@ -2800,7 +3051,12 @@ def _criativo_funil_kpis_vinculados(df_funil: pd.DataFrame) -> dict:
         ad_name_norm_out=_VINCULADOS_AD_NAME_NORM,
         ad_name_out="Totais vinculados aos leads",
     )
-    return _overlay_aplicacoes_kpis(out, df_funil, "vinculados")
+    out = _overlay_aplicacoes_kpis(out, df_funil, "vinculados")
+    if df_funil is not None and not df_funil.empty:
+        row0 = df_funil.iloc[0]
+        out["agendamentos"] = int(row0.get("agendamentos_vinculados") or out.get("agendamentos") or 0)
+    _close_funil_decomp_on_totals(out)
+    return out
 
 
 def _excluir_bucket_sem_identificado(df_funil: pd.DataFrame) -> pd.DataFrame:
@@ -2823,7 +3079,10 @@ def criativo_funil_kpis(df_funil: pd.DataFrame,
                         ad_name_norm: str | None,
                         leads_totais_oficial: int | None = None,
                         vendas_novas_oficial: int | None = None,
-                        investimento_oficial: float | None = None) -> dict:
+                        investimento_oficial: float | None = None,
+                        agendamentos_oficial: int | None = None,
+                        comparecimentos_oficial: int | None = None,
+                        vendas_oficial: int | None = None) -> dict:
     """Projeção da row do criativo selecionado num dict pronto pra UI.
 
     Retorna dict com TODAS as colunas do SQL (mídia + leads + funil +
@@ -2849,6 +3108,9 @@ def criativo_funil_kpis(df_funil: pd.DataFrame,
             leads_totais_oficial=leads_totais_oficial,
             vendas_novas_oficial=vendas_novas_oficial,
             investimento_oficial=investimento_oficial,
+            agendamentos_oficial=agendamentos_oficial,
+            comparecimentos_oficial=comparecimentos_oficial,
+            vendas_oficial=vendas_oficial,
         )
     if ad_name_norm == _VINCULADOS_AD_NAME_NORM:
         return _criativo_funil_kpis_vinculados(df_funil)
@@ -2865,20 +3127,29 @@ def criativo_funil_kpis(df_funil: pd.DataFrame,
                 "agendamentos", "comparecimentos", "vendas_novas",
                 "aplicacoes", "aplicacoes_mais_12", "aplicacoes_menos_12",
                 "agendamentos_apl", "comparecimentos_apl", "vendas_aplicacoes")
+    decomp_cols = (
+        "agendamentos_leads_periodo", "agendamentos_leads_historico",
+        "comparecimentos_leads_periodo", "comparecimentos_leads_historico",
+        "vendas_leads_periodo", "vendas_leads_historico",
+        "agendamentos_apl_periodo", "agendamentos_apl_historico",
+    )
     float_cols = ("investimento", "ctr", "cpc",
                   "taxa_qualificacao", "taxa_mais_12",
-                  "taxa_lead_agendamento", "taxa_lead_comparecimento",
-                  "taxa_lead_venda_nova",
+                  "taxa_lead_agendamento", "taxa_lead_agendamento_periodo",
+                  "taxa_lead_agendamento_historico",
+                  "taxa_lead_comparecimento", "taxa_lead_venda_nova",
                   "taxa_aplicacao_mais_12", "taxa_apl_agendamento",
+                  "taxa_apl_agendamento_periodo", "taxa_apl_agendamento_historico",
                   "taxa_apl_comparecimento", "taxa_apl_venda_nova",
                   "cpl", "cpl_mais_12", "cac")
     for c in row:
-        if c in int_cols:
+        if c in int_cols or c in decomp_cols:
             out[c] = int(row[c]) if row[c] is not None else 0
         elif c in float_cols:
             out[c] = float(row[c]) if row[c] is not None else 0.0
         else:
             out[c] = row[c]
+    _close_funil_decomp_on_totals(out)
     _recompute_aplicacoes_taxas(out)
     return out
 
@@ -2907,7 +3178,8 @@ def criativo_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
 def build_funil_trilha_leads_steps(k: dict) -> list[dict]:
     """4 etapas principais do funil de leads (sem +12 como etapa sequencial).
 
-    Base: Leads (com +12/-12 auxiliar). Demais etapas medidas vs. leads totais."""
+    Base: Leads (com +12/-12 auxiliar). Agendamentos exibe taxa período + histórico."""
+    agend = float(k.get("agendamentos") or 0)
     return [
         {
             "label": "Leads",
@@ -2916,14 +3188,42 @@ def build_funil_trilha_leads_steps(k: dict) -> list[dict]:
             "menos_12": int(k.get("leads_menos_12") or 0),
             "is_base": True,
         },
-        {"label": "Agendamentos", "value": float(k.get("agendamentos") or 0)},
-        {"label": "Comparecimentos", "value": float(k.get("comparecimentos") or 0)},
-        {"label": "Vendas", "value": float(k.get("vendas_novas") or 0)},
+        {
+            "label": "Agendamentos",
+            "value": agend,
+            "dual_decomp": True,
+            "decomp_scope": "agendamentos",
+            "count_periodo": int(k.get("agendamentos_leads_periodo") or 0),
+            "count_historico": int(k.get("agendamentos_leads_historico") or 0),
+            "pct_periodo": k.get("pct_agend_leads_periodo"),
+            "pct_historico": k.get("pct_agend_leads_historico"),
+        },
+        {
+            "label": "Comparecimentos",
+            "value": float(k.get("comparecimentos") or 0),
+            "dual_decomp": True,
+            "decomp_scope": "comparecimentos",
+            "count_periodo": int(k.get("comparecimentos_leads_periodo") or 0),
+            "count_historico": int(k.get("comparecimentos_leads_historico") or 0),
+            "pct_periodo": k.get("pct_comp_leads_periodo"),
+            "pct_historico": k.get("pct_comp_leads_historico"),
+        },
+        {
+            "label": "Vendas",
+            "value": float(k.get("vendas_novas") or 0),
+            "dual_decomp": True,
+            "decomp_scope": "vendas",
+            "count_periodo": int(k.get("vendas_leads_periodo") or 0),
+            "count_historico": int(k.get("vendas_leads_historico") or 0),
+            "pct_periodo": k.get("pct_vendas_leads_periodo"),
+            "pct_historico": k.get("pct_vendas_leads_historico"),
+        },
     ]
 
 
 def build_funil_trilha_aplicacoes_steps(k: dict) -> list[dict]:
     """4 etapas principais do funil de aplicações (sem +12 como etapa sequencial)."""
+    agend_apl = float(k.get("agendamentos_apl") or 0)
     return [
         {
             "label": "Aplicações",
@@ -2932,14 +3232,22 @@ def build_funil_trilha_aplicacoes_steps(k: dict) -> list[dict]:
             "menos_12": int(k.get("aplicacoes_menos_12") or 0),
             "is_base": True,
         },
-        {"label": "Agend. apl.", "value": float(k.get("agendamentos_apl") or 0)},
+        {
+            "label": "Agend. apl.",
+            "value": agend_apl,
+            "dual_decomp": True,
+            "count_periodo": int(k.get("agendamentos_apl_periodo") or 0),
+            "count_historico": int(k.get("agendamentos_apl_historico") or 0),
+            "pct_periodo": k.get("pct_agend_apl_periodo"),
+            "pct_historico": k.get("pct_agend_apl_historico"),
+        },
         {"label": "Comp. apl.", "value": float(k.get("comparecimentos_apl") or 0)},
         {"label": "Vendas apl.", "value": float(k.get("vendas_aplicacoes") or 0)},
     ]
 
 
-# Mantido para compatibilidade (campanhas / mídia). Criativos dual-track usa
-# ``build_funil_trilha_*_steps`` via ``render_funil_selecionado``.
+# Mantido para compatibilidade / backend. UI usa funil único via
+# ``build_funil_trilha_leads_steps`` + contexto de aplicações no bloco Leads.
 _FUNIL_APL_KPI_KEYS = (
     "aplicacoes",
     "aplicacoes_mais_12",
@@ -2950,7 +3258,7 @@ _FUNIL_APL_KPI_KEYS = (
 
 
 def criativo_funil_etapas_aplicacoes(k: dict) -> tuple[list[str], list[float]]:
-    """Legado — preferir ``build_funil_trilha_aplicacoes_steps`` na UI dual-track."""
+    """Legado — trilha de aplicações (backend); não renderizada na UI principal."""
     steps = build_funil_trilha_aplicacoes_steps(k)
     return [s["label"] for s in steps], [s["value"] for s in steps]
 
@@ -3004,7 +3312,10 @@ def campanha_funil_kpis(df_funil: pd.DataFrame,
                         campaign_name_norm: str | None,
                         leads_totais_oficial: int | None = None,
                         vendas_novas_oficial: int | None = None,
-                        investimento_oficial: float | None = None) -> dict:
+                        investimento_oficial: float | None = None,
+                        agendamentos_oficial: int | None = None,
+                        comparecimentos_oficial: int | None = None,
+                        vendas_oficial: int | None = None) -> dict:
     """Projeção da row da campanha selecionada num dict. Reusa
     `criativo_funil_kpis` — mesmo shape de chaves (investimento, leads_*,
     agendamentos, vendas_novas, cpl, cac, taxa_*, etc.). Os overrides
@@ -3014,6 +3325,9 @@ def campanha_funil_kpis(df_funil: pd.DataFrame,
         leads_totais_oficial=leads_totais_oficial,
         vendas_novas_oficial=vendas_novas_oficial,
         investimento_oficial=investimento_oficial,
+        agendamentos_oficial=agendamentos_oficial,
+        comparecimentos_oficial=comparecimentos_oficial,
+        vendas_oficial=vendas_oficial,
     )
 
 
@@ -3021,6 +3335,11 @@ def campanha_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
     """7 etapas do funil de uma campanha — idêntico a
     `criativo_funil_etapas` (depende só do dict de kpis, não do grão)."""
     return criativo_funil_etapas(k)
+
+
+def campanha_funil_etapas_aplicacoes(k: dict) -> tuple[list[str], list[float]]:
+    """Trilha de aplicações da campanha — mesmo shape que criativos."""
+    return criativo_funil_etapas_aplicacoes(k)
 
 
 # ---------------------------------------------------------------------------
