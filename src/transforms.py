@@ -1404,3 +1404,336 @@ def churn_pos_ranking(
     g["ticket_medio"] = (g["montante_churn"] / vendas_pos).fillna(0.0)
 
     return g.sort_values("churns_periodo", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Cancelamentos por Pós-venda (activities Consulta canceladas) — Executivas
+# ---------------------------------------------------------------------------
+
+CANCEL_POS_SEM_IDENTIFICADO = "Sem pós-venda identificado"
+# Alias legado (aba antiga “Churn por Pós-venda”)
+CHURN_POS_SEM_IDENTIFICADO = CANCEL_POS_SEM_IDENTIFICADO
+
+
+def _cancelamentos_pos_to_naive_datetime_series(s) -> pd.Series:
+    """Normaliza série de datas para naive (comparação na aba Cancelamentos por Pós)."""
+    return pd.to_datetime(s, errors="coerce", utc=True).dt.tz_localize(None)
+
+
+def _cancelamentos_pos_to_naive_timestamp(v):
+    """Normaliza valor escalar para Timestamp naive ou NaT."""
+    ts = pd.to_datetime(v, errors="coerce", utc=True)
+    if pd.isna(ts):
+        return pd.NaT
+    return ts.tz_localize(None)
+
+
+def _cancelamentos_pos_pick_contato(
+    contatos: pd.DataFrame,
+    dt_cancel: pd.Timestamp | None,
+) -> tuple[str | None, pd.Timestamp | None, int, str]:
+    """Escolhe contato pós: preferência até a data do cancelamento; senão o mais recente."""
+    if contatos is None or contatos.empty:
+        return None, None, 0, ""
+    c = contatos.copy()
+    c["dt_contato"] = _cancelamentos_pos_to_naive_datetime_series(c["dt_contato"])
+    c = c[c["pos_nome_candidato"].notna() & (c["pos_nome_candidato"].astype(str).str.strip() != "")]
+    if c.empty:
+        return None, None, 0, ""
+    qtd = len(c)
+    dt_cancel = _cancelamentos_pos_to_naive_timestamp(dt_cancel)
+    pool = c
+    if pd.notna(dt_cancel):
+        antes = c[c["dt_contato"].notna() & (c["dt_contato"] <= dt_cancel)]
+        if not antes.empty:
+            pool = antes
+    pool = pool.sort_values("dt_contato", ascending=False, na_position="last")
+    row = pool.iloc[0]
+    return (
+        str(row["pos_nome_candidato"]).strip(),
+        row["dt_contato"],
+        qtd,
+        str(row.get("origem", "") or ""),
+    )
+
+
+def _cancelamentos_pos_resolver_nome_pos(
+    nome_candidato: str | None,
+    by_crm: dict,
+    tokens_list: list,
+) -> tuple[str, str, str]:
+    """Devolve (nome_exibicao, ativo, origem_cadastro)."""
+    if not nome_candidato or not str(nome_candidato).strip():
+        return CANCEL_POS_SEM_IDENTIFICADO, "", ""
+    resolved = _match_pos_oficial(
+        id_crm=None,
+        nome_candidato=str(nome_candidato),
+        by_crm=by_crm,
+        tokens_list=tokens_list,
+    )
+    if resolved:
+        return resolved[0], resolved[1], resolved[2]
+    return str(nome_candidato).strip(), "", "nome bruto (sem match cadastro)"
+
+
+def cancelamentos_pos_processar(
+    df_atividades: pd.DataFrame,
+    df_contatos_pos: pd.DataFrame,
+    df_oficiais: pd.DataFrame,
+) -> pd.DataFrame:
+    """Agrega activities canceladas por e-mail e cruza com contatos de pós."""
+    cols = [
+        "email_norm",
+        "email",
+        "nome_cliente",
+        "deal_id",
+        "qtd_cancelamentos",
+        "data_cancelamento",
+        "motivo_cancelamento",
+        "closer_nome",
+        "time_vendas",
+        "status_reuniao",
+        "pos_venda",
+        "pos_ativo",
+        "origem_vinculo",
+        "identificado_pos",
+        "ultimo_contato_pos",
+        "qtd_contatos_pos",
+    ]
+    if df_atividades is None or df_atividades.empty:
+        return pd.DataFrame(columns=cols)
+
+    acts = df_atividades.copy()
+    acts["email_norm"] = acts.get("email_norm", pd.Series(dtype=object)).astype(str).str.strip().str.lower()
+    acts = acts[acts["email_norm"].notna() & (acts["email_norm"] != "")]
+    if acts.empty:
+        return pd.DataFrame(columns=cols)
+
+    for col in ("data_cancelamento", "ts_cancelamento"):
+        if col in acts.columns:
+            acts[col] = pd.to_datetime(acts[col], errors="coerce")
+
+    contatos = df_contatos_pos.copy() if df_contatos_pos is not None else pd.DataFrame()
+    if not contatos.empty and "email_norm" in contatos.columns:
+        contatos["email_norm"] = contatos["email_norm"].astype(str).str.strip().str.lower()
+        contatos["dt_contato"] = pd.to_datetime(contatos["dt_contato"], errors="coerce")
+
+    by_crm, tokens_list = _build_pos_venda_oficiais_maps(df_oficiais)
+    rows: list[dict] = []
+
+    for email_norm, grp in acts.groupby("email_norm", sort=False):
+        grp = grp.sort_values(
+            ["ts_cancelamento", "data_cancelamento", "activity_id"],
+            ascending=False,
+            na_position="last",
+        )
+        ult = grp.iloc[0]
+        dt_cancel = ult.get("ts_cancelamento") or ult.get("data_cancelamento")
+        if pd.isna(dt_cancel):
+            dt_cancel = grp["data_cancelamento"].max()
+
+        sub_pos = (
+            contatos.loc[contatos["email_norm"] == email_norm]
+            if not contatos.empty
+            else pd.DataFrame()
+        )
+        nome_bruto, dt_pos, qtd_pos, origem_bruta = _cancelamentos_pos_pick_contato(
+            sub_pos, dt_cancel if pd.notna(dt_cancel) else None,
+        )
+        pos_nome, pos_ativo, origem_cad = _cancelamentos_pos_resolver_nome_pos(
+            nome_bruto, by_crm, tokens_list,
+        )
+        origem_final = origem_cad or origem_bruta
+        if pos_nome == CANCEL_POS_SEM_IDENTIFICADO:
+            origem_final = ""
+
+        rows.append({
+            "email_norm": email_norm,
+            "email": ult.get("email") or email_norm,
+            "nome_cliente": ult.get("nome_cliente"),
+            "deal_id": ult.get("deal_id"),
+            "qtd_cancelamentos": int(len(grp)),
+            "data_cancelamento": grp["data_cancelamento"].max(),
+            "motivo_cancelamento": ult.get("motivo_cancelamento"),
+            "closer_nome": ult.get("closer_nome"),
+            "time_vendas": ult.get("time_vendas"),
+            "status_reuniao": ult.get("status_reuniao"),
+            "pos_venda": pos_nome,
+            "pos_ativo": pos_ativo,
+            "origem_vinculo": origem_final,
+            "identificado_pos": pos_nome != CANCEL_POS_SEM_IDENTIFICADO,
+            "ultimo_contato_pos": dt_pos,
+            "qtd_contatos_pos": qtd_pos,
+        })
+
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out["data_cancelamento"] = pd.to_datetime(
+            out["data_cancelamento"], errors="coerce"
+        )
+        out["ultimo_contato_pos"] = pd.to_datetime(
+            out["ultimo_contato_pos"], errors="coerce"
+        )
+    return out
+
+
+def cancelamentos_pos_venda_aplicar_cadastro(
+    df: pd.DataFrame,
+    df_oficiais: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compat: se receber activities sem cruzamento, devolve vazio (use processar)."""
+    if df is None or df.empty:
+        return df
+    if "email_norm" in df.columns and "qtd_cancelamentos" in df.columns:
+        return df
+    return cancelamentos_pos_processar(df, pd.DataFrame(), df_oficiais)
+
+
+def cancelamentos_pos_filtrar_periodo(
+    df: pd.DataFrame,
+    data_ini,
+    data_fim,
+) -> pd.DataFrame:
+    """Filtra por data do cancelamento (activity ou e-mail agregado)."""
+    if df is None or df.empty or "data_cancelamento" not in df.columns:
+        return df
+    out = df.copy()
+    out["data_cancelamento"] = pd.to_datetime(out["data_cancelamento"], errors="coerce")
+    ini = pd.Timestamp(data_ini)
+    fim = pd.Timestamp(data_fim)
+    mask = (
+        out["data_cancelamento"].notna()
+        & (out["data_cancelamento"] >= ini)
+        & (out["data_cancelamento"] <= fim)
+    )
+    return out.loc[mask].copy()
+
+
+def cancelamentos_pos_filtrar_periodo_atividades(
+    df_atividades: pd.DataFrame,
+    data_ini,
+    data_fim,
+) -> pd.DataFrame:
+    return cancelamentos_pos_filtrar_periodo(df_atividades, data_ini, data_fim)
+
+
+def cancelamentos_pos_filtrar_times(
+    df: pd.DataFrame,
+    times_sel: list | None,
+) -> pd.DataFrame:
+    if df is None or df.empty or not times_sel or "time_vendas" not in df.columns:
+        return df
+    mask = pd.Series(False, index=df.index)
+    for t in times_sel:
+        mask |= df["time_vendas"].astype(str).str.strip() == str(t).strip()
+    return df.loc[mask].copy()
+
+
+def cancelamentos_pos_kpis(df: pd.DataFrame) -> dict:
+    """KPIs da aba Cancelamentos por Pós-venda."""
+    empty = {
+        "total": 0,
+        "com_pos": 0,
+        "sem_pos": 0,
+        "pct_com_pos": 0.0,
+        "pos_com_cancelamentos": 0,
+    }
+    if df is None or df.empty:
+        return empty
+    total = len(df)
+    com = int(df["identificado_pos"].sum()) if "identificado_pos" in df.columns else 0
+    pos_distintos = 0
+    if "pos_venda" in df.columns and "identificado_pos" in df.columns:
+        pos_distintos = int(
+            df.loc[df["identificado_pos"], "pos_venda"].nunique()
+        )
+    return {
+        "total": total,
+        "com_pos": com,
+        "sem_pos": total - com,
+        "pct_com_pos": _safe_div(com, total) * 100,
+        "pos_com_cancelamentos": pos_distintos,
+    }
+
+
+def _mode_or_first(series: pd.Series):
+    s = series.dropna().astype(str)
+    s = s[s.str.strip() != ""]
+    if s.empty:
+        return ""
+    modes = s.mode()
+    return modes.iloc[0] if not modes.empty else s.iloc[0]
+
+
+def cancelamentos_pos_ranking(
+    df_periodo: pd.DataFrame,
+    df_historico: pd.DataFrame,
+) -> pd.DataFrame:
+    """Ranking por pós-venda: e-mails cancelados (período + histórico)."""
+    cols = [
+        "pos_venda",
+        "pos_ativo",
+        "emails_periodo",
+        "pct_emails_periodo",
+        "emails_historicos",
+        "ultimo_contato_pos",
+        "qtd_contatos_pos",
+        "origem_principal",
+    ]
+    if df_periodo is None or df_periodo.empty:
+        return pd.DataFrame(columns=cols)
+
+    total_periodo = len(df_periodo)
+    g = df_periodo.groupby("pos_venda", as_index=False).agg(
+        emails_periodo=("email_norm", "count"),
+        ultimo_contato_pos=("ultimo_contato_pos", "max"),
+        qtd_contatos_pos=(
+            "qtd_contatos_pos",
+            lambda s: int(pd.to_numeric(s, errors="coerce").fillna(0).sum()),
+        ),
+        origem_principal=("origem_vinculo", _mode_or_first),
+    )
+    g["pct_emails_periodo"] = g["emails_periodo"].apply(
+        lambda n: _safe_div(n, total_periodo) * 100
+    )
+
+    if df_historico is not None and not df_historico.empty:
+        hist = (
+            df_historico.groupby("pos_venda", as_index=False)
+            .agg(emails_historicos=("email_norm", "count"))
+        )
+        g = g.merge(hist, on="pos_venda", how="left")
+    else:
+        g["emails_historicos"] = 0
+    g["emails_historicos"] = g["emails_historicos"].fillna(0).astype(int)
+
+    ativo_map: dict[str, str] = {}
+    if "pos_ativo" in df_periodo.columns:
+        for pos in g["pos_venda"]:
+            rows = df_periodo.loc[df_periodo["pos_venda"] == pos, "pos_ativo"]
+            vals = [v for v in rows.dropna().astype(str) if v.strip()]
+            ativo_map[pos] = vals[0] if vals else ""
+    g["pos_ativo"] = g["pos_venda"].map(ativo_map).fillna("")
+
+    return g.sort_values("emails_periodo", ascending=False).reset_index(drop=True)
+
+
+def cancelamentos_pos_diagnostico(
+    df_atividades: pd.DataFrame | None,
+    df_emails: pd.DataFrame | None,
+) -> dict:
+    """Contagens para validação: activities ≠ deals ≠ e-mails."""
+    acts = df_atividades if df_atividades is not None else pd.DataFrame()
+    emails = df_emails if df_emails is not None else pd.DataFrame()
+    sem_email = 0
+    if not acts.empty and "email_norm" in acts.columns:
+        en = acts["email_norm"].astype(str).str.strip().str.lower()
+        sem_email = int((en.isna() | (en == "")).sum())
+    return {
+        "qtd_activities": int(len(acts)),
+        "qtd_deals": int(acts["deal_id"].nunique()) if not acts.empty and "deal_id" in acts.columns else 0,
+        "qtd_emails_unicos": int(emails["email_norm"].nunique()) if not emails.empty and "email_norm" in emails.columns else 0,
+        "activities_sem_email": sem_email,
+        "qtd_emails_com_pos": int(emails["identificado_pos"].sum()) if not emails.empty and "identificado_pos" in emails.columns else 0,
+        "qtd_emails_sem_pos": int((~emails["identificado_pos"]).sum()) if not emails.empty and "identificado_pos" in emails.columns else 0,
+    }

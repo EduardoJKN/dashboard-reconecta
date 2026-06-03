@@ -344,12 +344,32 @@ def get_executivas_pos_vendas_oficiais() -> pd.DataFrame:
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo churns (stage Churn)…")
 def get_executivas_churn_pos_venda() -> pd.DataFrame:
-    """1 linha por deal `stage = 'Churn'` para a aba Churn por Pós-venda."""
+    """1 linha por deal `stage = 'Churn'` — card/ranking Churn (não a aba pós-venda)."""
     df = run_sql_file("executivas_churn_pos_venda.sql")
     if not df.empty:
         for col in ("data_churn", "ultimo_contato_pos", "ts_churn"):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo cancelamentos (Consulta cancelada)…")
+def get_executivas_cancelamentos_pos_venda() -> pd.DataFrame:
+    """1 linha por activity Consulta cancelada (com e-mail resolvido)."""
+    df = run_sql_file("executivas_cancelamentos_pos_venda.sql")
+    if not df.empty:
+        for col in ("data_cancelamento", "ts_cancelamento"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo contatos de pós por e-mail…")
+def get_executivas_pos_contatos_email() -> pd.DataFrame:
+    """União de fontes de pós indexadas por email_norm."""
+    df = run_sql_file("executivas_pos_contatos_email.sql")
+    if not df.empty and "dt_contato" in df.columns:
+        df["dt_contato"] = pd.to_datetime(df["dt_contato"], errors="coerce")
     return df
 
 

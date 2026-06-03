@@ -6,21 +6,21 @@
 --     excluindo status vencido (equivalente a bruto − vencidas no KPI)
 --   - comparecimentos = reuniões concluídas no período
 --   - vendas = deals Ganho + Novo cliente com compra no período
--- Decomposição (período + histórico = total):
---   - período: e-mail com lead em ext_reconecta.leads no período
---     (`timestamp::date`, regra Marketing)
---   - histórico: demais do total do período
+-- Decomposição Período / Histórico (sobre o total oficial):
+--   - período: e-mail com aplicação Typeform no período (`created_at::date`)
+--   - histórico: demais do total (UI fecha histórico = total − período)
 -- =============================================================================
-WITH leads_periodo_emails AS (
-    SELECT DISTINCT lower(btrim(l.email)) AS email_norm
-    FROM ext_reconecta.leads l
-    WHERE l.timestamp::date BETWEEN :data_ini AND :data_fim
-      AND l.email IS NOT NULL
-      AND btrim(l.email) <> ''
-      AND lower(l.email) NOT LIKE '%@teste%'
-      AND lower(l.email) NOT LIKE 'teste@%'
-      AND lower(l.email) NOT LIKE '%smarts%'
-      AND lower(l.email) NOT LIKE '%reconecta%'
+WITH aplicacoes_periodo_emails AS (
+    SELECT DISTINCT lower(btrim(ta.email)) AS email_norm
+    FROM fdw_reconecta.typeform_aplicacoes ta
+    WHERE ta.created_at::date BETWEEN :data_ini AND :data_fim
+      AND ta.dados_completos IS TRUE
+      AND ta.email IS NOT NULL
+      AND btrim(ta.email) <> ''
+      AND lower(btrim(ta.email)) NOT LIKE '%@teste%'
+      AND lower(btrim(ta.email)) NOT LIKE '%teste@%'
+      AND lower(btrim(ta.email)) NOT LIKE '%smarts%'
+      AND lower(btrim(ta.email)) NOT LIKE '%reconecta%'
 ),
 pv_ext_leads_dedup AS (
     SELECT DISTINCT ON (l.zoho_id::text)
@@ -98,11 +98,11 @@ agend_agg AS (
         COUNT(DISTINCT activity_id)::bigint                           AS agendamentos_globais,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE email_norm <> ''
-              AND email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+              AND email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                                   AS agendamentos_leads_periodo_globais,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE email_norm = ''
-               OR email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+               OR email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                                   AS agendamentos_leads_historico_globais
     FROM pv_acts_exibidos
 ),
@@ -111,11 +111,11 @@ comp_agg AS (
         COUNT(DISTINCT activity_id)::bigint                           AS comparecimentos_globais,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE email_norm <> ''
-              AND email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+              AND email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                                   AS comparecimentos_leads_periodo_globais,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE email_norm = ''
-               OR email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+               OR email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                                   AS comparecimentos_leads_historico_globais
     FROM pv_acts_comparecimentos
 ),
@@ -124,11 +124,11 @@ vendas_agg AS (
         COUNT(DISTINCT deal_id)::bigint                               AS vendas_globais,
         COUNT(DISTINCT deal_id) FILTER (
             WHERE email_norm <> ''
-              AND email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+              AND email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                                   AS vendas_leads_periodo_globais,
         COUNT(DISTINCT deal_id) FILTER (
             WHERE email_norm = ''
-               OR email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+               OR email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                                   AS vendas_leads_historico_globais
     FROM pv_deals_vendas
 )

@@ -2450,6 +2450,7 @@ _CRI_FUNIL_ZEROS = {
     "comparecimentos_leads_periodo": 0, "comparecimentos_leads_historico": 0,
     "vendas_leads_periodo": 0, "vendas_leads_historico": 0,
     "aplicacoes": 0, "aplicacoes_mais_12": 0, "aplicacoes_menos_12": 0,
+    "aplicacoes_nao_atua": 0,
     "agendamentos_apl_periodo": 0, "agendamentos_apl_historico": 0,
     "agendamentos_apl": 0, "comparecimentos_apl": 0, "vendas_aplicacoes": 0,
     "taxa_qualificacao": 0.0, "taxa_mais_12": 0.0,
@@ -2508,7 +2509,7 @@ def formatar_label_funil_row(row) -> str:
 
 
 def _recompute_comp_vendas_decomp(out: dict) -> None:
-    """Decomposição comparecimentos/vendas: período + histórico = total."""
+    """Decomposição comparecimentos/vendas: período = aplicação no período; histórico = restante."""
     compar = int(out.get("comparecimentos") or 0)
     cp = int(out.get("comparecimentos_leads_periodo") or 0)
     ch = int(out.get("comparecimentos_leads_historico") or 0)
@@ -2552,7 +2553,7 @@ def _close_funil_decomp_on_totals(out: dict) -> None:
 
 
 def _recompute_agend_decomp(out: dict) -> None:
-    """Decomposição agendamentos: período + histórico = total (% sobre o total)."""
+    """Decomposição agendamentos: período = aplicação no período; histórico = restante."""
     agend = int(out.get("agendamentos") or 0)
     ap = int(out.get("agendamentos_leads_periodo") or 0)
     ah = int(out.get("agendamentos_leads_historico") or 0)
@@ -2634,6 +2635,7 @@ def _aplicacoes_kpis_from_row(row: dict | pd.Series, prefix: str) -> dict:
         "aplicacoes": int(row.get(f"aplicacoes{sfx}") or 0),
         "aplicacoes_mais_12": int(row.get(f"aplicacoes_mais_12{sfx}") or 0),
         "aplicacoes_menos_12": int(row.get(f"aplicacoes_menos_12{sfx}") or 0),
+        "aplicacoes_nao_atua": int(row.get(f"aplicacoes_nao_atua{sfx}") or 0),
         "agendamentos_apl": int(row.get(f"agendamentos_apl{sfx}") or 0),
         "comparecimentos_apl": int(row.get(f"comparecimentos_apl{sfx}") or 0),
         "vendas_aplicacoes": int(row.get(f"vendas_aplicacoes{sfx}") or 0),
@@ -3126,6 +3128,7 @@ def criativo_funil_kpis(df_funil: pd.DataFrame,
                 "leads_menos_12", "leads_nao_atua",
                 "agendamentos", "comparecimentos", "vendas_novas",
                 "aplicacoes", "aplicacoes_mais_12", "aplicacoes_menos_12",
+                "aplicacoes_nao_atua",
                 "agendamentos_apl", "comparecimentos_apl", "vendas_aplicacoes")
     decomp_cols = (
         "agendamentos_leads_periodo", "agendamentos_leads_historico",
@@ -3176,17 +3179,22 @@ def criativo_funil_etapas(k: dict) -> tuple[list[str], list[float]]:
 
 
 def build_funil_trilha_leads_steps(k: dict) -> list[dict]:
-    """4 etapas principais do funil de leads (sem +12 como etapa sequencial).
-
-    Base: Leads (com +12/-12 auxiliar). Agendamentos exibe taxa período + histórico."""
+    """5 etapas do funil de Marketing: Leads → Aplicações → Agend. → Comp. → Vendas."""
+    leads = float(k.get("leads_totais") or 0)
+    apl = float(k.get("aplicacoes") or 0)
     agend = float(k.get("agendamentos") or 0)
+    pct_apl = (apl / leads * 100) if leads > 0 else None
     return [
         {
             "label": "Leads",
-            "value": float(k.get("leads_totais") or 0),
-            "mais_12": int(k.get("leads_mais_12") or 0),
-            "menos_12": int(k.get("leads_menos_12") or 0),
+            "value": leads,
             "is_base": True,
+        },
+        {
+            "label": "Aplicações",
+            "value": apl,
+            "is_aplicacoes": True,
+            "pct_of_leads": pct_apl,
         },
         {
             "label": "Agendamentos",

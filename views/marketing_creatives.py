@@ -321,13 +321,13 @@ render_funil_selecionado(
         "  `tipo_venda = 'Novo cliente'`.\n"
         "- **Filtros de e-mail de teste:** `@teste`, `teste@`, `smarts`, "
         "  `reconecta` removidos do universo de leads em todas as etapas.\n"
-        "- **Aplicações (contexto no bloco Leads):** "
+        "- **Aplicações (etapa do funil):** "
         "`fdw_reconecta.typeform_aplicacoes` cruzado por e-mail dos leads "
         "do criativo/seleção (`dados_completos = TRUE`, dedupe e-mail/dia; "
         "leads `timestamp::date`, typeform `created_at::date`). Em **Todos os resultados**, "
         "aplicações = todas do Typeform no período (igual One Page); em "
         "criativo específico, só aplicações com lead no criativo. "
-        "Exibimos quantidade, % sobre leads, +12/-12, CPA e CPA +12."
+        "Exibimos total, % sobre leads, +12/-12, CPA e CPA +12."
     ),
 )
 

@@ -492,6 +492,48 @@ def funnel(labels: list[str], values: list[float], height: int = 320,
     return fig
 
 
+def funnel_detailed(
+    labels: list[str],
+    values: list[float],
+    texts: list[str],
+    *,
+    height: int = 400,
+) -> go.Figure:
+    """Funil com rótulos customizados por etapa — mesmo estilo do Funil Marketing."""
+    colors = [
+        PALETTE["gold_bright"],
+        PALETTE["gold"],
+        PALETTE["wine_light"],
+        PALETTE["wine"],
+    ]
+    while len(colors) < len(labels):
+        colors.append(PALETTE["wine_soft"])
+
+    _LIGHT_BARS = {PALETTE["gold_bright"], PALETTE["gold"]}
+    text_colors = [
+        "#1a1410" if c in _LIGHT_BARS else PALETTE["text"]
+        for c in colors[: len(labels)]
+    ]
+
+    fig = go.Figure(
+        go.Funnel(
+            y=labels,
+            x=values,
+            text=texts,
+            textinfo="text",
+            marker=dict(
+                color=colors[: len(labels)],
+                line=dict(color=PALETTE["bg"], width=2),
+            ),
+            textfont=dict(color=text_colors, family="Inter", size=13),
+            connector=dict(line=dict(color=PALETTE["border"], width=1)),
+        )
+    )
+    fig.update_layout(**_base_layout(height=height))
+    _style_axes(fig)
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Heatmap
 # ---------------------------------------------------------------------------

@@ -317,7 +317,10 @@ aplicacoes_por_criativo AS (
         )::bigint                                               AS aplicacoes_mais_12,
         COUNT(DISTINCT email_norm) FILTER (
             WHERE classificado_norm IN ('atua -12', 'atua-12', '-12')
-        )::bigint                                               AS aplicacoes_menos_12
+        )::bigint                                               AS aplicacoes_menos_12,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE classificado_norm IN ('não atua', 'nao atua')
+        )::bigint                                               AS aplicacoes_nao_atua
     FROM aplicacoes_email_criativo
     GROUP BY ad_name_norm
 ),
@@ -326,7 +329,8 @@ aplicacoes_email_periodo AS (
     SELECT
         email_norm,
         BOOL_OR(classificado_norm IN ('atua +12', 'atua+12', '+12')) AS tem_mais_12,
-        BOOL_OR(classificado_norm IN ('atua -12', 'atua-12', '-12')) AS tem_menos_12
+        BOOL_OR(classificado_norm IN ('atua -12', 'atua-12', '-12')) AS tem_menos_12,
+        BOOL_OR(classificado_norm IN ('não atua', 'nao atua'))        AS tem_nao_atua
     FROM aplicacoes_dedup
     GROUP BY email_norm
 ),
@@ -335,7 +339,8 @@ aplicacoes_globais AS (
     SELECT
         COUNT(*)::bigint                                        AS aplicacoes,
         COUNT(*) FILTER (WHERE tem_mais_12)::bigint             AS aplicacoes_mais_12,
-        COUNT(*) FILTER (WHERE tem_menos_12)::bigint            AS aplicacoes_menos_12
+        COUNT(*) FILTER (WHERE tem_menos_12)::bigint            AS aplicacoes_menos_12,
+        COUNT(*) FILTER (WHERE tem_nao_atua)::bigint            AS aplicacoes_nao_atua
     FROM aplicacoes_email_periodo
 ),
 aplicacoes_emails_vinculados AS (
@@ -354,7 +359,10 @@ aplicacoes_vinculados AS (
         )::bigint                                               AS aplicacoes_mais_12,
         COUNT(DISTINCT email_norm) FILTER (
             WHERE classificado_norm IN ('atua -12', 'atua-12', '-12')
-        )::bigint                                               AS aplicacoes_menos_12
+        )::bigint                                               AS aplicacoes_menos_12,
+        COUNT(DISTINCT email_norm) FILTER (
+            WHERE classificado_norm IN ('não atua', 'nao atua')
+        )::bigint                                               AS aplicacoes_nao_atua
     FROM aplicacoes_emails_vinculados
 ),
 
@@ -473,6 +481,9 @@ agend_compar_aplicacoes_vinculados AS (
     FROM aplicacoes_emails_vinculados aev
     LEFT JOIN activities_in_window a ON a.email_norm = aev.email_norm
 ),
+-- Decomposição Período / Histórico (agend., comp., vendas):
+--   - período: e-mail com aplicação Typeform no período (`created_at::date`)
+--   - histórico: demais do total (Python fecha histórico = total − período)
 -- Decomposição agendamentos: período + histórico = total (cada % sobre o total).
 leads_periodo_emails AS (
     SELECT DISTINCT email_norm
@@ -505,10 +516,10 @@ agend_leads_decomp_por_criativo AS (
         ad_name_norm,
         COUNT(DISTINCT email_norm)::bigint                      AS agendamentos,
         COUNT(DISTINCT email_norm) FILTER (
-            WHERE email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS agendamentos_leads_periodo,
         COUNT(DISTINCT email_norm) FILTER (
-            WHERE email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS agendamentos_leads_historico
     FROM emails_agend_leads_criativo
     GROUP BY ad_name_norm
@@ -517,10 +528,10 @@ agend_leads_decomp_vinculados AS (
     SELECT
         COUNT(DISTINCT e.email_norm)::bigint                    AS agendamentos,
         COUNT(DISTINCT e.email_norm) FILTER (
-            WHERE e.email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE e.email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS agendamentos_leads_periodo,
         COUNT(DISTINCT e.email_norm) FILTER (
-            WHERE e.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE e.email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS agendamentos_leads_historico
     FROM emails_agend_leads_criativo e
     WHERE e.ad_name_norm <> '__sem_criativo_identificado__'
@@ -603,10 +614,10 @@ comp_leads_decomp_por_criativo AS (
     SELECT
         ad_name_norm,
         COUNT(DISTINCT email_norm) FILTER (
-            WHERE email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS comparecimentos_leads_periodo,
         COUNT(DISTINCT email_norm) FILTER (
-            WHERE email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS comparecimentos_leads_historico
     FROM emails_comp_leads_criativo
     GROUP BY ad_name_norm
@@ -614,10 +625,10 @@ comp_leads_decomp_por_criativo AS (
 comp_leads_decomp_vinculados AS (
     SELECT
         COUNT(DISTINCT email_norm) FILTER (
-            WHERE email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS comparecimentos_leads_periodo,
         COUNT(DISTINCT email_norm) FILTER (
-            WHERE email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS comparecimentos_leads_historico
     FROM emails_comp_leads_criativo
     WHERE ad_name_norm <> '__sem_criativo_identificado__'
@@ -695,10 +706,10 @@ vendas_leads_decomp_por_criativo AS (
         COALESCE(dal.utm_content_norm, '__sem_criativo_identificado__')
                                                                 AS ad_name_norm,
         COUNT(DISTINCT g.deal_id) FILTER (
-            WHERE lav.email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE lav.email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS vendas_leads_periodo,
         COUNT(DISTINCT g.deal_id) FILTER (
-            WHERE lav.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE lav.email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
              OR lav.email_norm IS NULL OR lav.email_norm = ''
         )::bigint                                               AS vendas_leads_historico
     FROM deals_ganhos g
@@ -709,10 +720,10 @@ vendas_leads_decomp_por_criativo AS (
 vendas_leads_decomp_vinculados AS (
     SELECT
         COUNT(DISTINCT g.deal_id) FILTER (
-            WHERE lav.email_norm IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE lav.email_norm IN (SELECT email_norm FROM aplicacoes_periodo_emails)
         )::bigint                                               AS vendas_leads_periodo,
         COUNT(DISTINCT g.deal_id) FILTER (
-            WHERE lav.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
+            WHERE lav.email_norm NOT IN (SELECT email_norm FROM aplicacoes_periodo_emails)
              OR lav.email_norm IS NULL OR lav.email_norm = ''
         )::bigint                                               AS vendas_leads_historico
     FROM deals_ganhos g
@@ -827,6 +838,7 @@ SELECT
     COALESCE(apc.aplicacoes, 0)::bigint                         AS aplicacoes,
     COALESCE(apc.aplicacoes_mais_12, 0)::bigint                  AS aplicacoes_mais_12,
     COALESCE(apc.aplicacoes_menos_12, 0)::bigint                 AS aplicacoes_menos_12,
+    COALESCE(apc.aplicacoes_nao_atua, 0)::bigint                 AS aplicacoes_nao_atua,
     COALESCE(aad.agendamentos_apl, aapl.agendamentos_apl, 0)::bigint
                                                                 AS agendamentos_apl,
     COALESCE(aad.agendamentos_apl_periodo, 0)::bigint           AS agendamentos_apl_periodo,
@@ -837,11 +849,13 @@ SELECT
     ag.aplicacoes::bigint                                       AS aplicacoes_globais,
     ag.aplicacoes_mais_12::bigint                               AS aplicacoes_mais_12_globais,
     ag.aplicacoes_menos_12::bigint                              AS aplicacoes_menos_12_globais,
+    ag.aplicacoes_nao_atua::bigint                              AS aplicacoes_nao_atua_globais,
     acag.comparecimentos_apl::bigint                            AS comparecimentos_apl_globais,
     vag.vendas_aplicacoes::bigint                               AS vendas_aplicacoes_globais,
     av.aplicacoes::bigint                                       AS aplicacoes_vinculados,
     av.aplicacoes_mais_12::bigint                               AS aplicacoes_mais_12_vinculados,
     av.aplicacoes_menos_12::bigint                              AS aplicacoes_menos_12_vinculados,
+    av.aplicacoes_nao_atua::bigint                              AS aplicacoes_nao_atua_vinculados,
     acav.comparecimentos_apl::bigint                            AS comparecimentos_apl_vinculados,
     vav.vendas_aplicacoes::bigint                               AS vendas_aplicacoes_vinculados,
     alvin.agendamentos::bigint                                  AS agendamentos_vinculados,
