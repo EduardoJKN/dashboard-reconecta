@@ -6,6 +6,7 @@ import streamlit as st
 from .db import run_sql_file
 
 _TTL = 600
+_TTL_AGENDA_RT = 60
 
 
 def _date_params(data_ini: date, data_fim: date) -> dict:
@@ -322,6 +323,49 @@ def get_vendas_leads_detalhe_diario(data_ini: date,
 @st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pré-vendas…")
 def get_prevendas_sdrs_oficiais() -> pd.DataFrame:
     return run_sql_file("prevendas_sdrs_oficiais.sql")
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo lookup email → SDR (Lead In)…")
+def get_lead_in_email_sdr_lookup(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Candidatos email → SDR (base ext_reconecta.leads + CRM)."""
+    df = run_sql_file("lead_in_email_sdr_lookup.sql", _date_params(data_ini, data_fim))
+    if not df.empty and "ts_vinculo" in df.columns:
+        df["ts_vinculo"] = pd.to_datetime(df["ts_vinculo"])
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Lead In & Reuniões…")
+def get_lead_in_reunioes_consultas(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Consultas (`activity_type = 'Consulta'`) no período por data da reunião."""
+    return _load_lead_in_reunioes_consultas(data_ini, data_fim)
+
+
+def _load_lead_in_reunioes_consultas(data_ini: date, data_fim: date) -> pd.DataFrame:
+    df = run_sql_file("lead_in_reunioes_consultas.sql", _date_params(data_ini, data_fim))
+    if df.empty:
+        return df
+    for col in (
+        "data_reuniao",
+        "ts_reuniao",
+        "data_criacao_agendamento",
+        "start_datetime",
+        "end_datetime",
+    ):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col])
+    return df
+
+
+@st.cache_data(ttl=_TTL_AGENDA_RT, show_spinner=False)
+def get_lead_in_reunioes_consultas_agenda(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Consultas para agenda em tempo real — TTL curto (60s)."""
+    return _load_lead_in_reunioes_consultas(data_ini, data_fim)
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo campos de pré (deals Churn)…")
+def get_lead_in_churn_deal_pre() -> pd.DataFrame:
+    """`prevendas_raw` + `deal_sdr_nome` por deal `stage = 'Churn'`."""
+    return run_sql_file("lead_in_churn_deal_pre.sql")
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Vendas…")

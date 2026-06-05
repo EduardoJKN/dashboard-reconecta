@@ -67,6 +67,7 @@ pages = {
         st.Page("views/executivas.py",   title="Executivas & Times"),
         st.Page("views/sdr_closer.py",   title="SDR × Closer"),
         st.Page("views/investimento.py", title="Investimento & ROAS"),
+        st.Page("views/lead_in_reunioes.py", title="Lead In & Reuniões"),
         st.Page("views/inspecao.py",     title="Inspeção de Views"),
     ],
     # Ferramentas — vão abaixo dos blocos por time. Por enquanto só o
