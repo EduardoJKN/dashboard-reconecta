@@ -118,6 +118,7 @@ closer_resolved AS (
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Nathally Pereira dos Santos%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Thaís Cadó%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Thais Cado%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Stefany Campinas%'
                 THEN 'Time da Leidianne'
             WHEN TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Leandro Alves%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Leonardo Melo Patriota%'

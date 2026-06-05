@@ -16,7 +16,7 @@ QUERIES = [
         """
         SELECT column_name, data_type
         FROM information_schema.columns
-        WHERE table_schema = 'fdw_reconecta'
+        WHERE table_schema = 'assistencial'
           AND table_name = 'executivas_pos_vendas'
         ORDER BY ordinal_position
         """,
@@ -25,7 +25,7 @@ QUERIES = [
         "executivas_pos_vendas — cadastro",
         """
         SELECT id, nome, email, id_crm, id_clickup, ativo
-        FROM fdw_reconecta.executivas_pos_vendas
+        FROM assistencial.executivas_pos_vendas
         ORDER BY ativo DESC, nome
         """,
     ),

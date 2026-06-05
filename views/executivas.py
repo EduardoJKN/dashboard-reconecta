@@ -3,28 +3,24 @@ import streamlit as st
 
 from src.repositories import (
     get_executivas,
-    get_executivas_cancelamentos_pos_venda,
     get_executivas_churn_pos_venda,
-    get_executivas_pos_contatos_email,
     get_executivas_oficiais,
     get_executivas_oficiais_todas,
     get_executivas_pos_vendas_oficiais,
     get_vendas_leads_detalhe_diario,
 )
 from src.transforms import (
-    CANCEL_POS_SEM_IDENTIFICADO,
+    CHURN_POS_SEM_IDENTIFICADO,
     EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
     EXECUTIVAS_RANKING_METRICAS_NEUTRAS,
     EXECUTIVAS_RANKING_METRIC_OPTIONS,
     RANKING_EXIBICAO_ATIVOS,
     RANKING_EXIBICAO_HISTORICO,
-    cancelamentos_pos_diagnostico,
-    cancelamentos_pos_filtrar_periodo,
-    cancelamentos_pos_filtrar_periodo_atividades,
     cancelamentos_pos_filtrar_times,
-    cancelamentos_pos_kpis,
-    cancelamentos_pos_processar,
-    cancelamentos_pos_ranking,
+    churn_pos_filtrar_periodo,
+    churn_pos_kpis,
+    churn_pos_ranking,
+    churn_pos_venda_aplicar_cadastro,
     executivas_churn_agregar_por_executiva,
     executivas_churn_filtrar_closer,
     executivas_churn_filtrar_recorte,
@@ -179,7 +175,7 @@ if df_bruto.empty:
     st.stop()
 
 # Churn (stage Churn) — card do funil + métrica do Top Closers; independente
-# da aba Cancelamentos por Pós-venda (activities Consulta canceladas).
+# da aba Clientes Cancelados com Pós Vendas — deals stage = 'Churn'.
 _times_sel_churn = list(ctx.selections.get("times") or [])
 try:
     _df_churn_all = get_executivas_churn_pos_venda()
@@ -284,18 +280,20 @@ with r2c4:
 # ---------------------------------------------------------------------------
 _leads_label = "Leads" if is_todas else f"Oportunidades {classif_sel}"
 _funil_hint  = (
-    "leads → reunião agendada → reunião concluída → cancelados → churn → ganhos → perdidos"
+    "leads → reunião agendada → reunião concluída → reunião cancelada → "
+    "clientes cancelados → ganhos → perdidos"
     if is_todas
     else f"oportunidades {classif_sel} → reunião agendada → reunião concluída → "
-         f"cancelados (total geral) → churn (total geral) → ganhos → perdidos (total geral)"
+         f"reunião cancelada (total geral) → clientes cancelados (total geral) → "
+         f"ganhos → perdidos (total geral)"
 )
 section_title("Funil (absolutos)", _funil_hint)
 f1, f2, f3, f4, f5, f6, f7 = st.columns(7, gap="small")
 with f1: metric_card_v2(_leads_label, int_br(opor_v))
 with f2: metric_card_v2("Reunião Agendada", int_br(agen_v))
 with f3: metric_card_v2("Reunião Concluída", int_br(comp_v))
-with f4: metric_card_v2("Cancelados", int_br(k["cancelados"]))
-with f5: metric_card_v2("Churn", int_br(_churn_funil_total))
+with f4: metric_card_v2("Reunião Cancelada", int_br(k["cancelados"]))
+with f5: metric_card_v2("Clientes Cancelados", int_br(_churn_funil_total))
 with f6: metric_card_v2("Ganhos", int_br(vend_v))
 with f7: metric_card_v2(
     "Perdidos", int_br(k["perdidos"]),
@@ -306,7 +304,7 @@ with f7: metric_card_v2(
 # Tabs — Ranking / Por time / Evolução
 # ---------------------------------------------------------------------------
 tab_rank, tab_time, tab_temp, tab_cancel_pos = st.tabs(
-    ["Ranking executivas", "Por time", "Evolução", "Cancelamentos por Pós-venda"]
+    ["Ranking executivas", "Por time", "Evolução", "Clientes Cancelados com Pós Vendas"]
 )
 
 with tab_rank:
@@ -363,6 +361,8 @@ with tab_rank:
     _SELECTBOX_METRIC_KEY = "executivas_ranking_metric"
     _metric_keys = list(_RANKING_METRIC_OPTIONS.keys())
     _default_metric = st.session_state.get(_SELECTBOX_METRIC_KEY, "Receita")
+    if _default_metric == "Churn":
+        _default_metric = "Clientes Cancelados"
     if _default_metric not in _RANKING_METRIC_OPTIONS:
         _default_metric = "Receita"
     metric_label = st.selectbox(
@@ -941,34 +941,26 @@ with tab_temp:
 
 with tab_cancel_pos:
     # =========================================================================
-    # Cancelamentos por Pós-venda — mesmo universo do card "Cancelados"
-    # (Consulta + status Cancelada/Cancelado). Não altera card Churn nem
-    # ranking de Churn (stage Churn em deals).
+    # Clientes Cancelados com Pós Vendas — deals `stage = 'Churn'` (churn real).
+    # Card Cancelados (reuniões) e Top Closers não são alterados.
     # =========================================================================
-    _CANCEL_VISAO_KEY = "executivas_cancel_pos_visao"
-    visao_cancel = st.radio(
+    _CHURN_TAB_VISAO_KEY = "executivas_churn_tab_visao"
+    visao_churn_tab = st.radio(
         "Visão",
         ["Período selecionado", "Histórico total"],
         horizontal=True,
-        key=_CANCEL_VISAO_KEY,
-        help="Período usa o filtro global de datas (data do cancelamento). "
-             "Histórico lista todos os cancelamentos de consulta na base "
+        key=_CHURN_TAB_VISAO_KEY,
+        help="Período usa o filtro global de datas (data do churn). "
+             "Histórico lista todos os deals em stage Churn "
              "(respeitando filtro de Times do header, quando ativo).",
     )
-    visao_periodo = visao_cancel == "Período selecionado"
-    _cancelados_funil = int(k.get("cancelados", 0) or 0)
+    visao_periodo = visao_churn_tab == "Período selecionado"
 
     try:
-        df_acts_raw = get_executivas_cancelamentos_pos_venda()
+        df_churn_raw = get_executivas_churn_pos_venda()
     except Exception as e:
-        st.error(f"Falha ao carregar cancelamentos: {e}")
-        df_acts_raw = None
-
-    try:
-        df_pos_contatos = get_executivas_pos_contatos_email()
-    except Exception as e:
-        st.warning(f"Falha ao carregar contatos de pós por e-mail: {e}")
-        df_pos_contatos = pd.DataFrame()
+        st.error(f"Falha ao carregar churns: {e}")
+        df_churn_raw = None
 
     _falha_cadastro_pos = False
     try:
@@ -979,156 +971,168 @@ with tab_cancel_pos:
 
     if _falha_cadastro_pos or _df_pos_oficiais is None or _df_pos_oficiais.empty:
         st.caption(
-            "⚠ Cadastro `fdw_reconecta.executivas_pos_vendas` indisponível — "
-            "nomes canônicos e flag Ativo? usam fallback (activities / notificação)."
+            "⚠ Cadastro `assistencial.executivas_pos_vendas` indisponível — "
+            "nomes canônicos e flag Ativo? usam fallback (`zoho_users` / activities)."
         )
         _df_pos_oficiais = _df_pos_oficiais if _df_pos_oficiais is not None else pd.DataFrame()
 
-    if df_acts_raw is None or df_acts_raw.empty:
-        st.info("Sem cancelamentos de consulta para exibir.")
-        _diag = cancelamentos_pos_diagnostico(pd.DataFrame(), pd.DataFrame())
-        kpi_periodo = cancelamentos_pos_kpis(pd.DataFrame())
+    if df_churn_raw is None or df_churn_raw.empty:
+        st.info("Sem deals em stage Churn para exibir.")
+        kpi_periodo = churn_pos_kpis(pd.DataFrame())
         kpi_hist = kpi_periodo
-        df_acts_periodo = pd.DataFrame()
-        df_emails_periodo = pd.DataFrame()
-        df_emails_hist = pd.DataFrame()
+        df_churn_hist = pd.DataFrame()
+        df_churn_periodo = pd.DataFrame()
+        df_churn_view = pd.DataFrame()
     else:
-        df_acts_times = cancelamentos_pos_filtrar_times(
-            df_acts_raw, _times_sel_churn,
+        df_churn_hist = churn_pos_venda_aplicar_cadastro(
+            df_churn_raw, _df_pos_oficiais,
         )
-        df_acts_periodo = cancelamentos_pos_filtrar_periodo_atividades(
-            df_acts_times, ctx.data_ini, ctx.data_fim,
+        df_churn_hist = cancelamentos_pos_filtrar_times(
+            df_churn_hist, _times_sel_churn,
         )
-        df_emails_hist = cancelamentos_pos_processar(
-            df_acts_times, df_pos_contatos, _df_pos_oficiais,
+        df_churn_periodo = churn_pos_filtrar_periodo(
+            df_churn_hist, ctx.data_ini, ctx.data_fim,
         )
-        df_emails_periodo = cancelamentos_pos_processar(
-            df_acts_periodo, df_pos_contatos, _df_pos_oficiais,
-        )
-        df_cancel_view = df_emails_periodo if visao_periodo else df_emails_hist
+        df_churn_view = df_churn_periodo if visao_periodo else df_churn_hist
 
-        kpi_periodo = cancelamentos_pos_kpis(df_emails_periodo)
-        kpi_hist = cancelamentos_pos_kpis(df_emails_hist)
-        _diag = cancelamentos_pos_diagnostico(df_acts_periodo, df_emails_periodo)
+        kpi_periodo = churn_pos_kpis(df_churn_periodo)
+        kpi_hist = churn_pos_kpis(df_churn_hist)
 
-        if df_cancel_view.empty:
+        if df_churn_view.empty:
             st.info(
-                "Nenhum e-mail cancelado no recorte atual."
+                "Nenhum Churn no recorte atual."
                 if visao_periodo
-                else "Nenhum e-mail cancelado na base (com filtros atuais)."
+                else "Nenhum deal em stage Churn na base (com filtros atuais)."
             )
 
-        if not df_cancel_view.empty:
+        if not df_churn_view.empty:
             _cap_visao = (
-                f"{ctx.data_ini:%d/%m/%Y} – {ctx.data_fim:%d/%m/%Y} · por e-mail"
+                f"{ctx.data_ini:%d/%m/%Y} – {ctx.data_fim:%d/%m/%Y} · data do churn"
                 if visao_periodo
-                else "histórico · correlação por e-mail (Times aplicado)"
+                else "todos os deals stage = Churn (Times aplicado)"
             )
-            section_title("Cancelamentos por Pós-venda", _cap_visao)
+            section_title("Clientes Cancelados com Pós Vendas", _cap_visao)
             st.caption(
-                "Cancelamentos = Consulta com status Cancelada/Cancelado. "
-                "A unidade da análise é o **e-mail** (deal → lead). "
-                "Cruzamento com pós: `controle_notificacao_vendas`, "
-                "`zoho_acompanhamentos` e activities de pós no mesmo e-mail."
+                "Fonte: `zoho_deals` com **stage = Churn**. "
+                "Vínculo principal: `executiva_contas` → cadastro "
+                "`assistencial.executivas_pos_vendas`. "
+                "Reforços: activities de pós, `zoho_acompanhamentos`. "
+                "Data: `stage_modified_time` → `modified_time` → `data_hora_compra`."
             )
+
+            tem_fin = kpi_periodo["montante"] > 0 or kpi_periodo["receita"] > 0
 
             if visao_periodo:
                 c1, c2, c3, c4 = st.columns(4, gap="small")
                 with c1:
                     metric_card_v2(
-                        "E-mails cancelados no período",
+                        "Clientes cancelados no período",
                         int_br(kpi_periodo["total"]),
                         accent=True,
-                        hint="1 linha por e-mail único no período",
                     )
                 with c2:
                     metric_card_v2(
-                        "E-mails encontrados no pós",
+                        "Com pós-venda identificado",
                         int_br(kpi_periodo["com_pos"]),
                         hint=f"{pct(kpi_periodo['pct_com_pos'])} do período",
                     )
                 with c3:
                     metric_card_v2(
-                        "E-mails sem vínculo com pós",
+                        "Sem pós-venda identificado",
                         int_br(kpi_periodo["sem_pos"]),
                     )
                 with c4:
                     metric_card_v2(
-                        "% encontrados no pós",
+                        "% com pós-venda identificado",
                         pct(kpi_periodo["pct_com_pos"]),
                     )
 
                 h1, h2, h3, h4, h5 = st.columns(5, gap="small")
                 with h1:
                     metric_card_v2(
-                        "Pós-vendas com e-mails cancelados",
+                        "Pós-vendas com cancelamentos",
                         int_br(kpi_periodo["pos_com_cancelamentos"]),
                     )
                 with h2:
                     metric_card_v2(
-                        "E-mails cancelados históricos",
+                        "Cancelamentos históricos",
                         int_br(kpi_hist["total"]),
                     )
                 with h3:
                     metric_card_v2(
-                        "Hist. encontrados no pós",
+                        "Hist. com pós",
                         int_br(kpi_hist["com_pos"]),
                     )
                 with h4:
                     metric_card_v2(
-                        "Hist. sem vínculo com pós",
+                        "Hist. sem pós",
                         int_br(kpi_hist["sem_pos"]),
                     )
                 with h5:
                     metric_card_v2(
-                        "% hist. encontrados no pós",
+                        "% hist. com pós",
                         pct(kpi_hist["pct_com_pos"]),
                     )
             else:
                 c1, c2, c3, c4, c5 = st.columns(5, gap="small")
                 with c1:
                     metric_card_v2(
-                        "E-mails cancelados históricos",
+                        "Cancelamentos históricos",
                         int_br(kpi_hist["total"]),
                         accent=True,
                     )
                 with c2:
                     metric_card_v2(
-                        "Encontrados no pós",
+                        "Com pós-venda identificado",
                         int_br(kpi_hist["com_pos"]),
                     )
                 with c3:
                     metric_card_v2(
-                        "Sem vínculo com pós",
+                        "Sem pós-venda identificado",
                         int_br(kpi_hist["sem_pos"]),
                     )
                 with c4:
                     metric_card_v2(
-                        "% encontrados no pós",
+                        "% com pós-venda identificado",
                         pct(kpi_hist["pct_com_pos"]),
                     )
                 with c5:
                     metric_card_v2(
-                        "Pós-vendas com e-mails cancelados",
+                        "Pós-vendas com cancelamentos",
                         int_br(kpi_hist["pos_com_cancelamentos"]),
                     )
 
-            ranking_pos = cancelamentos_pos_ranking(
-                df_emails_periodo, df_emails_hist,
-            )
+            if tem_fin:
+                kpi_fin = kpi_periodo if visao_periodo else kpi_hist
+                f1, f2, f3 = st.columns(3, gap="small")
+                with f1:
+                    metric_card_v2("Montante cancelado", brl(kpi_fin["montante"]))
+                with f2:
+                    metric_card_v2("Receita cancelada", brl(kpi_fin["receita"]))
+                with f3:
+                    metric_card_v2(
+                        "Ticket médio",
+                        brl(kpi_fin["ticket_medio"]) if kpi_fin["ticket_medio"] else "—",
+                        hint="montante ÷ churns no recorte",
+                    )
+
+            ranking_pos = churn_pos_ranking(df_churn_periodo, df_churn_hist)
             if not ranking_pos.empty:
                 _metric_graf = st.selectbox(
                     "Métrica do gráfico",
-                    ["E-mails no período", "E-mails históricos"],
-                    key="executivas_cancel_pos_metric_graf",
+                    [
+                        "Clientes cancelados no período",
+                        "Clientes cancelados históricos",
+                    ],
+                    key="executivas_churn_tab_metric_graf",
                 )
                 col_y = (
-                    "emails_periodo"
-                    if _metric_graf == "E-mails no período"
-                    else "emails_historicos"
+                    "churns_periodo"
+                    if _metric_graf == "Clientes cancelados no período"
+                    else "churns_historicos"
                 )
                 section_title(
-                    "Top Pós-vendas por e-mails cancelados",
+                    "Top Pós-vendas por clientes cancelados",
                     _metric_graf.lower(),
                 )
                 plot_df = ranking_pos[ranking_pos[col_y].fillna(0) > 0].copy()
@@ -1141,7 +1145,7 @@ with tab_cancel_pos:
                             top_n=12, height=320, money=False,
                         ),
                         use_container_width=True,
-                        key="executivas_cancel_pos_chart",
+                        key="executivas_churn_tab_chart",
                     )
 
                 section_title("Ranking por pós-venda", "período vs histórico")
@@ -1155,22 +1159,27 @@ with tab_cancel_pos:
                 rank_display = rank_show.rename(columns={
                     "pos_venda": "Pós-venda",
                     "pos_ativo": "Ativo?",
-                    "emails_periodo": "E-mails cancelados (período)",
-                    "pct_emails_periodo": "% dos e-mails cancelados",
-                    "emails_historicos": "E-mails históricos",
+                    "churns_periodo": "Clientes cancelados no período",
+                    "pct_churn_periodo": "% dos cancelamentos",
+                    "churns_historicos": "Cancelamentos históricos",
                     "ultimo_contato_pos": "Último contato pós",
                     "qtd_contatos_pos": "Qtd. contatos pós",
-                    "origem_principal": "Origem principal do vínculo",
+                    "montante_churn": "Montante cancelado",
+                    "receita_churn": "Receita cancelada",
+                    "ticket_medio": "Ticket médio",
                 })
                 cfg_rank = {}
                 if "Último contato pós" in rank_display.columns:
                     cfg_rank["Último contato pós"] = st.column_config.DatetimeColumn(
                         format="DD/MM/YYYY",
                     )
-                if "% dos e-mails cancelados" in rank_display.columns:
-                    cfg_rank["% dos e-mails cancelados"] = st.column_config.NumberColumn(
+                if "% dos cancelamentos" in rank_display.columns:
+                    cfg_rank["% dos cancelamentos"] = st.column_config.NumberColumn(
                         format="%.2f%%",
                     )
+                for col_m in ("Montante cancelado", "Receita cancelada", "Ticket médio"):
+                    if col_m in rank_display.columns:
+                        cfg_rank[col_m] = st.column_config.NumberColumn(format="R$ %.0f")
                 st.dataframe(
                     rank_display,
                     use_container_width=True,
@@ -1179,7 +1188,7 @@ with tab_cancel_pos:
                 )
 
             section_title("Detalhe linha a linha", _cap_visao)
-            det = df_cancel_view.copy()
+            det = df_churn_view.copy()
             det["pos_ativo_label"] = det["pos_ativo"].apply(
                 lambda a: (
                     "Sim" if str(a).lower() == "y"
@@ -1187,37 +1196,36 @@ with tab_cancel_pos:
                 )
             )
             cols_map = [
-                ("email", "Email"),
-                ("nome_cliente", "Cliente/lead"),
                 ("deal_id", "Deal ID"),
-                ("qtd_cancelamentos", "Qtd. cancelamentos no período"),
-                ("data_cancelamento", "Data do último cancelamento"),
-                ("motivo_cancelamento", "Motivo cancelamento"),
-                ("closer_nome", "Closer"),
-                ("time_vendas", "Time de vendas"),
+                ("nome_cliente", "Cliente"),
+                ("email", "Email"),
+                ("data_churn", "Data do Churn"),
+                ("data_churn_fonte", "Fonte data churn"),
+                ("closer_nome", "Closer/executiva de venda"),
                 ("pos_venda", "Pós-venda identificado"),
                 ("pos_ativo_label", "Ativo no pós?"),
                 ("origem_vinculo", "Origem do vínculo"),
                 ("ultimo_contato_pos", "Último contato pós"),
                 ("qtd_contatos_pos", "Qtd. contatos pós"),
+                ("stage", "Stage"),
+                ("montante", "Montante"),
+                ("receita", "Receita"),
+                ("motivo_perda", "Motivo perda/cancelamento"),
             ]
             cols_ok = [c for c, _ in cols_map if c in det.columns]
             tabela = det[cols_ok].rename(
                 columns={c: lbl for c, lbl in cols_map if c in cols_ok}
             )
             cfg_det = {}
-            if "Data do último cancelamento" in tabela.columns:
-                cfg_det["Data do último cancelamento"] = st.column_config.DateColumn(
-                    format="DD/MM/YYYY",
-                )
-            if "Qtd. cancelamentos no período" in tabela.columns:
-                cfg_det["Qtd. cancelamentos no período"] = st.column_config.NumberColumn(
-                    format="%d",
-                )
+            if "Data do Churn" in tabela.columns:
+                cfg_det["Data do Churn"] = st.column_config.DateColumn(format="DD/MM/YYYY")
             if "Último contato pós" in tabela.columns:
                 cfg_det["Último contato pós"] = st.column_config.DatetimeColumn(
                     format="DD/MM/YYYY HH:mm",
                 )
+            for col_m in ("Montante", "Receita"):
+                if col_m in tabela.columns:
+                    cfg_det[col_m] = st.column_config.NumberColumn(format="R$ %.0f")
             st.dataframe(
                 tabela,
                 use_container_width=True,
@@ -1227,61 +1235,44 @@ with tab_cancel_pos:
 
         with st.expander("Diagnóstico / validação"):
             _soma_partes = kpi_periodo["com_pos"] + kpi_periodo["sem_pos"]
+            _bate_funil = kpi_periodo["total"] == _churn_funil_total
             _bate_soma = _soma_partes == kpi_periodo["total"]
             st.markdown(
-                f"**Granularidade (período + Times)**\n"
-                f"- Activities canceladas: **{int_br(_diag['qtd_activities'])}**\n"
-                f"- Deals únicos: **{int_br(_diag['qtd_deals'])}**\n"
-                f"- E-mails únicos cancelados: **{int_br(_diag['qtd_emails_unicos'])}**\n"
-                f"- Activities sem e-mail resolvido: **{int_br(_diag['activities_sem_email'])}**\n\n"
-                f"**Cruzamento por e-mail (período)**\n"
-                f"- E-mails cancelados: **{int_br(kpi_periodo['total'])}**\n"
-                f"- Encontrados no pós: **{int_br(_diag['qtd_emails_com_pos'])}**\n"
-                f"- Sem vínculo com pós: **{int_br(_diag['qtd_emails_sem_pos'])}**\n"
-                f"- Com pós + sem pós: **{int_br(_soma_partes)}** "
-                f"({'✓ bate total' if _bate_soma else '⚠'})\n\n"
-                f"**Referência funil**\n"
-                f"- Card **Cancelados** (soma activities na view): **{int_br(_cancelados_funil)}**\n"
-                f"- Activities canceladas nesta aba (período): **{int_br(_diag['qtd_activities'])}** "
-                f"(card conta activities; aba KPI usa e-mails únicos)\n\n"
-                f"- Cadastro oficial pós: "
+                f"- Card **Churn** (funil): **{int_br(_churn_funil_total)}**\n"
+                f"- Aba no período: **{int_br(kpi_periodo['total'])}** "
+                f"({'✓ bate' if _bate_funil else '⚠ diverge — ver filtros/data'})\n"
+                f"- Histórico (Times aplicado): **{int_br(len(df_churn_hist))}**\n"
+                f"- Com pós + sem pós (período): **{int_br(_soma_partes)}** "
+                f"({'✓ bate total' if _bate_soma else '⚠'})\n"
+                f"- Sem pós (`{CHURN_POS_SEM_IDENTIFICADO}`): "
+                f"**{int_br(kpi_periodo['sem_pos'])}** período · "
+                f"**{int_br(kpi_hist['sem_pos'])}** histórico\n"
+                f"- Cadastro oficial: "
                 f"{'OK' if not _falha_cadastro_pos and _df_pos_oficiais is not None and not _df_pos_oficiais.empty else 'indisponível'}"
             )
-            st.caption(
-                "O card Cancelados soma **activities**; os cards principais desta aba "
-                "usam **e-mails únicos** no período. Por isso o total de e-mails pode ser "
-                "menor que o card quando o mesmo lead cancela mais de uma vez."
-            )
-            _df_orig = df_emails_hist if not df_emails_hist.empty else pd.DataFrame()
-            if "origem_vinculo" in _df_orig.columns:
-                st.caption("Origem do vínculo com pós (e-mails históricos):")
+            if not _bate_funil:
+                st.caption(
+                    "A aba e o card usam `zoho_deals.stage = Churn` com data "
+                    "`stage_modified_time` → `modified_time` → `data_hora_compra` "
+                    "e o mesmo filtro de Times. Divergência costuma indicar "
+                    "diferença de recorte de data ou time_vendas no deal."
+                )
+            if "origem_vinculo" in df_churn_hist.columns and not df_churn_hist.empty:
+                st.caption("Origem do vínculo com pós (histórico):")
                 _vc_origem = (
-                    _df_orig["origem_vinculo"]
-                    .replace("", CANCEL_POS_SEM_IDENTIFICADO)
+                    df_churn_hist["origem_vinculo"]
+                    .replace("", CHURN_POS_SEM_IDENTIFICADO)
                     .value_counts()
                     .reset_index()
                 )
-                _vc_origem.columns = ["origem", "qtd_emails"]
+                _vc_origem.columns = ["origem", "qtd"]
                 st.dataframe(_vc_origem, hide_index=True)
-
-            if df_acts_periodo is not None and not df_acts_periodo.empty:
-                st.caption("Detalhe por activity (auditoria — período):")
-                det_act = df_acts_periodo.copy()
-                act_cols = [
-                    ("activity_id", "Activity ID"),
-                    ("email", "Email"),
-                    ("deal_id", "Deal ID"),
-                    ("data_cancelamento", "Data cancelamento"),
-                    ("status_reuniao", "Status"),
-                    ("motivo_cancelamento", "Motivo"),
-                    ("closer_nome", "Closer"),
-                    ("time_vendas", "Time"),
-                ]
-                act_ok = [c for c, _ in act_cols if c in det_act.columns]
-                st.dataframe(
-                    det_act[act_ok].rename(
-                        columns={c: l for c, l in act_cols if c in act_ok}
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
+            if "data_churn_fonte" in df_churn_hist.columns and not df_churn_hist.empty:
+                st.caption("Fonte da data do churn (histórico):")
+                _vc_fonte = (
+                    df_churn_hist["data_churn_fonte"]
+                    .value_counts()
+                    .reset_index()
                 )
+                _vc_fonte.columns = ["fonte", "qtd"]
+                st.dataframe(_vc_fonte, hide_index=True)

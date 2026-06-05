@@ -1,5 +1,5 @@
 -- =============================================================================
--- Churn por Pós-venda — 1 linha por deal com stage = 'Churn'.
+-- Cancelamentos (Churn) — 1 linha por deal com stage = 'Churn'.
 -- =============================================================================
 -- Universo: churn real de cliente (NÃO reuniões canceladas do funil).
 --
@@ -10,7 +10,7 @@
 --
 -- Vínculo principal (campos brutos p/ match no Python):
 --   executiva_contas → zoho_users → pos_user_nome / pos_user_id
---   + cadastro fdw executivas_pos_vendas (id_crm + tokens)
+--   + cadastro assistencial.executivas_pos_vendas (id_crm + tokens)
 --
 -- Reforços (complementares):
 --   zoho_activities (Onboarding, Acompanhamento, …) no mesmo deal
@@ -79,6 +79,7 @@ closer_resolved AS (
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Nathally Pereira dos Santos%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Thaís Cadó%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Thais Cado%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Stefany Campinas%'
                 THEN 'Time da Leidianne'
             WHEN TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Leandro Alves%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Leonardo Melo Patriota%'

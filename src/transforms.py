@@ -162,7 +162,7 @@ EXECUTIVAS_RANKING_METRIC_OPTIONS: dict[str, str] = {
     "Ganhos -12":       "ganhos_menos_12",
     "Ganhos Não atua":  "ganhos_nao_atua",
     "Cancelados":       "cancelados",
-    "Churn":            "churn",
+    "Clientes Cancelados": "churn",
     "Vencidos":         "vencidos",
 }
 EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS = frozenset({
@@ -459,6 +459,33 @@ def _match_oficial_por_tokens(nome_ranking: str,
         if len(exatos) == 1:
             return exatos[0]
     return ""
+
+
+# Overrides de `time_vendas` por closer — espelha o CASE da view quando o
+# cadastro ainda não reflete o time correto (ex.: Stefany Campinas).
+_EXECUTIVA_TIME_OVERRIDES: list[tuple[frozenset[str], str]] = [
+    (frozenset({"stefany", "campinas"}), "Time da Leidianne"),
+]
+
+
+def executivas_aplicar_time_vendas_overrides(df: pd.DataFrame) -> pd.DataFrame:
+    """Ajusta `time_vendas` por match de tokens no nome da executiva."""
+    if df is None or df.empty or "executiva" not in df.columns:
+        return df
+    if "time_vendas" not in df.columns:
+        return df
+    out = df.copy()
+    for idx, nome in out["executiva"].items():
+        if not isinstance(nome, str) or not nome.strip():
+            continue
+        toks = set(_tokens_nome_ranking(nome))
+        if not toks:
+            continue
+        for required, time_nome in _EXECUTIVA_TIME_OVERRIDES:
+            if required.issubset(toks):
+                out.at[idx, "time_vendas"] = time_nome
+                break
+    return out
 
 
 def executivas_filtrar_time_oficial(
@@ -1328,6 +1355,7 @@ def churn_pos_kpis(df: pd.DataFrame) -> dict:
         "com_pos": 0,
         "sem_pos": 0,
         "pct_com_pos": 0.0,
+        "pos_com_cancelamentos": 0,
         "montante": 0.0,
         "receita": 0.0,
         "ticket_medio": None,
@@ -1339,11 +1367,15 @@ def churn_pos_kpis(df: pd.DataFrame) -> dict:
     mont = float(df["montante"].fillna(0).sum()) if "montante" in df.columns else 0.0
     rec = float(df["receita"].fillna(0).sum()) if "receita" in df.columns else 0.0
     ticket = (mont / total) if total and mont else None
+    pos_distintos = 0
+    if "pos_venda" in df.columns and "identificado_pos" in df.columns:
+        pos_distintos = int(df.loc[df["identificado_pos"], "pos_venda"].nunique())
     return {
         "total": total,
         "com_pos": com,
         "sem_pos": total - com,
         "pct_com_pos": _safe_div(com, total) * 100,
+        "pos_com_cancelamentos": pos_distintos,
         "montante": mont,
         "receita": rec,
         "ticket_medio": ticket,
@@ -1410,9 +1442,7 @@ def churn_pos_ranking(
 # Cancelamentos por Pós-venda (activities Consulta canceladas) — Executivas
 # ---------------------------------------------------------------------------
 
-CANCEL_POS_SEM_IDENTIFICADO = "Sem pós-venda identificado"
-# Alias legado (aba antiga “Churn por Pós-venda”)
-CHURN_POS_SEM_IDENTIFICADO = CANCEL_POS_SEM_IDENTIFICADO
+CANCEL_POS_SEM_IDENTIFICADO = CHURN_POS_SEM_IDENTIFICADO
 
 
 def _cancelamentos_pos_to_naive_datetime_series(s) -> pd.Series:

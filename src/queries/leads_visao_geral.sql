@@ -98,6 +98,7 @@ SELECT
           OR u.first_name ILIKE 'Nathally%'
           OR u.first_name ILIKE 'Thaís%'
           OR u.first_name ILIKE 'Thais%'
+          OR u.first_name ILIKE 'Stefany%'
             THEN 'Time da Leidianne'
         WHEN u.first_name ILIKE 'Leandro%'
           OR u.first_name ILIKE 'Leonardo%'

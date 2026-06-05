@@ -341,6 +341,8 @@ if det_norm is not None and not det_norm.empty:
 _HOME_SELECTBOX_METRIC_KEY = "home_top_closer_metric"
 _metric_keys_home = list(_RANKING_METRIC_OPTIONS.keys())
 _label_atual_home = st.session_state.get(_HOME_SELECTBOX_METRIC_KEY, "Receita")
+if _label_atual_home == "Churn":
+    _label_atual_home = "Clientes Cancelados"
 if _label_atual_home not in _RANKING_METRIC_OPTIONS:
     _label_atual_home = "Receita"
 metric_label_home = st.selectbox(

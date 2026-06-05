@@ -23,9 +23,12 @@ def _month_params(data_ini: date, data_fim: date) -> dict:
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo executivas…")
 def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
+    from src.transforms import executivas_aplicar_time_vendas_overrides
+
     df = run_sql_file("dashboard_executivas.sql", _date_params(data_ini, data_fim))
     if not df.empty:
         df["data_ref"] = pd.to_datetime(df["data_ref"])
+        df = executivas_aplicar_time_vendas_overrides(df)
     return df
 
 
@@ -338,7 +341,7 @@ def get_executivas_oficiais_todas() -> pd.DataFrame:
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pós-venda…")
 def get_executivas_pos_vendas_oficiais() -> pd.DataFrame:
-    """Cadastro pós-venda ativos + históricos (`executivas_pos_vendas_oficiais.sql`)."""
+    """Cadastro pós-venda (`assistencial.executivas_pos_vendas`, ativos + históricos)."""
     return run_sql_file("executivas_pos_vendas_oficiais.sql")
 
 
