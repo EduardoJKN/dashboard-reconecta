@@ -19,7 +19,14 @@ from .team_classification import (
     SEM_SDR_LABEL,
     classify_sdr,
 )
-from .transforms import _safe_div
+from .ui.theme import int_br
+from .transforms import (
+    STAGE_HINT_NAO_QUALIFICADOS,
+    STAGE_HINT_QUALIFICADOS,
+    STAGE_LABEL_NAO_QUALIFICADOS,
+    STAGE_LABEL_QUALIFICADOS,
+    _safe_div,
+)
 
 # ---------------------------------------------------------------------------
 # Visão Geral Pré-vendas
@@ -807,6 +814,337 @@ def prevendas_por_tipo(df_sdr: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
     return agg[cols].sort_values("agendamentos", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Qualificação × Comparecimento — Com Pré vs Não Qualificados (Recepção)
+# ---------------------------------------------------------------------------
+LABEL_COM_PRE = "Com Pré"
+LABEL_NAO_QUALIF = "Não Qualif."
+LABEL_PRE_MAIS_NAO_QUAL = "Com Pré + Não Qualif."
+
+HINT_COM_PRE = (
+    "Com Pré = activity.prevendas ou SDR do deal (sdr_ss) identificada"
+)
+HINT_NAO_QUALIF = "Não Qualif. = stage Recepção no deal ligado à activity"
+HINT_PRE_MAIS_NAO_QUAL = (
+    "Interseção: pré identificada (regra híbrida) e stage Recepção"
+)
+
+QUALIF_LEGENDA_ABA = (
+    "**Com Pré** indica que existe SDR/pré-vendedora identificada na activity "
+    "ou no deal. **Não Qualificados** indica stage Recepção. Essas dimensões "
+    "podem se cruzar; os casos **Com Pré + Não Qualificados** são exibidos "
+    "separadamente — não some Com Pré com Não Qualif. como categorias excludentes."
+)
+
+
+def _as_bool_series(df: pd.DataFrame, col: str) -> pd.Series:
+    if col not in df.columns:
+        return pd.Series(False, index=df.index)
+    return df[col].eq(True)
+
+
+def _qualif_mask_nao_qual(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=bool)
+    if "eh_nao_qualificados" in df.columns:
+        return _as_bool_series(df, "eh_nao_qualificados")
+    if "classificacao" in df.columns:
+        return df["classificacao"] == STAGE_LABEL_NAO_QUALIFICADOS
+    return pd.Series(False, index=df.index)
+
+
+def _qualif_mask_com_pre(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=bool)
+    if "tem_pre" in df.columns:
+        return _as_bool_series(df, "tem_pre")
+    if "sdr" in df.columns:
+        return df["sdr"].astype(str) != SEM_SDR_LABEL
+    return pd.Series(False, index=df.index)
+
+
+def _qualif_mask_pre_mais_nao_qual(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=bool)
+    if "pre_mais_nao_qualificados" in df.columns:
+        return _as_bool_series(df, "pre_mais_nao_qualificados")
+    return _qualif_mask_com_pre(df) & _qualif_mask_nao_qual(df)
+
+
+def _qualif_mask_comparec(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty or "comparecimento" not in df.columns:
+        return pd.Series(dtype=bool)
+    return _as_bool_series(df, "comparecimento")
+
+
+def prevendas_qualif_comparecimento_kpis(df: pd.DataFrame) -> dict:
+    """KPIs — atuação do Pré × Não Qualificados (Recepção) × comparecimento."""
+    z = {
+        "total_agendamentos": 0,
+        "agend_com_pre": 0,
+        "pct_agend_com_pre": 0.0,
+        "agend_nao_qualificados": 0,
+        "pct_agend_nao_qualificados": 0.0,
+        "total_comparecimentos": 0,
+        "comp_com_pre": 0,
+        "pct_comp_com_pre": 0.0,
+        "comp_nao_qualificados": 0,
+        "pct_comp_nao_qualificados": 0.0,
+        "pct_comparecimento_geral": 0.0,
+        "pct_comparec_nao_qual_agend": 0.0,
+        "agend_pre_mais_nao_qual": 0,
+        "pct_agend_pre_mais_nao_qual": 0.0,
+        "comp_pre_mais_nao_qual": 0,
+        "pct_comp_pre_mais_nao_qual": 0.0,
+        "pct_comparec_pre_mais_nao_qual": 0.0,
+        # Complementar (stage Reunião Agendada)
+        "qualificados_stage": 0,
+        "comparec_qualificados_stage": 0,
+        "pct_comparec_qualificados_stage": 0.0,
+    }
+    if df is None or df.empty:
+        return z
+
+    mask_pre = _qualif_mask_com_pre(df)
+    mask_nao = _qualif_mask_nao_qual(df)
+    mask_inter = _qualif_mask_pre_mais_nao_qual(df)
+    mask_comp = _qualif_mask_comparec(df)
+    mask_qual_stage = (
+        df["classificacao"] == STAGE_LABEL_QUALIFICADOS
+        if "classificacao" in df.columns
+        else pd.Series(False, index=df.index)
+    )
+
+    total_ag = len(df)
+    ag_pre = int(mask_pre.sum())
+    ag_nao = int(mask_nao.sum())
+    ag_inter = int(mask_inter.sum())
+    total_comp = int(mask_comp.sum())
+    comp_pre = int((mask_comp & mask_pre).sum())
+    comp_nao = int((mask_comp & mask_nao).sum())
+    comp_inter = int((mask_comp & mask_inter).sum())
+    ag_qual = int(mask_qual_stage.sum())
+    comp_qual = int((mask_comp & mask_qual_stage).sum())
+
+    return {
+        "total_agendamentos": total_ag,
+        "agend_com_pre": ag_pre,
+        "pct_agend_com_pre": _safe_div(ag_pre, total_ag) * 100,
+        "agend_nao_qualificados": ag_nao,
+        "pct_agend_nao_qualificados": _safe_div(ag_nao, total_ag) * 100,
+        "total_comparecimentos": total_comp,
+        "comp_com_pre": comp_pre,
+        "pct_comp_com_pre": _safe_div(comp_pre, total_comp) * 100,
+        "comp_nao_qualificados": comp_nao,
+        "pct_comp_nao_qualificados": _safe_div(comp_nao, total_comp) * 100,
+        "pct_comparecimento_geral": _safe_div(total_comp, total_ag) * 100,
+        "pct_comparec_nao_qual_agend": _safe_div(comp_nao, ag_nao) * 100,
+        "agend_pre_mais_nao_qual": ag_inter,
+        "pct_agend_pre_mais_nao_qual": _safe_div(ag_inter, total_ag) * 100,
+        "comp_pre_mais_nao_qual": comp_inter,
+        "pct_comp_pre_mais_nao_qual": _safe_div(comp_inter, total_comp) * 100,
+        "pct_comparec_pre_mais_nao_qual": _safe_div(comp_inter, ag_inter) * 100,
+        "qualificados_stage": ag_qual,
+        "comparec_qualificados_stage": comp_qual,
+        "pct_comparec_qualificados_stage": _safe_div(comp_qual, ag_qual) * 100,
+    }
+
+
+def prevendas_qualif_resumo_splits(df: pd.DataFrame) -> dict:
+    """Splits compactos para `qual_split` nos cards do Resumo do período."""
+    k = prevendas_qualif_comparecimento_kpis(df)
+
+    def _chip(count: int, pct_val: float) -> str:
+        pct_s = f"{pct_val:.1f}".replace(".", ",") + "%"
+        return f"{int_br(count)} ({pct_s})"
+
+    return {
+        "agend": [
+            (LABEL_COM_PRE, _chip(k["agend_com_pre"], k["pct_agend_com_pre"])),
+            (LABEL_NAO_QUALIF,
+             _chip(k["agend_nao_qualificados"], k["pct_agend_nao_qualificados"])),
+        ],
+        "comparec": [
+            (LABEL_COM_PRE, _chip(k["comp_com_pre"], k["pct_comp_com_pre"])),
+            (LABEL_NAO_QUALIF,
+             _chip(k["comp_nao_qualificados"], k["pct_comp_nao_qualificados"])),
+        ],
+    }
+
+
+def prevendas_qualif_comparecimento_por_sdr(df: pd.DataFrame) -> pd.DataFrame:
+    """Tabela por SDR — atuação do Pré e Não Qualificados (Recepção)."""
+    cols = [
+        "sdr",
+        "agendamentos_total",
+        "agend_com_pre",
+        "pct_agend_com_pre",
+        "comparecimentos_total",
+        "comp_com_pre",
+        "pct_comp_com_pre",
+        "agend_nao_qualificados",
+        "comp_nao_qualificados",
+        "pct_comparec_nao_qualificados",
+        "pct_comparecimento_geral",
+    ]
+    if df is None or df.empty or "sdr" not in df.columns:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for sdr, grp in df.groupby("sdr", dropna=False):
+        k = prevendas_qualif_comparecimento_kpis(grp)
+        rows.append({
+            "sdr": sdr,
+            "agendamentos_total": k["total_agendamentos"],
+            "agend_com_pre": k["agend_com_pre"],
+            "pct_agend_com_pre": k["pct_agend_com_pre"],
+            "comparecimentos_total": k["total_comparecimentos"],
+            "comp_com_pre": k["comp_com_pre"],
+            "pct_comp_com_pre": k["pct_comp_com_pre"],
+            "agend_nao_qualificados": k["agend_nao_qualificados"],
+            "comp_nao_qualificados": k["comp_nao_qualificados"],
+            "pct_comparec_nao_qualificados": k["pct_comparec_nao_qual_agend"],
+            "pct_comparecimento_geral": k["pct_comparecimento_geral"],
+        })
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(columns=cols)
+
+    out["_sem_sdr"] = out["sdr"] == SEM_SDR_LABEL
+    return (
+        out.sort_values(
+            ["_sem_sdr", "agendamentos_total", "comparecimentos_total"],
+            ascending=[True, False, False],
+        )
+        .drop(columns=["_sem_sdr"])
+        .reset_index(drop=True)[cols]
+    )
+
+
+def prevendas_qualif_chart_agendamentos(df: pd.DataFrame) -> pd.DataFrame:
+    """Série para gráfico — agendamentos Com Pré vs Não Qualif."""
+    k = prevendas_qualif_comparecimento_kpis(df)
+    return pd.DataFrame([
+        {
+            "tipo": LABEL_COM_PRE,
+            "valor": k["agend_com_pre"],
+            "pct_total": k["pct_agend_com_pre"],
+        },
+        {
+            "tipo": LABEL_NAO_QUALIF,
+            "valor": k["agend_nao_qualificados"],
+            "pct_total": k["pct_agend_nao_qualificados"],
+        },
+    ])
+
+
+def prevendas_qualif_detalhe_pre_mais_nao_qual(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Tabela detalhada — interseção Com Pré + stage Recepção."""
+    cols = [
+        "data_reuniao_fmt",
+        "activity_id",
+        "what_id_raw",
+        "deal_id",
+        "existe_em_activities",
+        "existe_em_deals",
+        "vinculo_activity_deal",
+        "deal_name",
+        "sdr",
+        "fonte_sdr",
+        "prevendas_raw",
+        "deal_sdr_ss_id",
+        "deal_sdr_ss_nome",
+        "stage",
+        "status_reuniao",
+        "compareceu",
+        "activity_type",
+        "activity_owner_nome",
+        "activity_created_time_fmt",
+        "deal_created_at_fmt",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    mask = _qualif_mask_pre_mais_nao_qual(df)
+    sub = df.loc[mask].copy()
+    if sub.empty:
+        return pd.DataFrame(columns=cols)
+
+    if "start_datetime" in sub.columns:
+        sub["data_reuniao_fmt"] = pd.to_datetime(
+            sub["start_datetime"], errors="coerce"
+        ).dt.strftime("%d/%m/%Y %H:%M")
+    else:
+        sub["data_reuniao_fmt"] = pd.to_datetime(
+            sub.get("data_reuniao"), errors="coerce"
+        ).dt.strftime("%d/%m/%Y")
+
+    for src, dst in (
+        ("activity_created_time", "activity_created_time_fmt"),
+        ("deal_created_at", "deal_created_at_fmt"),
+    ):
+        if src in sub.columns:
+            sub[dst] = pd.to_datetime(sub[src], errors="coerce").dt.strftime(
+                "%d/%m/%Y %H:%M"
+            )
+        else:
+            sub[dst] = ""
+
+    sub["compareceu"] = sub["comparecimento"].map(
+        {True: "Sim", False: "Não"}
+    ).fillna("Não")
+
+    if "existe_em_activities" in sub.columns:
+        sub["existe_em_activities"] = sub["existe_em_activities"].map(
+            {True: "Sim", False: "Não"}
+        ).fillna("Sim" if "activity_id" in sub.columns else "Não")
+    else:
+        sub["existe_em_activities"] = "Sim"
+
+    if "existe_em_deals" in sub.columns:
+        sub["existe_em_deals"] = sub["existe_em_deals"].map(
+            {True: "Sim", False: "Não"}
+        ).fillna("Não")
+    else:
+        sub["existe_em_deals"] = "Não"
+
+    if "vinculo_activity_deal" not in sub.columns:
+        sub["vinculo_activity_deal"] = ""
+    sub["vinculo_activity_deal"] = (
+        sub["vinculo_activity_deal"].fillna("").astype(str).replace("nan", "")
+    )
+
+    for c in ("what_id_raw", "prevendas_raw", "deal_sdr_ss_id", "deal_sdr_ss_nome",
+              "deal_name", "activity_owner_nome"):
+        if c not in sub.columns:
+            sub[c] = ""
+        sub[c] = sub[c].fillna("").astype(str).replace("nan", "")
+
+    sort_cols = [c for c in ("data_reuniao", "start_datetime") if c in sub.columns]
+    out = sub.sort_values(sort_cols or ["data_reuniao"], ascending=False)
+    return out[cols].reset_index(drop=True)
+
+
+def prevendas_qualif_chart_comparecimentos(df: pd.DataFrame) -> pd.DataFrame:
+    """Série para gráfico — comparecimentos Com Pré vs Não Qualif."""
+    k = prevendas_qualif_comparecimento_kpis(df)
+    return pd.DataFrame([
+        {
+            "tipo": LABEL_COM_PRE,
+            "valor": k["comp_com_pre"],
+            "pct_total": k["pct_comp_com_pre"],
+        },
+        {
+            "tipo": LABEL_NAO_QUALIF,
+            "valor": k["comp_nao_qualificados"],
+            "pct_total": k["pct_comp_nao_qualificados"],
+        },
+    ])
 
 
 # ---------------------------------------------------------------------------

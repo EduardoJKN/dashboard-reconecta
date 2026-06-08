@@ -463,6 +463,23 @@ def get_prevendas_por_sdr(data_ini: date, data_fim: date) -> pd.DataFrame:
     )
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo qualificação × comparecimento…")
+def get_prevendas_qualif_comparecimento(data_ini: date,
+                                      data_fim: date) -> pd.DataFrame:
+    """Agendamentos classificáveis (Recepção / Reunião Agendada) com flag de
+    comparecimento — 1 row por activity. Ver `prevendas_qualif_comparecimento.sql`."""
+    df = run_sql_file(
+        "prevendas_qualif_comparecimento.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty:
+        if "data_reuniao" in df.columns:
+            df["data_reuniao"] = pd.to_datetime(df["data_reuniao"])
+        for col in ("start_datetime", "activity_created_time", "deal_created_at"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo oportunidades por SDR…")
 def get_prevendas_oportunidades_sdr(data_ini: date,
                                     data_fim: date) -> pd.DataFrame:

@@ -415,6 +415,55 @@ def bar_etapa_distribuicao(
     return fig
 
 
+def bar_qualif_pre_split(
+    df: pd.DataFrame,
+    *,
+    height: int = 280,
+) -> go.Figure:
+    """Barras Com Pré vs Não Qualif. com rótulo `valor (percentual do total)`."""
+    data = df.copy()
+    ymax = float(data["valor"].max() or 1)
+    labels: list[str] = []
+    positions: list[str] = []
+    colors = [PALETTE["gold_bright"], PALETTE["wine_light"]]
+    for _, row in data.iterrows():
+        v = int(row["valor"] or 0)
+        p = float(row["pct_total"] or 0)
+        pct_s = f"{p:.1f}".replace(".", ",") + "%"
+        labels.append(f"<b>{int_br(v)} ({pct_s})</b>")
+        positions.append("inside" if v >= ymax * 0.18 else "outside")
+
+    fig = go.Figure(go.Bar(
+        x=data["tipo"].astype(str),
+        y=data["valor"],
+        text=labels,
+        textposition=positions,
+        insidetextfont=dict(color="#1a1410", size=13, family="Inter"),
+        outsidetextfont=dict(color=PALETTE["text"], size=13, family="Inter"),
+        cliponaxis=False,
+        marker=dict(
+            color=colors[: len(data)],
+            line=dict(color=PALETTE["border_strong"], width=0.5),
+        ),
+        hovertemplate=(
+            "<b>%{x}</b><br>"
+            "%{y:,.0f} · %{customdata}<extra></extra>"
+        ),
+        customdata=[
+            f"{float(p):.1f}% do total".replace(".", ",")
+            for p in data["pct_total"]
+        ],
+    ))
+    fig.update_layout(**_base_layout(height=height))
+    fig.update_layout(
+        showlegend=False,
+        margin=dict(l=12, r=12, t=32, b=48),
+    )
+    fig.update_yaxes(range=[0, ymax * 1.14])
+    _style_axes(fig)
+    return fig
+
+
 def bar_simple(df: pd.DataFrame, x: str, y: str,
                height: int = 280, money: bool = False,
                rotate_x: bool = False) -> go.Figure:
