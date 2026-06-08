@@ -363,6 +363,58 @@ def bar_ranked(df: pd.DataFrame, category: str, value: str,
     return fig
 
 
+def bar_etapa_distribuicao(
+    df: pd.DataFrame,
+    etapa_col: str,
+    count_col: str,
+    pct_col: str,
+    height: int = 300,
+) -> go.Figure:
+    """Barras por etapa com rótulo `valor (percentual)` — distribuição do funil."""
+    data = df.copy()
+    ymax = float(data[count_col].max() or 1)
+    _label_size = 14
+    labels: list[str] = []
+    positions: list[str] = []
+    for _, row in data.iterrows():
+        v = int(row[count_col] or 0)
+        p = float(row[pct_col] or 0)
+        pct_s = f"{p:.1f}".replace(".", ",") + "%"
+        labels.append(f"<b>{int_br(v)} ({pct_s})</b>")
+        positions.append("inside" if v >= ymax * 0.18 else "outside")
+
+    fig = go.Figure(go.Bar(
+        x=data[etapa_col].astype(str),
+        y=data[count_col],
+        text=labels,
+        textposition=positions,
+        insidetextfont=dict(color="#1a1410", size=_label_size, family="Inter"),
+        outsidetextfont=dict(color=PALETTE["text"], size=_label_size, family="Inter"),
+        cliponaxis=False,
+        marker=dict(
+            color=PALETTE["gold"],
+            line=dict(color=PALETTE["border_strong"], width=0.5),
+        ),
+        hovertemplate=(
+            "<b>%{x}</b><br>"
+            "%{y:,.0f} · %{customdata}<extra></extra>"
+        ),
+        customdata=[
+            f"{float(p):.1f}%".replace(".", ",")
+            for p in data[pct_col]
+        ],
+    ))
+    fig.update_layout(**_base_layout(height=height))
+    fig.update_layout(
+        showlegend=False,
+        margin=dict(l=12, r=12, t=40, b=48),
+    )
+    fig.update_xaxes(tickangle=-30)
+    fig.update_yaxes(range=[0, ymax * 1.12])
+    _style_axes(fig)
+    return fig
+
+
 def bar_simple(df: pd.DataFrame, x: str, y: str,
                height: int = 280, money: bool = False,
                rotate_x: bool = False) -> go.Figure:

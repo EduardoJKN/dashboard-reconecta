@@ -58,7 +58,7 @@ from src.transforms import (
     vendas_detalhe_mask_por_metrica,
     vendas_normalizar_detalhe,
 )
-from src.ui.charts import bar_ranked, bar_simple, line
+from src.ui.charts import bar_etapa_distribuicao, bar_ranked, bar_simple, line
 from src.ui.components import metric_card_v2, ranking_column_config, section_title
 from src.ui.page import start_page
 from src.ui.theme import brl, int_br, pct
@@ -327,11 +327,7 @@ _funil_hint  = (
 section_title("Funil (absolutos)", _funil_hint)
 f1, f2, f3, f4, f5, f6, f7 = st.columns(7, gap="small")
 with f1:
-    metric_card_v2(
-        _leads_label,
-        int_br(opor_v),
-        qual_split=_funil_qual_split,
-    )
+    metric_card_v2(_leads_label, int_br(opor_v))
 with f2:
     metric_card_v2(
         "Reunião Agendada",
@@ -1332,207 +1328,27 @@ with tab_cancel_pos:
 
 with tab_lead_triagem:
     # =========================================================================
-    # Lead In & Agendamentos — leads, deals e classificação por stage.
+    # Visão principal: classificação dos agendamentos do funil (card Reunião
+    # Agendada). Visão complementar de oportunidades criadas no período fica
+    # no expander abaixo.
     # =========================================================================
-    _TRIAGEM_EXIBICAO_KEY = "executivas_triagem_modo_exibicao"
-    _triagem_exib_label = st.radio(
-        "Exibição",
-        options=("Ativos", "Todos / Histórico"),
-        index=0,
-        horizontal=True,
-        key=_TRIAGEM_EXIBICAO_KEY,
-        help=(
-            "Ativos: apenas closers com `ativo='y'` no cadastro oficial.\n"
-            "Todos / Histórico: todos os deals criados no período, inclusive "
-            "closers inativos. O filtro de TIMES do header vale nos dois modos."
-        ),
-    )
-    exibicao_triagem = (
-        RANKING_EXIBICAO_HISTORICO
-        if _triagem_exib_label == "Todos / Histórico"
-        else RANKING_EXIBICAO_ATIVOS
-    )
     _times_sel_triagem = list(ctx.selections.get("times") or [])
 
+    # Comparativo: oportunidades com closer (Ativos) — base diferente, só o total.
     try:
-        df_triagem_raw = get_executivas_lead_in_triagem(ctx.data_ini, ctx.data_fim)
-    except Exception as e:
-        st.error(f"Falha ao carregar deals (triagem): {e}")
-        df_triagem_raw = pd.DataFrame()
-
-    try:
-        df_leads_triagem = get_leads_visao_geral(ctx.data_ini, ctx.data_fim)
-    except Exception as e:
-        st.warning(f"Falha ao carregar leads: {e}")
-        df_leads_triagem = pd.DataFrame()
-
-    df_triagem_prep = triagem_preparar_deals(df_triagem_raw)
-    df_triagem_prep = cancelamentos_pos_filtrar_times(
-        df_triagem_prep, _times_sel_triagem,
-    )
-    df_triagem_view = triagem_aplicar_exibicao(
-        df_triagem_prep,
-        exibicao_triagem,
+        _df_opp_cmp_raw = get_executivas_lead_in_triagem(ctx.data_ini, ctx.data_fim)
+    except Exception:
+        _df_opp_cmp_raw = pd.DataFrame()
+    _df_opp_cmp = triagem_aplicar_exibicao(
+        cancelamentos_pos_filtrar_times(
+            triagem_preparar_deals(_df_opp_cmp_raw), _times_sel_triagem,
+        ),
+        RANKING_EXIBICAO_ATIVOS,
         _df_oficiais,
         _df_oficiais_todas,
     )
-    total_leads_triagem = triagem_contar_leads(
-        df_leads_triagem,
-        _times_sel_triagem,
-        exibicao_triagem,
-        _df_oficiais,
-        _df_oficiais_todas,
-    )
-    kpi_triagem = triagem_kpis(df_triagem_view, total_leads_triagem)
+    _opp_com_closer_cmp = len(_df_opp_cmp)
 
-    _cap_triagem = (
-        f"{ctx.data_ini:%d/%m/%Y} – {ctx.data_fim:%d/%m/%Y} · "
-        f"deals por data de criação · {_triagem_exib_label.lower()}"
-    )
-    section_title("Lead In & Agendamentos", _cap_triagem)
-    st.caption(
-        "Leads: `ext_reconecta.leads` (únicos/dia, mesma regra da Visão Geral). "
-        "Oportunidades: `zoho_deals` criados no período com closer do cadastro "
-        "ativo (`executiva_vendas` → `zoho_users`). "
-        "Classificação de agendamentos pela etapa do CRM: "
-        f"**{STAGE_LABEL_NAO_QUALIFICADOS}** e **{STAGE_LABEL_QUALIFICADOS}**. "
-        "A coluna **Triagem** aparece apenas como informação complementar. "
-        f"**Total classificável** = {STAGE_HINT_CLASSIFICAVEL}. "
-        "Deals em outras etapas continuam em **Oportunidades com Closer**, mas não entram "
-        "no cálculo de **% Qualificados**. "
-        f"({STAGE_HINT_NAO_QUALIFICADOS} · {STAGE_HINT_QUALIFICADOS})"
-    )
-
-    if df_triagem_view.empty and total_leads_triagem == 0:
-        st.info("Sem leads nem deals no recorte atual.")
-    else:
-        c1, c2, c3, c4 = st.columns(4, gap="small")
-        with c1:
-            metric_card_v2("Total de Leads", int_br(kpi_triagem["total_leads"]), accent=True)
-        with c2:
-            metric_card_v2(
-                "Oportunidades com Closer",
-                int_br(kpi_triagem["total_deals"]),
-                hint="zoho_deals.created_at no período · closer ativo no cadastro",
-            )
-        with c3:
-            metric_card_v2(
-                "Total classificável",
-                int_br(kpi_triagem["total_agendamentos_classificaveis"]),
-                hint=STAGE_HINT_CLASSIFICAVEL,
-            )
-        with c4:
-            metric_card_v2(
-                "Outras etapas",
-                int_br(kpi_triagem["outras_etapas"]),
-                hint=STAGE_HINT_OUTRAS_ETAPAS,
-            )
-
-        c5, c6, c7, c8 = st.columns(4, gap="small")
-        with c5:
-            metric_card_v2("Lead-in", int_br(kpi_triagem["lead_in"]), hint="stage = Lead-in")
-        with c6:
-            metric_card_v2(
-                STAGE_LABEL_NAO_QUALIFICADOS,
-                int_br(kpi_triagem["agendamentos_nao_qualificados"]),
-                hint=STAGE_HINT_NAO_QUALIFICADOS,
-            )
-        with c7:
-            metric_card_v2(
-                STAGE_LABEL_QUALIFICADOS,
-                int_br(kpi_triagem["agendamentos_qualificados"]),
-                hint=STAGE_HINT_QUALIFICADOS,
-            )
-        with c8:
-            metric_card_v2(
-                "% Qualificados",
-                pct(kpi_triagem["pct_qualificados"]),
-                hint=STAGE_HINT_PCT_QUALIFICADOS,
-            )
-
-        c9, _, _, _ = st.columns(4, gap="small")
-        with c9:
-            metric_card_v2(
-                "Reuniões concluídas",
-                int_br(kpi_triagem["reunioes_concluidas"]),
-                hint="stage = Reunião Concluída",
-            )
-
-        por_etapa = triagem_por_etapa(df_triagem_view)
-        if not por_etapa.empty:
-            section_title(
-                "Quebra por Etapa",
-                f"todas as etapas do recorte · fora de "
-                f"{STAGE_LABEL_NAO_QUALIFICADOS}/{STAGE_LABEL_QUALIFICADOS} "
-                "explicam a diferença entre Oportunidades com Closer e Total classificável",
-            )
-            chart_tri = por_etapa.copy()
-            if not chart_tri.empty:
-                st.plotly_chart(
-                    bar_simple(
-                        chart_tri,
-                        "etapa",
-                        "total_deals",
-                        height=max(300, 28 * len(chart_tri) + 80),
-                        rotate_x=True,
-                    ),
-                    use_container_width=True,
-                    key="executivas_etapa_chart",
-                )
-            tbl_tri = por_etapa.copy()
-            tbl_tri["entra_classificavel"] = tbl_tri["entra_classificavel"].map(
-                {True: "Sim", False: "Não"}
-            )
-            tbl_tri = tbl_tri.rename(columns={
-                "etapa": "Etapa",
-                "entra_classificavel": "Entra no classificável?",
-                "total_deals": "Total de deals",
-                "pct_deals": "% sobre total",
-                "triagem_nao_iniciada": "Triagem não iniciada",
-                "triagem_concluida": "Triagem concluída",
-                "triagem_lead_qualificado": "Lead qualificado",
-                "triagem_lead_desqualificado": "Lead desqualificado",
-                "triagem_sem_info": "Sem informação",
-            })
-            cfg_tri = {"% sobre total": st.column_config.NumberColumn(format="%.1f%%")}
-            st.dataframe(
-                tbl_tri,
-                use_container_width=True,
-                hide_index=True,
-                column_config=cfg_tri,
-            )
-
-        por_exec = triagem_por_executiva(df_triagem_view)
-        if not por_exec.empty:
-            section_title("Quebra por executiva", _triagem_exib_label.lower())
-            tbl_exec = por_exec.rename(columns={
-                "executiva": "Executiva",
-                "total_deals": "Total de deals",
-                "lead_in": "Lead-in",
-                "agendamentos_nao_qualificados": STAGE_LABEL_NAO_QUALIFICADOS,
-                "agendamentos_qualificados": STAGE_LABEL_QUALIFICADOS,
-                "total_classificavel": "Total classificável",
-                "pct_qualificados": "% Qualificados",
-                "reuniao_concluida": "Reunião concluída",
-                "no_show": "No-show",
-                "ganho": "Ganho",
-                "perdido": "Perdido",
-            })
-            cfg_exec = {
-                "% Qualificados": st.column_config.NumberColumn(format="%.1f%%"),
-            }
-            st.dataframe(
-                tbl_exec,
-                use_container_width=True,
-                hide_index=True,
-                column_config=cfg_exec,
-            )
-
-    # =========================================================================
-    # Classificação dos agendamentos do funil — mesma base do card
-    # "Reunião Agendada" do Funil absoluto (view executivas, NÃO deals criados).
-    # =========================================================================
-    st.divider()
     _agen_funil_total = float(k.get("agendamentos", 0) or 0)
     _agen_funil_card = float(k.get(cmap["agendamentos"], 0) or 0)
     try:
@@ -1549,75 +1365,76 @@ with tab_lead_triagem:
 
     section_title(
         "Classificação dos agendamentos do funil",
-        f"mesma regra do card Reunião Agendada · "
-        f"{ctx.data_ini:%d/%m/%Y} – {ctx.data_fim:%d/%m/%Y}",
+        f"{ctx.data_ini:%d/%m/%Y} – {ctx.data_fim:%d/%m/%Y} · "
+        "mesma regra do card Reunião Agendada",
     )
     st.caption(
-        "Fonte: `zoho_activities` (Consulta/Indicação) com `status_reuniao` preenchido "
-        "e diferente de Vencida. **Data:** `start_datetime` (data da reunião) — "
-        "não é `zoho_deals.created_at`. Ligação ao deal via `what_id` → "
-        "`zoho_deals.stage` atual. Respeita o filtro de **Times** do header; "
-        "não aplica o toggle Ativos/Histórico desta aba (igual ao Funil absoluto). "
+        "Classificação oficial: `zoho_activities` (Consulta/Indicação) ligadas ao deal "
+        "via `what_id` → **`zoho_deals.stage`** atual. "
+        f"**{STAGE_LABEL_QUALIFICADOS}** ({STAGE_HINT_QUALIFICADOS}) · "
+        f"**{STAGE_LABEL_NAO_QUALIFICADOS}** ({STAGE_HINT_NAO_QUALIFICADOS}). "
+        "**Data:** `start_datetime` (reunião no período). "
+        "Respeita filtro de **Times** do header — **não** usa o toggle "
+        "Ativos/Histórico (igual ao Funil absoluto). "
         f"Card do funil ({classif_sel}): **{int_br(int(_agen_funil_card))}** · "
         f"universo Todas: **{int_br(int(_agen_funil_total))}** · "
         f"esta seção: **{int_br(kpi_funil_ag['total'])}** "
-        f"({'✓ bate universo Todas' if _bate_funil_ag else '⚠ diverge'})."
+        f"({'✓ bate' if _bate_funil_ag else '⚠ diverge'})."
     )
 
     if df_funil_ag.empty:
         st.info("Sem agendamentos do funil no recorte atual.")
     else:
-        f1, f2, f3, f4 = st.columns(4, gap="small")
-        with f1:
+        c1, c2, c3, c4 = st.columns(4, gap="small")
+        with c1:
             metric_card_v2(
                 "Total de agendamentos do funil",
                 int_br(kpi_funil_ag["total"]),
                 accent=True,
             )
-        with f2:
+        with c2:
             metric_card_v2(
                 STAGE_LABEL_NAO_QUALIFICADOS,
                 int_br(kpi_funil_ag["recepcao"]),
                 hint=STAGE_HINT_NAO_QUALIFICADOS,
             )
-        with f3:
+        with c3:
             metric_card_v2(
                 STAGE_LABEL_QUALIFICADOS,
                 int_br(kpi_funil_ag["reuniao_agendada"]),
                 hint=STAGE_HINT_QUALIFICADOS,
             )
-        with f4:
-            metric_card_v2(
-                "Outras etapas",
-                int_br(kpi_funil_ag["outras_etapas"]),
-                hint=STAGE_HINT_OUTRAS_ETAPAS,
-            )
-
-        f5, f6, f7, f8 = st.columns(4, gap="small")
-        with f5:
+        with c4:
             metric_card_v2(
                 "Total classificável",
                 int_br(kpi_funil_ag["total_classificavel"]),
                 hint=STAGE_HINT_CLASSIFICAVEL,
             )
-        with f6:
+
+        c5, c6, c7, c8 = st.columns(4, gap="small")
+        with c5:
             metric_card_v2(
                 "% Qualificados",
                 pct(kpi_funil_ag["pct_qualificados"]),
                 hint=STAGE_HINT_PCT_QUALIFICADOS,
             )
-        with f7:
+        with c6:
+            metric_card_v2(
+                "Outras etapas",
+                int_br(kpi_funil_ag["outras_etapas"]),
+                hint=STAGE_HINT_OUTRAS_ETAPAS,
+            )
+        with c7:
             metric_card_v2(
                 "Sem deal ligado",
                 int_br(kpi_funil_ag["sem_deal"]),
                 hint="activity sem what_id válido",
             )
-        with f8:
-            _diff_deals = kpi_triagem.get("total_deals", 0)
+        with c8:
             metric_card_v2(
                 "Oportunidades com Closer",
-                int_br(_diff_deals),
-                hint="seção anterior · zoho_deals.created_at — base diferente",
+                int_br(_opp_com_closer_cmp),
+                hint="comparativo · zoho_deals.created_at · base diferente",
             )
 
         por_stage_funil = funil_agendamentos_por_stage(df_funil_ag)
@@ -1626,41 +1443,23 @@ with tab_lead_triagem:
                 "Distribuição por etapa",
                 "onde estão hoje os deals dos agendamentos do funil",
             )
-            chart_funil = por_stage_funil.copy()
             st.plotly_chart(
-                bar_simple(
-                    chart_funil,
+                bar_etapa_distribuicao(
+                    por_stage_funil,
                     "etapa",
                     "total_agendamentos",
-                    height=max(300, 28 * len(chart_funil) + 80),
-                    rotate_x=True,
+                    "pct_agendamentos",
+                    height=max(320, 32 * len(por_stage_funil) + 100),
                 ),
                 use_container_width=True,
                 key="executivas_funil_ag_stage_chart",
-            )
-            tbl_funil = por_stage_funil.copy()
-            tbl_funil["entra_classificavel"] = tbl_funil["entra_classificavel"].map(
-                {True: "Sim", False: "Não"}
-            )
-            tbl_funil = tbl_funil.rename(columns={
-                "etapa": "Etapa",
-                "entra_classificavel": "Entra no classificável?",
-                "total_agendamentos": "Agendamentos",
-                "pct_agendamentos": "% do funil",
-            })
-            cfg_funil = {"% do funil": st.column_config.NumberColumn(format="%.1f%%")}
-            st.dataframe(
-                tbl_funil,
-                use_container_width=True,
-                hide_index=True,
-                column_config=cfg_funil,
             )
 
         por_exec_funil = funil_agendamentos_por_executiva(df_funil_ag)
         if not por_exec_funil.empty:
             section_title(
                 "Classificação dos agendamentos por executiva",
-                "mesma base dos agendamentos do funil · filtro Times do header",
+                "filtro Times do header",
             )
             tbl_exec_funil = por_exec_funil.rename(columns={
                 "executiva": "Executiva",
@@ -1700,7 +1499,206 @@ with tab_lead_triagem:
                 "- **Data:** `start_datetime::date` (reunião marcada no período)\n"
                 "- **Filtro:** `status_reuniao IS NOT NULL` e `<> Vencida`\n"
                 "- **Ligação deal:** `what_id` normalizado → `zoho_deals.id`\n"
-                "- **Por que difere de deals criados:** oportunidades usam "
-                "`created_at`; agendamentos usam `start_datetime` — um deal "
-                "criado antes pode ter reunião no período (e vice-versa)"
+                "- **Por que difere de oportunidades criadas:** deals usam "
+                "`created_at`; agendamentos usam `start_datetime`"
             )
+
+    # =========================================================================
+    # Visão complementar — oportunidades/deals criados no período (outra base).
+    # =========================================================================
+    with st.expander(
+        "Visão complementar: oportunidades criadas no período",
+        expanded=False,
+    ):
+        st.caption(
+            "Base **diferente** da classificação dos agendamentos do funil: "
+            "`zoho_deals` com `created_at` no período (oportunidades criadas). "
+            "Não é a mesma regra do card **Reunião Agendada** do Funil absoluto "
+            "(que usa `zoho_activities` + `start_datetime`). "
+            "O toggle **Ativos/Histórico** abaixo aplica-se apenas a esta visão."
+        )
+        _TRIAGEM_EXIBICAO_KEY = "executivas_triagem_modo_exibicao"
+        _triagem_exib_label = st.radio(
+            "Exibição",
+            options=("Ativos", "Todos / Histórico"),
+            index=0,
+            horizontal=True,
+            key=_TRIAGEM_EXIBICAO_KEY,
+            help=(
+                "Ativos: apenas closers com `ativo='y'` no cadastro oficial.\n"
+                "Todos / Histórico: todos os deals criados no período, inclusive "
+                "closers inativos. O filtro de TIMES do header vale nos dois modos."
+            ),
+        )
+        exibicao_triagem = (
+            RANKING_EXIBICAO_HISTORICO
+            if _triagem_exib_label == "Todos / Histórico"
+            else RANKING_EXIBICAO_ATIVOS
+        )
+
+        try:
+            df_triagem_raw = get_executivas_lead_in_triagem(ctx.data_ini, ctx.data_fim)
+        except Exception as e:
+            st.error(f"Falha ao carregar deals: {e}")
+            df_triagem_raw = pd.DataFrame()
+
+        try:
+            df_leads_triagem = get_leads_visao_geral(ctx.data_ini, ctx.data_fim)
+        except Exception as e:
+            st.warning(f"Falha ao carregar leads: {e}")
+            df_leads_triagem = pd.DataFrame()
+
+        df_triagem_prep = triagem_preparar_deals(df_triagem_raw)
+        df_triagem_prep = cancelamentos_pos_filtrar_times(
+            df_triagem_prep, _times_sel_triagem,
+        )
+        df_triagem_view = triagem_aplicar_exibicao(
+            df_triagem_prep,
+            exibicao_triagem,
+            _df_oficiais,
+            _df_oficiais_todas,
+        )
+        total_leads_triagem = triagem_contar_leads(
+            df_leads_triagem,
+            _times_sel_triagem,
+            exibicao_triagem,
+            _df_oficiais,
+            _df_oficiais_todas,
+        )
+        kpi_triagem = triagem_kpis(df_triagem_view, total_leads_triagem)
+
+        _cap_opp = (
+            f"{ctx.data_ini:%d/%m/%Y} – {ctx.data_fim:%d/%m/%Y} · "
+            f"created_at · {_triagem_exib_label.lower()}"
+        )
+        section_title("Oportunidades criadas no período", _cap_opp)
+
+        if df_triagem_view.empty and total_leads_triagem == 0:
+            st.info("Sem leads nem oportunidades no recorte atual.")
+        else:
+            o1, o2, o3, o4 = st.columns(4, gap="small")
+            with o1:
+                metric_card_v2(
+                    "Total de Leads",
+                    int_br(kpi_triagem["total_leads"]),
+                    accent=True,
+                )
+            with o2:
+                metric_card_v2(
+                    "Oportunidades com Closer",
+                    int_br(kpi_triagem["total_deals"]),
+                    hint="zoho_deals.created_at · closer no cadastro",
+                )
+            with o3:
+                metric_card_v2(
+                    "Total classificável",
+                    int_br(kpi_triagem["total_agendamentos_classificaveis"]),
+                    hint=STAGE_HINT_CLASSIFICAVEL,
+                )
+            with o4:
+                metric_card_v2(
+                    "Outras etapas",
+                    int_br(kpi_triagem["outras_etapas"]),
+                    hint=STAGE_HINT_OUTRAS_ETAPAS,
+                )
+
+            o5, o6, o7, o8 = st.columns(4, gap="small")
+            with o5:
+                metric_card_v2(
+                    "Lead-in",
+                    int_br(kpi_triagem["lead_in"]),
+                    hint="stage = Lead-in",
+                )
+            with o6:
+                metric_card_v2(
+                    STAGE_LABEL_NAO_QUALIFICADOS,
+                    int_br(kpi_triagem["agendamentos_nao_qualificados"]),
+                    hint=STAGE_HINT_NAO_QUALIFICADOS,
+                )
+            with o7:
+                metric_card_v2(
+                    STAGE_LABEL_QUALIFICADOS,
+                    int_br(kpi_triagem["agendamentos_qualificados"]),
+                    hint=STAGE_HINT_QUALIFICADOS,
+                )
+            with o8:
+                metric_card_v2(
+                    "% Qualificados",
+                    pct(kpi_triagem["pct_qualificados"]),
+                    hint=STAGE_HINT_PCT_QUALIFICADOS,
+                )
+
+            o9, _, _, _ = st.columns(4, gap="small")
+            with o9:
+                metric_card_v2(
+                    "Reuniões concluídas",
+                    int_br(kpi_triagem["reunioes_concluidas"]),
+                    hint="stage = Reunião Concluída",
+                )
+
+            por_etapa = triagem_por_etapa(df_triagem_view)
+            if not por_etapa.empty:
+                section_title(
+                    "Quebra por etapa",
+                    f"oportunidades criadas · fora de "
+                    f"{STAGE_LABEL_NAO_QUALIFICADOS}/{STAGE_LABEL_QUALIFICADOS}",
+                )
+                st.plotly_chart(
+                    bar_simple(
+                        por_etapa,
+                        "etapa",
+                        "total_deals",
+                        height=max(300, 28 * len(por_etapa) + 80),
+                        rotate_x=True,
+                    ),
+                    use_container_width=True,
+                    key="executivas_etapa_chart",
+                )
+                tbl_tri = por_etapa.copy()
+                tbl_tri["entra_classificavel"] = tbl_tri["entra_classificavel"].map(
+                    {True: "Sim", False: "Não"}
+                )
+                tbl_tri = tbl_tri.rename(columns={
+                    "etapa": "Etapa",
+                    "entra_classificavel": "Entra no classificável?",
+                    "total_deals": "Total de deals",
+                    "pct_deals": "% sobre total",
+                    "triagem_nao_iniciada": "Triagem não iniciada",
+                    "triagem_concluida": "Triagem concluída",
+                    "triagem_lead_qualificado": "Lead qualificado",
+                    "triagem_lead_desqualificado": "Lead desqualificado",
+                    "triagem_sem_info": "Sem informação",
+                })
+                cfg_tri = {"% sobre total": st.column_config.NumberColumn(format="%.1f%%")}
+                st.dataframe(
+                    tbl_tri,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=cfg_tri,
+                )
+
+            por_exec = triagem_por_executiva(df_triagem_view)
+            if not por_exec.empty:
+                section_title("Quebra por executiva", _triagem_exib_label.lower())
+                tbl_exec = por_exec.rename(columns={
+                    "executiva": "Executiva",
+                    "total_deals": "Total de deals",
+                    "lead_in": "Lead-in",
+                    "agendamentos_nao_qualificados": STAGE_LABEL_NAO_QUALIFICADOS,
+                    "agendamentos_qualificados": STAGE_LABEL_QUALIFICADOS,
+                    "total_classificavel": "Total classificável",
+                    "pct_qualificados": "% Qualificados",
+                    "reuniao_concluida": "Reunião concluída",
+                    "no_show": "No-show",
+                    "ganho": "Ganho",
+                    "perdido": "Perdido",
+                })
+                cfg_exec = {
+                    "% Qualificados": st.column_config.NumberColumn(format="%.1f%%"),
+                }
+                st.dataframe(
+                    tbl_exec,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=cfg_exec,
+                )
