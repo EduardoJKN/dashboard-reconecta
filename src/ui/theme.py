@@ -472,6 +472,7 @@ header[data-testid="stHeader"] {{ background: transparent; }}
   min-height: 84px;
   height: 100%;
   transition: border-color 0.2s;
+  container-type: inline-size;
 }}
 .mcard:hover {{ border-color: var(--color-border-strong); }}
 .mcard-head {{
@@ -537,6 +538,48 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 }}
 .mcard-break-row .k {{ color: var(--color-text-subtle); }}
 .mcard-break-row .v {{ color: var(--color-text); font-variant-numeric: tabular-nums; font-weight: 500; }}
+
+/* ----- qual split (Qualificados · Não Qualificados nos cards do funil) -
+   Inline numa linha quando o card é largo; empilhado em 2 linhas limpas
+   quando estreito. Cada chip é nowrap — nunca quebra no meio do rótulo. */
+.mcard-qual-split {{
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--color-border);
+  font-size: 0.68rem;
+  line-height: 1.25;
+}}
+.mcard-qual-chip {{
+  white-space: nowrap;
+  color: var(--color-text-subtle);
+}}
+.mcard-qual-chip .val {{
+  color: var(--color-text);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}}
+.mcard-qual-sep {{
+  white-space: nowrap;
+  color: var(--color-text-subtle);
+  opacity: 0.55;
+  padding: 0 3px;
+}}
+.mcard-qual-inline {{
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0;
+}}
+.mcard-qual-stack {{
+  display: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}}
+@container (max-width: 168px) {{
+  .mcard-qual-inline {{ display: none; }}
+  .mcard-qual-stack {{ display: flex; }}
+}}
 
 /* ----- Origens (chips coloridos por funil_origem) ----------------------
    Bloco secundário do card que mostra a quebra por funil de origem

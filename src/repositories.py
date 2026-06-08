@@ -389,6 +389,30 @@ def get_executivas_pos_vendas_oficiais() -> pd.DataFrame:
     return run_sql_file("executivas_pos_vendas_oficiais.sql")
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo agendamentos do funil…")
+def get_executivas_funil_agendamentos(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """1 linha por activity — mesma regra de `agendamentos` na view executivas."""
+    df = run_sql_file(
+        "executivas_funil_agendamentos.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty:
+        for col in ("data_reuniao", "data_criacao_activity", "deal_created_at"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Lead In & Agendamentos…")
+def get_executivas_lead_in_triagem(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """1 linha por deal criado no período — triagem + stage + closer."""
+    df = run_sql_file(
+        "executivas_lead_in_triagem.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty and "data_criacao" in df.columns:
+        df["data_criacao"] = pd.to_datetime(df["data_criacao"], errors="coerce")
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo churns (stage Churn)…")
 def get_executivas_churn_pos_venda() -> pd.DataFrame:
     """1 linha por deal `stage = 'Churn'` — card/ranking Churn (não a aba pós-venda)."""

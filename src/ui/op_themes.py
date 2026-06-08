@@ -166,9 +166,30 @@ section[data-testid='stMain'] .op-card.compact {
     padding: 5px 8px;
     min-height: 44px;
 }
-section[data-testid='stMain'] .op-card .op-value         { font-size: 1.15rem; }
-section[data-testid='stMain'] .op-card.hero .op-value    { font-size: 1.5rem;  }
-section[data-testid='stMain'] .op-card.compact .op-value { font-size: 0.95rem; }
+section[data-testid='stMain'] .op-card:not(.hero):not(.compact) .op-value {
+    font-size: 1.15rem;
+}
+section[data-testid='stMain'] .op-card.hero .op-value {
+    font-size: 1.5rem;
+}
+section[data-testid='stMain'] .op-card.compact .op-value {
+    font-size: 0.95rem;
+}
+@container op-card (max-width: 240px) {
+    section[data-testid='stMain'] .op-card:not(.hero):not(.compact) .op-value {
+        font-size: clamp(0.78rem, 7.5cqw, 1.15rem);
+    }
+}
+@container op-card (max-width: 200px) {
+    section[data-testid='stMain'] .op-card.hero .op-value {
+        font-size: clamp(0.88rem, 8cqw, 1.5rem);
+    }
+}
+@container op-card (max-width: 200px) {
+    section[data-testid='stMain'] .op-card.compact .op-value {
+        font-size: clamp(0.7rem, 6.5cqw, 0.95rem);
+    }
+}
 section[data-testid='stMain'] .op-card.wine-accent {
     border-top: 3px solid var(--color-wine);
 }

@@ -141,7 +141,14 @@ _OP_CARD_CSS = """
     justify-content: flex-start;
     gap: 2px;
     min-height: 0;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
     height: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+    container-type: inline-size;
+    container-name: op-card;
     position: relative;
     text-align: center;
     transition: border-color 0.15s;
@@ -199,6 +206,8 @@ _OP_CARD_CSS = """
     font-size: 0.62rem;
     letter-spacing: 1.1px;
 }
+/* Valores KPI — tamanho base original; redução só quando o card é estreito.
+   Sem ellipsis nos números. */
 .op-value {
     color: var(--color-text);
     font-size: 1.28rem;
@@ -206,17 +215,45 @@ _OP_CARD_CSS = """
     line-height: 1.1;
     font-variant-numeric: tabular-nums;
     margin-top: 2px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
 }
+/* Hero principal — mesmo tier: Aplicações, Agendamentos, Montante, Investido */
 .op-card.hero .op-value {
     font-size: 1.95rem;
     margin-top: 1px;
     line-height: 1.05;
 }
+/* Cards médios (CPA, Média móvel, Ticket, Apl. ±12, Agend. INB/SS…) */
+.op-card:not(.hero):not(.compact) .op-value {
+    font-size: 1.28rem;
+}
+/* Cards pequenos (Novos, Asc., Renov., Indic., Receita/Vendido) */
 .op-card.compact .op-value {
     font-size: 1.12rem;
     font-weight: 600;
     margin-top: 0;
+}
+/* Fallback — só reduz quando a largura do card não comporta o tamanho base */
+@container op-card (max-width: 240px) {
+    .op-card:not(.hero):not(.compact) .op-value {
+        font-size: clamp(0.82rem, 7.5cqw, 1.28rem);
+    }
+}
+/* Hero — reduz só em cards muito estreitos (< 200px), não por coluna estreita */
+@container op-card (max-width: 200px) {
+    .op-card.hero .op-value {
+        font-size: clamp(0.92rem, 8cqw, 1.95rem);
+    }
+}
+@container op-card (max-width: 200px) {
+    .op-card.compact .op-value {
+        font-size: clamp(0.75rem, 6.5cqw, 1.12rem);
+    }
 }
 .op-value.accent { color: var(--color-gold); }
 /* Delta — anotação leve ao lado do label (texto colorido sem pílula
@@ -257,9 +294,11 @@ _OP_CARD_CSS = """
     padding-top: 4px;
     border-top: 1px dashed var(--color-border);
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 2px 10px;
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
 }
 /* Badge único — centraliza em coluna full ao invés de ocupar só a esquerda
    da grid de 2 colunas (usado por % Comp. nos cards Comp. INB/SS e por
@@ -290,21 +329,35 @@ _OP_CARD_CSS = """
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     line-height: 1.15;
+    width: 100%;
     max-width: 100%;
+    min-width: 0;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
+    text-overflow: clip;
 }
 .op-card.hero .op-badges {
     margin-top: 4px;
     padding-top: 4px;
     gap: 2px 12px;
     width: 100%;
+    min-width: 0;
 }
 .op-card.hero .op-badge-label { font-size: 0.64rem; opacity: 0.9; }
 .op-card.hero .op-badge-value { font-size: 1.02rem; }
 .op-card.compact .op-badge-label { font-size: 0.58rem; }
 .op-card.compact .op-badge-value { font-size: 0.88rem; }
+@container op-card (max-width: 180px) {
+    .op-badge-value {
+        font-size: clamp(0.68rem, 5.5cqw, 0.96rem);
+    }
+    .op-card.hero .op-badge-value {
+        font-size: clamp(0.7rem, 5.5cqw, 1.02rem);
+    }
+    .op-card.compact .op-badge-value {
+        font-size: clamp(0.65rem, 5cqw, 0.88rem);
+    }
+}
 /* Agend. INBOUND/SS — muitos sub-stats, mas conteúdo alinhado ao topo */
 .op-card:not(.hero):not(.compact):has(.op-badge-extras) {
     padding: 7px 9px 8px;
@@ -353,7 +406,16 @@ _OP_CARD_CSS = """
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
-    flex: 0 0 auto;
+    max-width: 100%;
+    min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+    flex: 0 1 auto;
+}
+@container op-card (max-width: 200px) {
+    .op-badge-extra-value {
+        font-size: clamp(0.65rem, 5cqw, 0.86rem);
+    }
 }
 /* Em call / Follow inline — outros cards (Agend. INBOUND/SS). */
 .op-badge-extras.op-badge-extras-inline {
@@ -394,6 +456,144 @@ _OP_CARD_CSS = """
 [data-testid="stHorizontalBlock"]:has(.op-card) {
     gap: 0.75rem !important;
     margin-bottom: 0;
+    align-items: stretch !important;
+}
+/* Marcadores de seção/linha — invisíveis, só para CSS :has() */
+.op-section { display: none !important; }
+
+/* ---- Contenção sem clipping — min-width:0 nos flex children ---- */
+section[data-testid="stMain"]
+    [data-testid="stHorizontalBlock"]:has(.op-card) > [data-testid="stColumn"],
+section[data-testid="stMain"]
+    [data-testid="stHorizontalBlock"]:has(.op-card) > [data-testid="column"] {
+    min-width: 0 !important;
+    max-width: 100%;
+}
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-section) [data-testid="stElementContainer"],
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-section) [data-testid="stMarkdownContainer"] {
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* ---- Painel principal (Marketing | Pré-vendas | Vendas) ----
+   Desktop: flex nativo do Streamlit (3 colunas proporcionais). */
+section[data-testid="stMain"]
+    [data-testid="stHorizontalBlock"]:has(.op-section-mkt):has(.op-section-prev):has(.op-section-vendas)
+    > [data-testid="stColumn"] {
+    min-width: 0 !important;
+}
+
+/* ---- Vendas / Financeiro — desktop: preserva 4|2|3|1 ----
+   Linhas marcadas via .op-row-vendas-* nos cards. */
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-section-vendas)
+    [data-testid="stHorizontalBlock"]:has(.op-row-vendas-top)
+    > [data-testid="stColumn"],
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-section-vendas)
+    [data-testid="stHorizontalBlock"]:has(.op-row-vendas-hero)
+    > [data-testid="stColumn"],
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-section-vendas)
+    [data-testid="stHorizontalBlock"]:has(.op-row-vendas-mid)
+    > [data-testid="stColumn"] {
+    min-width: 0 !important;
+    flex: 1 1 0% !important;
+}
+
+/* Marketing / Pré-vendas — pares 2 colunas em desktop */
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-section-mkt)
+    [data-testid="stHorizontalBlock"]:has(.op-row-mkt-pair) > [data-testid="stColumn"],
+section[data-testid="stMain"]
+    [data-testid="stColumn"]:has(.op-section-prev)
+    [data-testid="stHorizontalBlock"]:has(.op-row-prev-pair) > [data-testid="stColumn"] {
+    min-width: 0 !important;
+    flex: 1 1 0% !important;
+}
+
+/* ---- Breakpoint médio (≤1280px) — painel empilha; subgrids 2 colunas ---- */
+@media (max-width: 1280px) {
+    section[data-testid="stMain"]
+        [data-testid="stHorizontalBlock"]:has(.op-section-mkt):has(.op-section-vendas) {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 1rem !important;
+    }
+    section[data-testid="stMain"]
+        [data-testid="stHorizontalBlock"]:has(.op-section-mkt):has(.op-section-vendas)
+        > [data-testid="stColumn"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        flex: unset !important;
+    }
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-vendas)
+        [data-testid="stHorizontalBlock"]:has(.op-row-vendas-top),
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-mkt)
+        [data-testid="stHorizontalBlock"]:has(.op-row-mkt-pair),
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-prev)
+        [data-testid="stHorizontalBlock"]:has(.op-row-prev-pair) {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        align-items: stretch !important;
+    }
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-vendas)
+        [data-testid="stHorizontalBlock"]:has(.op-row-vendas-top) > [data-testid="stColumn"],
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-mkt)
+        [data-testid="stHorizontalBlock"]:has(.op-row-mkt-pair) > [data-testid="stColumn"],
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-prev)
+        [data-testid="stHorizontalBlock"]:has(.op-row-prev-pair) > [data-testid="stColumn"] {
+        width: auto !important;
+        max-width: 100% !important;
+        flex: unset !important;
+    }
+}
+
+/* ---- Breakpoint estreito (≤900px) — Vendas: hero e métricas empilham ---- */
+@media (max-width: 900px) {
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-vendas)
+        [data-testid="stHorizontalBlock"]:has(.op-row-vendas-hero),
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-vendas)
+        [data-testid="stHorizontalBlock"]:has(.op-row-vendas-mid) {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        align-items: stretch !important;
+    }
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-vendas)
+        [data-testid="stHorizontalBlock"]:has(.op-row-vendas-hero) > [data-testid="stColumn"],
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-vendas)
+        [data-testid="stHorizontalBlock"]:has(.op-row-vendas-mid) > [data-testid="stColumn"] {
+        width: auto !important;
+        max-width: 100% !important;
+        flex: unset !important;
+    }
+}
+
+/* ---- Breakpoint pequeno (≤600px) — todas as linhas em 1 coluna ---- */
+@media (max-width: 600px) {
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section)
+        [data-testid="stHorizontalBlock"]:has(.op-row-mkt-pair),
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section)
+        [data-testid="stHorizontalBlock"]:has(.op-row-prev-pair),
+    section[data-testid="stMain"]
+        [data-testid="stColumn"]:has(.op-section-vendas)
+        [data-testid="stHorizontalBlock"]:has(.op-row-vendas-top) {
+        grid-template-columns: 1fr !important;
+    }
 }
 /* Base — irmãos dentro de cada coluna KPI (título, toggle, cards). */
 [data-testid="stColumn"]:has(.op-card) [data-testid="stVerticalBlock"] {
@@ -485,6 +685,7 @@ section[data-testid="stMain"] .block-container {
     padding-left: 1rem !important;
     padding-right: 1rem !important;
     max-width: 1720px !important;
+    overflow-x: auto;
 }
 section[data-testid="stMain"]
     [data-testid="stHorizontalBlock"]:has(.page-header-title) {
@@ -563,6 +764,17 @@ section[data-testid="stMain"]
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     line-height: 1.12;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+}
+@container op-card (max-width: 160px) {
+    .op-chip-value {
+        font-size: clamp(0.65rem, 5.5cqw, 0.86rem);
+    }
 }
 .op-card.compact .op-badges.op-badges-novos {
     margin-top: 2px;
@@ -590,6 +802,14 @@ def _op_fmt_delta(delta_pct: float | None) -> tuple[str, str]:
     arrow = "↑" if delta_pct > 0 else "↓"
     cls = "up" if delta_pct > 0 else "down"
     return cls, f"{arrow} {abs(delta_pct):.1f}%".replace(".", ",")
+
+
+def op_section_marker(section: str) -> None:
+    """Marcador invisível para CSS `:has()` — identifica coluna KPI."""
+    st.markdown(
+        f'<div class="op-section op-section-{section}" aria-hidden="true"></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def op_spacer(kind: str = "row") -> None:
@@ -622,6 +842,7 @@ def one_page_metric_card(
     extras_inline: bool = False,
     badges_class: str | None = None,
     footer_chips: list[tuple[str, str]] | None = None,
+    row_class: str | None = None,
 ) -> None:
     """Card compacto da One Page. `hero` e `compact` são mutuamente
     exclusivos visualmente — se ambos True, `hero` vence (atalho seguro
@@ -647,6 +868,8 @@ def one_page_metric_card(
         classes.append("compact")
     if wine_accent:
         classes.append("wine-accent")
+    if row_class:
+        classes.append(row_class)
 
     delta_html = ""
     if delta_pct is not None:
@@ -1448,6 +1671,7 @@ col_mkt, col_prev, col_vendas = st.columns([1.0, 1.25, 1.05], gap="medium")
 #          | Apl. +12 (badges: % Agend. +12, Custo / Apl. +12)
 # -----------------------------------------------------------------------------
 with col_mkt:
+    op_section_marker("mkt")
     section_title("Marketing", "leads × aplicações")
 
     # Toggle do hero — alterna métrica principal sem trocar o layout.
@@ -1505,6 +1729,7 @@ with col_mkt:
                 ("% Agend. -12",     pct(k_apl["pct_agendamento_apl_menos_12"])),
                 ("Custo / Apl. -12", brl(k_apl["custo_apl_menos_12"], casas=2)),
             ],
+            row_class="op-row-mkt-pair",
         )
     with r[1]:
         one_page_metric_card(
@@ -1517,6 +1742,7 @@ with col_mkt:
                 ("% Agend. +12",     pct(k_apl["pct_agendamento_apl_mais_12"])),
                 ("Custo / Apl. +12", brl(k_apl["custo_apl_mais_12"], casas=2)),
             ],
+            row_class="op-row-mkt-pair",
         )
 
 # -----------------------------------------------------------------------------
@@ -1532,6 +1758,7 @@ with col_mkt:
 # Regra rígida: -12 sempre na esquerda, +12 sempre na direita.
 # -----------------------------------------------------------------------------
 with col_prev:
+    op_section_marker("prev")
     section_title("Pré-vendas", "agendamentos por fonte")
 
     # L1 — Agendamentos consolidado (hero, full-width) com Custo /
@@ -1580,6 +1807,7 @@ with col_prev:
             "Agend. INBOUND",
             int_br(inb_tot),
             hint="agendamentos Inbound",
+            row_class="op-row-prev-pair",
             badges=[
                 ("Agend. -12 IN",
                  int_br(inb["agendamentos_menos_12"]),
@@ -1610,6 +1838,7 @@ with col_prev:
             "Agend. SS",
             int_br(ss_tot),
             hint="agendamentos Fábrica",
+            row_class="op-row-prev-pair",
             badges=[
                 ("Agend. -12 SS",
                  int_br(ss["agendamentos_menos_12"]),
@@ -1646,6 +1875,7 @@ with col_prev:
             "Comp. INBOUND",
             int_br(inb["comparecimentos"]),
             hint="comparecimentos Inbound",
+            row_class="op-row-prev-pair",
             badges=[
                 ("% Comp.",
                  pct(_safe_div(inb["comparecimentos"],
@@ -1657,6 +1887,7 @@ with col_prev:
             "Comp. SS",
             int_br(ss["comparecimentos"]),
             hint="comparecimentos Fábrica",
+            row_class="op-row-prev-pair",
             badges=[
                 ("% Comp.",
                  pct(_safe_div(ss["comparecimentos"],
@@ -1676,6 +1907,7 @@ with col_prev:
 # como métrica secundária no rodapé.
 # -----------------------------------------------------------------------------
 with col_vendas:
+    op_section_marker("vendas")
     section_title("Vendas / Financeiro", "meta proporcional ao período")
 
     # L1 — breakdown de Vendas (4 cards). % Conversão acoplado a Novos
@@ -1697,6 +1929,7 @@ with col_vendas:
                 ("Em call", int_br(novos_forma.get("em_call", 0))),
                 ("Follow",  int_br(novos_forma.get("follow", 0))),
             ],
+            row_class="op-row-vendas-top",
         )
     with r[1]:
         one_page_metric_card(
@@ -1705,6 +1938,7 @@ with col_vendas:
             delta_pct=delta_pct(k_vendas["ascensoes"],
                                 k_vendas_prev["ascensoes"]),
             compact=True,
+            row_class="op-row-vendas-top",
         )
     with r[2]:
         one_page_metric_card(
@@ -1713,6 +1947,7 @@ with col_vendas:
             delta_pct=delta_pct(k_vendas["renovacoes"],
                                 k_vendas_prev["renovacoes"]),
             compact=True,
+            row_class="op-row-vendas-top",
         )
     with r[3]:
         one_page_metric_card(
@@ -1721,6 +1956,7 @@ with col_vendas:
             delta_pct=delta_pct(k_vendas["indicacoes"],
                                 k_vendas_prev["indicacoes"]),
             compact=True,
+            row_class="op-row-vendas-top",
         )
 
     op_spacer("row")
@@ -1740,6 +1976,7 @@ with col_vendas:
             accent=True,
             hero=True,
             wine_accent=True,
+            row_class="op-row-vendas-hero",
         )
     with r[1]:
         one_page_metric_card(
@@ -1750,6 +1987,7 @@ with col_vendas:
             hint=f"{int_br(k_vendas['dias'])} dias",
             hero=True,
             wine_accent=True,
+            row_class="op-row-vendas-hero",
         )
 
     op_spacer("row")
@@ -1766,12 +2004,14 @@ with col_vendas:
             brl(k_vendas["cpa"]) if k_vendas["cpa"] else "—",
             delta_pct=delta_pct(k_vendas["cpa"], k_vendas_prev["cpa"]),
             hint="invest / vendas",
+            row_class="op-row-vendas-mid",
         )
     with r[1]:
         one_page_metric_card(
             "Média móvel",
             ritmo_fmt,
             hint="vendas/dia (21d)",
+            row_class="op-row-vendas-mid",
         )
     with r[2]:
         one_page_metric_card(
@@ -1781,6 +2021,7 @@ with col_vendas:
                                 k_vendas_prev["ticket_medio"]),
             hint="montante / vendas",
             accent=True,
+            row_class="op-row-vendas-mid",
         )
 
     op_spacer("row")
@@ -1799,6 +2040,7 @@ with col_vendas:
         delta_pct=delta_pct(k_vendas["receita"], k_vendas_prev["receita"]),
         hint=receita_hint,
         compact=True,
+        row_class="op-row-vendas-footer",
     )
 
 # =============================================================================

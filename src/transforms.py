@@ -1767,3 +1767,378 @@ def cancelamentos_pos_diagnostico(
         "qtd_emails_com_pos": int(emails["identificado_pos"].sum()) if not emails.empty and "identificado_pos" in emails.columns else 0,
         "qtd_emails_sem_pos": int((~emails["identificado_pos"]).sum()) if not emails.empty and "identificado_pos" in emails.columns else 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Lead In & Agendamentos (aba Executivas & Times)
+# Classificação de agendamentos: coluna `stage` de zoho_deals (validado
+# jun/2026). `triagem` é apenas informação complementar do CRM.
+# ---------------------------------------------------------------------------
+
+TRIAGEM_EXIBICAO_MAP = {
+    "Sem informação": "Sem informação",
+    "Não iniciada": "Não iniciada",
+    "Concluída": "Triagem concluída",
+    "Lead qualificado": "Lead qualificado",
+    "Lead desqualificado": "Lead desqualificado",
+}
+
+_STAGE_LEAD_IN = "Lead-in"
+_STAGE_RECEPCAO = "Recepção"
+_STAGE_REUNIAO_AGENDADA = "Reunião Agendada"
+_STAGE_REUNIAO_CONCLUIDA = "Reunião Concluída"
+_STAGES_CLASSIFICAVEIS = frozenset({_STAGE_RECEPCAO, _STAGE_REUNIAO_AGENDADA})
+
+# Rótulos amigáveis para `stage` (aba Lead In & Agendamentos).
+STAGE_EXIBICAO_MAP = {
+    _STAGE_RECEPCAO: "Não Qualificados",
+    _STAGE_REUNIAO_AGENDADA: "Qualificados",
+}
+STAGE_LABEL_NAO_QUALIFICADOS = "Não Qualificados"
+STAGE_LABEL_QUALIFICADOS = "Qualificados"
+STAGE_HINT_NAO_QUALIFICADOS = "Não Qualificados = stage Recepção"
+STAGE_HINT_QUALIFICADOS = "Qualificados = stage Reunião Agendada"
+STAGE_HINT_CLASSIFICAVEL = "Não Qualificados + Qualificados"
+STAGE_HINT_PCT_QUALIFICADOS = "Qualificados ÷ total classificável"
+STAGE_HINT_OUTRAS_ETAPAS = "fora de Não Qualificados/Qualificados"
+STAGE_ETAPA_CHART_ORDER = [STAGE_LABEL_NAO_QUALIFICADOS, STAGE_LABEL_QUALIFICADOS]
+_STAGE_NO_SHOW = frozenset({"No-show", "Não compareceu"})
+_STAGE_GANHO = frozenset({"Ganho", "Fechado Ganho"})
+_STAGE_PERDIDO = frozenset({"Perdido"})
+
+
+def _stage_norm(stage_series: pd.Series) -> pd.Series:
+    return stage_series.astype(str).str.strip()
+
+
+def _count_stage(stage_series: pd.Series, stage_value: str) -> int:
+    return int((_stage_norm(stage_series) == stage_value).sum())
+
+
+def _count_stages(stage_series: pd.Series, stage_values: set[str] | frozenset[str]) -> int:
+    return int(_stage_norm(stage_series).isin(stage_values).sum())
+
+
+def _triagem_agg_complemento(df: pd.DataFrame) -> dict[str, int]:
+    """Contagens por `triagem` — dimensão complementar à etapa (`stage`)."""
+    tri = (
+        df["triagem_tratada"].astype(str)
+        if "triagem_tratada" in df.columns
+        else pd.Series(dtype=str)
+    )
+    return {
+        "triagem_nao_iniciada": int((tri == "Não iniciada").sum()),
+        "triagem_concluida": int((tri == "Concluída").sum()),
+        "triagem_lead_qualificado": int((tri == "Lead qualificado").sum()),
+        "triagem_lead_desqualificado": int((tri == "Lead desqualificado").sum()),
+        "triagem_sem_info": int((tri == "Sem informação").sum()),
+    }
+
+
+def triagem_preparar_deals(df: pd.DataFrame) -> pd.DataFrame:
+    """Enriquece deals com rótulos amigáveis de triagem."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "triagem_tratada" in out.columns:
+        out["triagem_exibicao"] = out["triagem_tratada"].map(
+            TRIAGEM_EXIBICAO_MAP
+        ).fillna(out["triagem_tratada"].astype(str))
+    if "data_criacao" in out.columns:
+        out["data_criacao"] = pd.to_datetime(out["data_criacao"], errors="coerce")
+    return out
+
+
+def triagem_aplicar_exibicao(
+    df: pd.DataFrame,
+    exibicao: str,
+    df_oficiais_ativos: pd.DataFrame | None,
+    df_oficiais_todos: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Ativos: só closers do cadastro oficial. Histórico: todos, nomes canônicos."""
+    if df is None or df.empty or "executiva" not in df.columns:
+        return df
+    if exibicao == RANKING_EXIBICAO_HISTORICO:
+        cadastro = df_oficiais_todos
+        if cadastro is None or cadastro.empty:
+            cadastro = df_oficiais_ativos
+        return executivas_canonicalizar_executivas(df, cadastro)
+    return executivas_filtrar_time_oficial(df, df_oficiais_ativos)
+
+
+def triagem_contar_leads(
+    df_leads: pd.DataFrame,
+    times_sel: list | None,
+    exibicao: str,
+    df_oficiais_ativos: pd.DataFrame | None,
+    df_oficiais_todos: pd.DataFrame | None,
+) -> int:
+    """Total de leads no período (fonte leads_visao_geral), com filtros da aba."""
+    if df_leads is None or df_leads.empty:
+        return 0
+    out = df_leads.copy()
+    out = cancelamentos_pos_filtrar_times(out, times_sel)
+    out = triagem_aplicar_exibicao(
+        out,
+        exibicao,
+        df_oficiais_ativos,
+        df_oficiais_todos,
+    )
+    return len(out)
+
+
+def triagem_kpis(df_deals: pd.DataFrame, total_leads: int) -> dict:
+    """Resumo geral: leads, deals e agendamentos por `stage`."""
+    empty = {
+        "total_leads": total_leads,
+        "total_deals": 0,
+        "lead_in": 0,
+        "agendamentos_nao_qualificados": 0,
+        "agendamentos_qualificados": 0,
+        "total_agendamentos_classificaveis": 0,
+        "outras_etapas": 0,
+        "pct_qualificados": 0.0,
+        "reunioes_concluidas": 0,
+    }
+    if df_deals is None or df_deals.empty:
+        return empty
+    stage = df_deals["stage"] if "stage" in df_deals.columns else pd.Series(dtype=str)
+    ag_nao_qual = _count_stage(stage, _STAGE_RECEPCAO)
+    ag_qual = _count_stage(stage, _STAGE_REUNIAO_AGENDADA)
+    total_class = ag_nao_qual + ag_qual
+    total_deals = len(df_deals)
+    return {
+        "total_leads": total_leads,
+        "total_deals": total_deals,
+        "lead_in": _count_stage(stage, _STAGE_LEAD_IN),
+        "agendamentos_nao_qualificados": ag_nao_qual,
+        "agendamentos_qualificados": ag_qual,
+        "total_agendamentos_classificaveis": total_class,
+        "outras_etapas": total_deals - total_class,
+        "pct_qualificados": _safe_div(ag_qual, total_class) * 100,
+        "reunioes_concluidas": _count_stage(stage, _STAGE_REUNIAO_CONCLUIDA),
+    }
+
+
+def _stage_raw(stage_raw) -> str:
+    if stage_raw is None or (isinstance(stage_raw, float) and pd.isna(stage_raw)):
+        return ""
+    return str(stage_raw).strip()
+
+
+def _etapa_exibicao(stage_raw) -> str:
+    raw = _stage_raw(stage_raw)
+    if not raw:
+        return "Sem etapa"
+    return STAGE_EXIBICAO_MAP.get(raw, raw)
+
+
+def _etapa_entra_classificavel(stage_raw) -> bool:
+    return _stage_raw(stage_raw) in _STAGES_CLASSIFICAVEIS
+
+
+def _etapa_sort_key(etapa: str) -> int:
+    order = {v: i for i, v in enumerate(STAGE_ETAPA_CHART_ORDER)}
+    return order.get(etapa, 99)
+
+
+def triagem_por_etapa(df: pd.DataFrame) -> pd.DataFrame:
+    """Tabela agregada por `stage` com triagem como complemento informativo.
+
+    Lista todas as etapas presentes no recorte (inclui deals fora de
+    Recepção/Reunião Agendada) para explicar a diferença entre Total de
+    Deals e Total classificável.
+    """
+    cols = [
+        "etapa",
+        "entra_classificavel",
+        "total_deals",
+        "pct_deals",
+        "triagem_nao_iniciada",
+        "triagem_concluida",
+        "triagem_lead_qualificado",
+        "triagem_lead_desqualificado",
+        "triagem_sem_info",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    total = len(df)
+    rows = []
+    for etapa_raw, grp in df.groupby("stage", dropna=False):
+        triagem = _triagem_agg_complemento(grp)
+        n = len(grp)
+        etapa = _etapa_exibicao(etapa_raw)
+        rows.append({
+            "etapa": etapa,
+            "entra_classificavel": _etapa_entra_classificavel(etapa_raw),
+            "total_deals": n,
+            "pct_deals": _safe_div(n, total) * 100,
+            **triagem,
+        })
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(columns=cols)
+    out["_ord_class"] = out["entra_classificavel"].map({True: 0, False: 1})
+    out["_ord_etapa"] = out["etapa"].map(_etapa_sort_key)
+    return out.sort_values(
+        ["_ord_class", "_ord_etapa", "total_deals", "etapa"],
+        ascending=[True, True, False, True],
+    ).drop(columns=["_ord_class", "_ord_etapa"]).reset_index(drop=True)
+
+
+def triagem_por_executiva(df: pd.DataFrame) -> pd.DataFrame:
+    """Tabela por executiva/closer — agendamentos por `stage`."""
+    cols = [
+        "executiva",
+        "total_deals",
+        "lead_in",
+        "agendamentos_nao_qualificados",
+        "agendamentos_qualificados",
+        "total_classificavel",
+        "pct_qualificados",
+        "reuniao_concluida",
+        "no_show",
+        "ganho",
+        "perdido",
+    ]
+    if df is None or df.empty or "executiva" not in df.columns:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for executiva, grp in df.groupby("executiva", dropna=False):
+        stage = grp["stage"] if "stage" in grp.columns else pd.Series(dtype=str)
+        ag_nao_qual = _count_stage(stage, _STAGE_RECEPCAO)
+        ag_qual = _count_stage(stage, _STAGE_REUNIAO_AGENDADA)
+        total_class = ag_nao_qual + ag_qual
+        rows.append({
+            "executiva": executiva,
+            "total_deals": len(grp),
+            "lead_in": _count_stage(stage, _STAGE_LEAD_IN),
+            "agendamentos_nao_qualificados": ag_nao_qual,
+            "agendamentos_qualificados": ag_qual,
+            "total_classificavel": total_class,
+            "pct_qualificados": _safe_div(ag_qual, total_class) * 100,
+            "reuniao_concluida": _count_stage(stage, _STAGE_REUNIAO_CONCLUIDA),
+            "no_show": _count_stages(stage, _STAGE_NO_SHOW),
+            "ganho": _count_stages(stage, _STAGE_GANHO),
+            "perdido": _count_stages(stage, _STAGE_PERDIDO),
+        })
+    out = pd.DataFrame(rows)
+    return out.sort_values("total_deals", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Agendamentos do Funil absoluto (bi.vw_dashboard_comercial_executivas_rw)
+# ---------------------------------------------------------------------------
+
+def funil_agendamentos_kpis(df: pd.DataFrame) -> dict:
+    """KPIs sobre activities do funil cruzadas com zoho_deals.stage atual."""
+    empty = {
+        "total": 0,
+        "recepcao": 0,
+        "reuniao_agendada": 0,
+        "total_classificavel": 0,
+        "outras_etapas": 0,
+        "pct_qualificados": 0.0,
+        "sem_deal": 0,
+    }
+    if df is None or df.empty:
+        return empty
+    stage = df["stage"] if "stage" in df.columns else pd.Series(dtype=str)
+    recepcao = _count_stage(stage, _STAGE_RECEPCAO)
+    reuniao_ag = _count_stage(stage, _STAGE_REUNIAO_AGENDADA)
+    total_class = recepcao + reuniao_ag
+    total = len(df)
+    sem_deal = 0
+    if "deal_id" in df.columns:
+        sem_deal = int(
+            (df["deal_id"].isna() | (df["deal_id"].astype(str).str.strip() == "")).sum()
+        )
+    return {
+        "total": total,
+        "recepcao": recepcao,
+        "reuniao_agendada": reuniao_ag,
+        "total_classificavel": total_class,
+        "outras_etapas": total - total_class,
+        "pct_qualificados": _safe_div(reuniao_ag, total_class) * 100,
+        "sem_deal": sem_deal,
+    }
+
+
+def funil_agendamentos_por_stage(df: pd.DataFrame) -> pd.DataFrame:
+    """Distribuição dos agendamentos do funil por stage atual do deal."""
+    cols = [
+        "etapa",
+        "entra_classificavel",
+        "total_agendamentos",
+        "pct_agendamentos",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    total = len(df)
+    rows = []
+    for etapa_raw, grp in df.groupby("stage", dropna=False):
+        etapa = _etapa_exibicao(etapa_raw)
+        n = len(grp)
+        rows.append({
+            "etapa": etapa,
+            "entra_classificavel": _etapa_entra_classificavel(etapa_raw),
+            "total_agendamentos": n,
+            "pct_agendamentos": _safe_div(n, total) * 100,
+        })
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(columns=cols)
+    out["_ord_class"] = out["entra_classificavel"].map({True: 0, False: 1})
+    out["_ord_etapa"] = out["etapa"].map(_etapa_sort_key)
+    return out.sort_values(
+        ["_ord_class", "_ord_etapa", "total_agendamentos", "etapa"],
+        ascending=[True, True, False, True],
+    ).drop(columns=["_ord_class", "_ord_etapa"]).reset_index(drop=True)
+
+
+def funil_agendamentos_por_executiva(df: pd.DataFrame) -> pd.DataFrame:
+    """Agendamentos do funil por executiva — classificação por `stage` do deal."""
+    cols = [
+        "executiva",
+        "total_agendamentos",
+        "nao_qualificados",
+        "qualificados",
+        "total_classificavel",
+        "pct_qualificados",
+        "reuniao_concluida",
+        "no_show",
+        "ganho",
+        "lead_in",
+        "outras_etapas",
+    ]
+    if df is None or df.empty or "executiva" not in df.columns:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for executiva, grp in df.groupby("executiva", dropna=False):
+        stage = grp["stage"] if "stage" in grp.columns else pd.Series(dtype=str)
+        nao_qual = _count_stage(stage, _STAGE_RECEPCAO)
+        qual = _count_stage(stage, _STAGE_REUNIAO_AGENDADA)
+        total_class = nao_qual + qual
+        total = len(grp)
+        rows.append({
+            "executiva": executiva,
+            "total_agendamentos": total,
+            "nao_qualificados": nao_qual,
+            "qualificados": qual,
+            "total_classificavel": total_class,
+            "pct_qualificados": _safe_div(qual, total_class) * 100,
+            "reuniao_concluida": _count_stage(stage, _STAGE_REUNIAO_CONCLUIDA),
+            "no_show": _count_stages(stage, _STAGE_NO_SHOW),
+            "ganho": _count_stages(stage, _STAGE_GANHO),
+            "lead_in": _count_stage(stage, _STAGE_LEAD_IN),
+            "outras_etapas": total - total_class,
+        })
+    out = pd.DataFrame(rows)
+    return out.sort_values(
+        ["total_agendamentos", "qualificados", "executiva"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)

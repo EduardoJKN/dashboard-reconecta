@@ -304,6 +304,34 @@ _ORIGEM_CHIP_CLS = {
 }
 
 
+def _qual_split_html(items: list[tuple[str, str]]) -> str:
+    """Bloco compacto Qualificados / Não Qualificados (nowrap por chip)."""
+    if not items:
+        return ""
+    chip_htmls = [
+        f'<span class="mcard-qual-chip">'
+        f'<span class="lbl">{html.escape(lbl)}:</span> '
+        f'<span class="val">{html.escape(str(val))}</span>'
+        f"</span>"
+        for lbl, val in items
+    ]
+    inline_parts: list[str] = []
+    for i, chip in enumerate(chip_htmls):
+        if i > 0:
+            inline_parts.append(
+                '<span class="mcard-qual-sep" aria-hidden="true">·</span>'
+            )
+        inline_parts.append(chip)
+    return (
+        '<div class="mcard-qual-split">'
+        f'<div class="mcard-qual-inline">{"".join(inline_parts)}</div>'
+        '<div class="mcard-qual-stack">'
+        f'{"".join(chip_htmls)}'
+        "</div>"
+        "</div>"
+    )
+
+
 def metric_card_v2(
     label: str,
     value: str,
@@ -311,6 +339,7 @@ def metric_card_v2(
     hint: str | None = None,
     accent: bool = False,
     breakdown: list[tuple[str, str]] | None = None,
+    qual_split: list[tuple[str, str]] | None = None,
     origens: dict | None = None,
 ) -> None:
     """Card Looker-style:
@@ -337,7 +366,9 @@ def metric_card_v2(
                  if hint else "")
 
     break_html = ""
-    if breakdown:
+    if qual_split:
+        break_html = _qual_split_html(qual_split)
+    elif breakdown:
         rows = "".join(
             f'<div class="mcard-break-row"><span class="k">{html.escape(k)}</span>'
             f'<span class="v">{html.escape(v)}</span></div>'
