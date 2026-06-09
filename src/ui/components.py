@@ -332,6 +332,115 @@ def _qual_split_html(items: list[tuple[str, str]]) -> str:
     )
 
 
+def _origens_chip_html(chip_lbl: str, chip_val: str) -> str:
+    chip_cls = _ORIGEM_CHIP_CLS.get(chip_lbl, "")
+    stripped = str(chip_val).strip()
+    is_empty = (
+        stripped in ("—", "-", "0")
+        or stripped.startswith("0 ")
+        or stripped.startswith("0/")
+        or stripped.startswith("0,0%")
+    )
+    extra = " empty" if is_empty else ""
+    return (
+        f'<span class="mcard-origens-chip {chip_cls}{extra}">'
+        f'<span class="lbl">{html.escape(chip_lbl)}</span>'
+        f'<span class="val">{html.escape(stripped)}</span>'
+        "</span>"
+    )
+
+
+def _metric_card_resumo_html(
+    *,
+    label: str,
+    label_attr: str,
+    value: str,
+    val_cls: str,
+    delta_html: str,
+    hint_html: str,
+    breakdown: list[tuple[str, str]] | None,
+    breakdown_placeholder: bool,
+    origens: dict | None,
+) -> str:
+    """Layout fixo da linha executiva (Visão Geral Pré-vendas)."""
+    if breakdown:
+        cost_lbl, cost_val = breakdown[0]
+        cost_html = (
+            f'<div class="mcard-cost">'
+            f"<span>{html.escape(cost_lbl)}</span>"
+            f"<strong>{html.escape(str(cost_val))}</strong>"
+            f"</div>"
+        )
+    elif breakdown_placeholder:
+        cost_html = (
+            '<div class="mcard-cost mcard-cost-placeholder" aria-hidden="true">'
+            "<span>&nbsp;</span><strong>&nbsp;</strong>"
+            "</div>"
+        )
+    else:
+        cost_html = ""
+
+    if origens:
+        title = origens.get("title", "Por origem")
+        chips = origens.get("chips") or []
+        muted = origens.get("muted")
+        chips_html = "".join(
+            _origens_chip_html(lbl, val) for lbl, val in chips
+        )
+        origin_html = (
+            f'<div class="mcard-origin-block">'
+            f'<span class="mcard-origens-title">{html.escape(title)}</span>'
+            f'<div class="mcard-origens-chips">{chips_html}</div>'
+            f"</div>"
+        )
+        if muted:
+            m_lbl, m_val = muted
+            footer_html = (
+                f'<div class="mcard-footer">'
+                f'<span class="lbl">{html.escape(m_lbl)}</span>'
+                f'<span class="val">{html.escape(str(m_val))}</span>'
+                f"</div>"
+            )
+        else:
+            footer_html = (
+                '<div class="mcard-footer mcard-footer-placeholder" '
+                'aria-hidden="true">'
+                "<span>&nbsp;</span><span>&nbsp;</span>"
+                "</div>"
+            )
+    else:
+        origin_html = (
+            '<div class="mcard-origin-block mcard-origin-placeholder" '
+            'aria-hidden="true">'
+            '<span class="mcard-origens-title">&nbsp;</span>'
+            '<div class="mcard-origens-chips">&nbsp;</div>'
+            "</div>"
+        )
+        footer_html = (
+            '<div class="mcard-footer mcard-footer-placeholder" '
+            'aria-hidden="true">'
+            "<span>&nbsp;</span><span>&nbsp;</span>"
+            "</div>"
+        )
+
+    return (
+        f'<div class="mcard mcard-resumo">'
+        f'<div class="mcard-header-block">'
+        f'<div class="mcard-head">'
+        f'<span class="mcard-label"{label_attr}>{html.escape(label)}</span>'
+        f"{delta_html}"
+        f"</div>"
+        f'<div class="{val_cls}">{html.escape(str(value))}</div>'
+        f"{hint_html}"
+        f"</div>"
+        f"{cost_html}"
+        f'<div class="mcard-resumo-spacer" aria-hidden="true"></div>'
+        f"{origin_html}"
+        f"{footer_html}"
+        f"</div>"
+    )
+
+
 def metric_card_v2(
     label: str,
     value: str,
@@ -341,6 +450,10 @@ def metric_card_v2(
     breakdown: list[tuple[str, str]] | None = None,
     qual_split: list[tuple[str, str]] | None = None,
     origens: dict | None = None,
+    variant: str | None = None,
+    breakdown_placeholder: bool = False,
+    help: str | None = None,
+    card_class: str | None = None,
 ) -> None:
     """Card Looker-style:
     - header: label (esq.) + delta pill opcional (dir.)
@@ -356,14 +469,50 @@ def metric_card_v2(
         }
       Cada chip ganha classe CSS .vsl / .se / .ag por label conhecido;
       valores '—' ou '0' recebem .empty pra atenuar visualmente.
+
+    `variant="resumo"` — layout alto com áreas fixas (main + origem) para
+    alinhar cards em linhas densas (ex.: Visão Geral Pré-vendas).
+
+    `breakdown_placeholder=True` — reserva altura do bloco de custo quando
+    o card não tem breakdown (mantém alinhamento entre cards vizinhos).
+
+    `help` — tooltip nativo no título (regras técnicas sem poluir o card).
     """
     delta_html = ""
     if delta_pct is not None:
         cls, txt = _fmt_delta(delta_pct)
         delta_html = f'<span class="mcard-delta {cls}">{html.escape(txt)}</span>'
 
-    hint_html = (f'<div class="mcard-hint">{html.escape(hint)}</div>'
-                 if hint else "")
+    label_attr = f' title="{html.escape(help)}"' if help else ""
+
+    if hint:
+        hint_html = f'<div class="mcard-hint">{html.escape(hint)}</div>'
+    elif variant == "resumo":
+        hint_html = (
+            '<div class="mcard-hint mcard-hint-placeholder" '
+            'aria-hidden="true">&nbsp;</div>'
+        )
+    else:
+        hint_html = ""
+
+    val_cls = "mcard-value accent" if accent else "mcard-value"
+
+    if variant == "resumo":
+        st.markdown(
+            _metric_card_resumo_html(
+                label=label,
+                label_attr=label_attr,
+                value=str(value),
+                val_cls=val_cls,
+                delta_html=delta_html,
+                hint_html=hint_html,
+                breakdown=breakdown,
+                breakdown_placeholder=breakdown_placeholder,
+                origens=origens,
+            ),
+            unsafe_allow_html=True,
+        )
+        return
 
     break_html = ""
     if qual_split:
@@ -378,34 +527,16 @@ def metric_card_v2(
 
     origens_html = ""
     if origens:
-        title  = origens.get("title", "Por origem")
-        chips  = origens.get("chips") or []
-        muted  = origens.get("muted")
-
-        chip_html_parts = []
-        for chip_lbl, chip_val in chips:
-            chip_cls = _ORIGEM_CHIP_CLS.get(chip_lbl, "")
-            # "vazio": valor "—" (denom zero) ou "0" exato. Não atenua
-            # quando há algum dígito > 0 ou aparece percentual não-nulo.
-            stripped = str(chip_val).strip()
-            is_empty = (
-                stripped in ("—", "-", "0")
-                or stripped.startswith("0 ")
-                or stripped.startswith("0/")
-                or stripped.startswith("0,0%")
-            )
-            extra = " empty" if is_empty else ""
-            chip_html_parts.append(
-                f'<span class="mcard-origens-chip {chip_cls}{extra}">'
-                f'<span class="lbl">{html.escape(chip_lbl)}</span>'
-                f'<span class="val">{html.escape(stripped)}</span>'
-                f'</span>'
-            )
-        chips_html = (
-            f'<div class="mcard-origens-chips">{"".join(chip_html_parts)}</div>'
-            if chip_html_parts else ""
+        title = origens.get("title", "Por origem")
+        chips = origens.get("chips") or []
+        muted = origens.get("muted")
+        chips_html = "".join(
+            _origens_chip_html(lbl, val) for lbl, val in chips
         )
-
+        chips_wrap = (
+            f'<div class="mcard-origens-chips">{chips_html}</div>'
+            if chips_html else ""
+        )
         muted_html = ""
         if muted:
             m_lbl, m_val = muted
@@ -413,29 +544,31 @@ def metric_card_v2(
                 f'<div class="mcard-origens-muted">'
                 f'<span class="lbl">{html.escape(m_lbl)}</span>'
                 f'<span class="val">{html.escape(str(m_val))}</span>'
-                f'</div>'
+                f"</div>"
             )
-
         origens_html = (
             f'<div class="mcard-origens">'
             f'<span class="mcard-origens-title">{html.escape(title)}</span>'
-            f'{chips_html}'
-            f'{muted_html}'
-            f'</div>'
+            f"{chips_wrap}"
+            f"{muted_html}"
+            f"</div>"
         )
 
-    val_cls = "mcard-value accent" if accent else "mcard-value"
+    card_cls = "mcard"
+    if card_class:
+        card_cls += f" {card_class}"
+
     st.markdown(
-        f'<div class="mcard">'
+        f'<div class="{card_cls}">'
         f'<div class="mcard-head">'
-        f'<span class="mcard-label">{html.escape(label)}</span>'
-        f'{delta_html}'
-        f'</div>'
+        f'<span class="mcard-label"{label_attr}>{html.escape(label)}</span>'
+        f"{delta_html}"
+        f"</div>"
         f'<div class="{val_cls}">{html.escape(str(value))}</div>'
-        f'{hint_html}'
-        f'{break_html}'
-        f'{origens_html}'
-        f'</div>',
+        f"{hint_html}"
+        f"{break_html}"
+        f"{origens_html}"
+        f"</div>",
         unsafe_allow_html=True,
     )
 

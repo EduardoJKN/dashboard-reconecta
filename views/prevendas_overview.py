@@ -23,6 +23,8 @@ from src.prevendas_transforms import (
     prevendas_sdrs_brutos_para_oficial,
 )
 from src.repositories import (
+    get_executivas,
+    get_investimento_diario,
     get_prevendas_cohort_agendamentos,
     get_prevendas_cohort_leads,
     get_prevendas_leads_detalhe_diario,
@@ -32,11 +34,38 @@ from src.repositories import (
     get_prevendas_por_sdr,
     get_prevendas_sdrs_oficiais,
 )
+from src.transforms import _safe_div, visao_geral_kpis
 from src.team_classification import classify_sdr, is_known_sdr
 from src.ui.charts import bar_ranked, funnel
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
-from src.ui.theme import PALETTE, brl, int_br, pct
+from src.ui.theme import PALETTE, fmt_currency_br, fmt_percent_br, int_br
+
+# Colunas de tabela que recebem formatação pt-BR nesta página.
+_TABLE_MONEY_COLS = ("Montante", "Receita", "Ticket médio")
+_TABLE_PCT_COLS = (
+    "% Lead → Agend.", "% Agend. → Comp.", "% Comp. → Venda",
+    "% Lead +12 → Agend. +12", "% Agend. +12 → Comp. +12",
+    "% Comp. +12 → Venda +12",
+    "% Agendamento", "% Ag. +12", "% Ag. -12", "% Ag. Não atua",
+    "% Conversão", "% Conversão +12",
+)
+
+
+def _format_table_br(df: pd.DataFrame) -> pd.DataFrame:
+    """Aplica fmt_currency_br / fmt_percent_br nas colunas monetárias e %."""
+    out = df.copy()
+    for col in _TABLE_MONEY_COLS:
+        if col in out.columns:
+            out[col] = out[col].apply(
+                lambda v: fmt_currency_br(v) if pd.notna(v) else ""
+            )
+    for col in _TABLE_PCT_COLS:
+        if col in out.columns:
+            out[col] = out[col].apply(
+                lambda v: fmt_percent_br(v) if pd.notna(v) else ""
+            )
+    return out
 
 ctx = start_page(
     title="Visão Geral Pré-vendas",
@@ -79,6 +108,17 @@ try:
         leads_mais_12_card = leads_menos_12_card = leads_nao_atua_card = None
 except Exception:
     leads_mais_12_card = leads_menos_12_card = leads_nao_atua_card = None
+
+# Investido — mesma fonte/cálculo da One Page (Vendas/Financeiro):
+# `get_investimento_diario` → `bi.vw_investimento_diario` +
+# `visao_geral_kpis` (soma do período + contagem de dias em executivas).
+# Não responde a filtros de SDR/Tipo SDR (investimento é global).
+try:
+    df_inv_periodo = get_investimento_diario(ctx.data_ini, ctx.data_fim)
+    df_exec_inv = get_executivas(ctx.data_ini, ctx.data_fim)
+    k_investido = visao_geral_kpis(df_exec_inv, df_inv_periodo)
+except Exception:
+    k_investido = {"investimento": 0, "dias": 0}
 
 df_sdr_anotado = prevendas_anotar_sdr(df_sdr)
 df_sdr_filt = ctx.apply_filters(
@@ -266,7 +306,7 @@ def _origens_block_pct(num_map: dict[str, int],
                        den_map: dict[str, int],
                        title: str) -> dict | None:
     """Bloco de chips de CONVERSÃO (num / den) por origem. `—` quando o
-    denominador da origem é zero, `0,0%` quando há denominador mas zero
+    denominador da origem é zero, `0,00%` quando há denominador mas zero
     numerador. 'Sem origem' aparece como linha muted formatada
     'N/D · %' (ou apenas '—' quando D=0). Devolve None se ambos os
     mapas estiverem vazios."""
@@ -277,7 +317,7 @@ def _origens_block_pct(num_map: dict[str, int],
         d = den_map.get(label, 0)
         if d <= 0:
             return "—"
-        return pct(num_map.get(label, 0) / d * 100.0)
+        return fmt_percent_br(num_map.get(label, 0) / d * 100.0)
 
     chips = [(o, _conv_str(o)) for o in _CHIPS_PRIORIDADE]
     muted = None
@@ -286,7 +326,8 @@ def _origens_block_pct(num_map: dict[str, int],
     if d_so > 0:
         muted = (
             "Sem origem",
-            f"{int_br(n_so)}/{int_br(d_so)} · {pct(n_so / d_so * 100.0)}",
+            f"{int_br(n_so)}/{int_br(d_so)} · "
+            f"{fmt_percent_br(n_so / d_so * 100.0)}",
         )
     return {"title": title, "chips": chips, "muted": muted}
 
@@ -314,6 +355,14 @@ origens_block_vendas       = _origens_block_pct(
     vendas_origem_map,      ag_exibidos_origem_map,
     title="Conv. ag. → venda",
 )
+
+# Custos unitários — investido global (One Page) ÷ quantidade da etapa no card.
+_investido_total = float(k_investido.get("investimento") or 0)
+
+
+def _custo_por_etapa(qtd) -> str:
+    return fmt_currency_br(_safe_div(_investido_total, qtd))
+
 
 # ---------------------------------------------------------------------------
 # Resumo do período
@@ -353,15 +402,23 @@ with c0:
         "Leads totais",
         int_br(k["leads"]),
         hint=leads_hint,
+        breakdown=[("Custo / Lead", _custo_por_etapa(k["leads"]))],
         origens=origens_block_leads,
+        variant="resumo",
     )
 with c1:
     metric_card_v2(
         "Agendamentos criados",
         int_br(k["agendamentos_criados"]),
-        hint="zoho_activities.created_time::date · status_reuniao IS NOT NULL",
         accent=True,
+        breakdown=[("Custo / Ag. criado",
+                    _custo_por_etapa(k["agendamentos_criados"]))],
         origens=origens_block_ag_criados,
+        variant="resumo",
+        help=(
+            "zoho_activities.created_time::date · "
+            "status_reuniao IS NOT NULL"
+        ),
     )
 with c2:
     metric_card_v2(
@@ -372,48 +429,74 @@ with c2:
             f"Vencidos removidos: {int_br(agendamentos_vencidos)} · "
             f"Exibido: {int_br(agendamentos_exibidos)}"
         ),
+        breakdown=[("Custo / Agend.",
+                    _custo_por_etapa(agendamentos_exibidos))],
         origens=origens_block_ag_exibidos,
+        variant="resumo",
     )
 with c3:
     metric_card_v2(
         "Agendamentos +12",
         int_br(k["agendamentos_mais_12"]),
-        hint="classificado = 'Atua +12' via ext_reconecta.leads",
+        breakdown=[("Custo / Ag. +12",
+                    _custo_por_etapa(k["agendamentos_mais_12"]))],
         origens=origens_block_ag_mais_12,
+        variant="resumo",
+        help="classificado = 'Atua +12' via ext_reconecta.leads",
     )
 with c4:
     metric_card_v2(
         "Comparecimentos",
         int_br(k["comparecimentos"]),
-        hint="status_reuniao IN ('Concluída','Concluído')",
+        breakdown=[("Custo / Comp.",
+                    _custo_por_etapa(k["comparecimentos"]))],
         origens=origens_block_comp,
+        variant="resumo",
+        help="status_reuniao IN ('Concluída','Concluído')",
     )
 with c5:
     metric_card_v2(
         "Vendas",
         int_br(k["vendas"]),
-        hint="zoho_deals.stage = 'Ganho' · tipo_venda = 'Novo cliente'",
         origens=origens_block_vendas,
+        variant="resumo",
+        breakdown_placeholder=True,
+        help=(
+            "zoho_deals.stage = 'Ganho' · "
+            "tipo_venda = 'Novo cliente'"
+        ),
     )
 
 # Linha 2 — financeiro / eficiência
-r2c1, r2c2, r2c3, r2c4 = st.columns(4, gap="small")
+r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns(5, gap="small")
+_fin_card = dict(card_class="prevendas-finance")
 with r2c1:
     metric_card_v2("Montante",
-                   brl(k["montante"]) if k["montante"] else "—",
-                   hint="SUM(amount) da base_dados")
+                   fmt_currency_br(k["montante"]),
+                   hint="SUM(amount) da base_dados",
+                   **_fin_card)
 with r2c2:
-    metric_card_v2("Receita",
-                   brl(k["receita"]) if k["receita"] else "—",
-                   hint="SUM(receita) da base_dados")
+    metric_card_v2(
+        "Investido",
+        fmt_currency_br(k_investido["investimento"]),
+        hint=f"{int_br(k_investido['dias'])} dias",
+        **_fin_card,
+    )
 with r2c3:
-    metric_card_v2("Taxa de comparecimento",
-                   pct(k["taxa_comparecimento"]) if k["taxa_comparecimento"] else "—",
-                   hint="comparecimentos ÷ agendamentos exibidos (bruto - vencidas)")
+    metric_card_v2("Receita",
+                   fmt_currency_br(k["receita"]),
+                   hint="SUM(receita) da base_dados",
+                   **_fin_card)
 with r2c4:
+    metric_card_v2("Taxa de comparecimento",
+                   fmt_percent_br(k["taxa_comparecimento"]),
+                   hint="comparecimentos ÷ agendamentos exibidos (bruto - vencidas)",
+                   **_fin_card)
+with r2c5:
     metric_card_v2("Ticket médio",
-                   brl(k["ticket_medio"]) if k["ticket_medio"] else "—",
-                   hint="montante ÷ vendas")
+                   fmt_currency_br(k["ticket_medio"]),
+                   hint="montante ÷ vendas",
+                   **_fin_card)
 
 # ---------------------------------------------------------------------------
 # Filtro local de Funil de Origem (VSL / SE / AG / Sem origem).
@@ -502,7 +585,7 @@ if all(v == 0 for v in values):
     st.info("Sem dados no período.")
 else:
     st.plotly_chart(
-        funnel(labels, values, height=320, show_dropoff=True),
+        funnel(labels, values, height=320, show_dropoff=True, pct_casas=2),
         use_container_width=True,
     )
 
@@ -814,7 +897,7 @@ with col_detalhe:
                     label_receita = "Receita"
                 metric_card_v2(
                     label_receita,
-                    f"R$ {receita_val:,.0f}".replace(",", "."),
+                    fmt_currency_br(receita_val),
                     hint=("receita dos deals ganhos"
                           if label_receita == "Receita"
                           else "montante dos deals ganhos"),
@@ -951,9 +1034,11 @@ with col_detalhe:
                     ]
                     cols_full = [c for c, _ in cols_map_top
                                  if c in linhas.columns]
-                    tabela_full = linhas[cols_full].rename(
-                        columns={c: lbl for c, lbl in cols_map_top
-                                 if c in cols_full}
+                    tabela_full = _format_table_br(
+                        linhas[cols_full].rename(
+                            columns={c: lbl for c, lbl in cols_map_top
+                                     if c in cols_full}
+                        )
                     )
                     cfg_full = {
                         "#": st.column_config.NumberColumn("#", format="%d"),
@@ -971,12 +1056,12 @@ with col_detalhe:
                             "Data da venda", format="DD/MM/YYYY"
                         )
                     if "Montante" in tabela_full.columns:
-                        cfg_full["Montante"] = st.column_config.NumberColumn(
-                            "Montante", format="R$ %.2f"
+                        cfg_full["Montante"] = st.column_config.TextColumn(
+                            "Montante"
                         )
                     if "Receita" in tabela_full.columns:
-                        cfg_full["Receita"] = st.column_config.NumberColumn(
-                            "Receita", format="R$ %.2f"
+                        cfg_full["Receita"] = st.column_config.TextColumn(
+                            "Receita"
                         )
                     st.dataframe(
                         tabela_full,
@@ -1158,14 +1243,14 @@ else:
 
             def _fmt_n_pct(n, denom) -> str:
                 """Formata 'N (P,P%)'. Denominador zero → só o número.
-                Usa vírgula decimal pt-BR. Aceita None/NaN como 0."""
+                Percentual com 2 casas pt-BR. Aceita None/NaN como 0."""
                 try:
                     n_int = int(n) if pd.notna(n) else 0
                 except (TypeError, ValueError):
                     n_int = 0
                 if denom and denom > 0:
-                    pct = n_int / float(denom) * 100.0
-                    return f"{n_int} ({pct:.1f}%)".replace(".", ",")
+                    pct_val = n_int / float(denom) * 100.0
+                    return f"{n_int} ({fmt_percent_br(pct_val)})"
                 return f"{n_int}"
 
             if modo_view == "Números":
@@ -1199,7 +1284,7 @@ else:
                     "Vendas +12":       _num_small("Vendas +12"),
                 }
             elif modo_view == "Percentuais":
-                tabela_view = pd.DataFrame({
+                tabela_view = _format_table_br(pd.DataFrame({
                     "#":                tabela["#"],
                     "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
                     "% Agendamento":    tabela["pct_agend"],
@@ -1208,17 +1293,20 @@ else:
                     "% Ag. Não atua":   tabela["pct_agend_nao_atua"],
                     "% Conversão":      tabela["pct_conversao"],
                     "% Conversão +12":  tabela["pct_conv_+12"],
-                })
+                }))
+                _txt_small = lambda label: st.column_config.TextColumn(  # noqa: E731
+                    label, width="small"
+                )
                 column_config_oport = {
                     "#":                _num_small("#"),
                     "SDR / Pré-vendas": st.column_config.TextColumn(
                         "SDR / Pré-vendas", width="medium"),
-                    "% Agendamento":    _num_small("% Agendamento",   "%.1f%%"),
-                    "% Ag. +12":        _num_small("% Ag. +12",       "%.1f%%"),
-                    "% Ag. -12":        _num_small("% Ag. -12",       "%.1f%%"),
-                    "% Ag. Não atua":   _num_small("% Ag. Não atua",  "%.1f%%"),
-                    "% Conversão":      _num_small("% Conversão",     "%.1f%%"),
-                    "% Conversão +12":  _num_small("% Conversão +12", "%.1f%%"),
+                    "% Agendamento":    _txt_small("% Agendamento"),
+                    "% Ag. +12":        _txt_small("% Ag. +12"),
+                    "% Ag. -12":        _txt_small("% Ag. -12"),
+                    "% Ag. Não atua":   _txt_small("% Ag. Não atua"),
+                    "% Conversão":      _txt_small("% Conversão"),
+                    "% Conversão +12":  _txt_small("% Conversão +12"),
                 }
             else:  # "Números + Percentuais" — célula = "N (P,P%)"
                 # Denominadores conforme spec:
@@ -1249,7 +1337,7 @@ else:
                                           zip(tabela["vendas_+12"], tabela["agend_+12"])],
                 })
                 # Células viram texto — Streamlit alinha texto à esquerda.
-                # `width="small"` cabe "999 (100,0%)" sem quebrar.
+                # `width="small"` cabe "999 (100,00%)" sem quebrar.
                 _txt_small = lambda label: st.column_config.TextColumn(  # noqa: E731
                     label, width="small"
                 )
@@ -1287,8 +1375,8 @@ else:
                 f"**{int_br(total_oport)} oport.** · "
                 f"**{int_br(total_agend)} agend.** · "
                 f"**{int_br(total_vendas)} vendas** · "
-                f"% Agendamento **{pct_agend_g:.1f}%** · "
-                f"% Conversão **{pct_conv_g:.1f}%**. "
+                f"% Agendamento **{fmt_percent_br(pct_agend_g)}** · "
+                f"% Conversão **{fmt_percent_br(pct_conv_g)}**. "
                 "**% Conversão = Vendas / Agendamentos** (padrão Looker). "
                 "Oportunidades = `zoho_deals` criados no período; "
                 "agendamentos = activities Consulta/Indicação no período; "
@@ -1431,12 +1519,12 @@ with st.expander("Ver dados do período (diário, semanal ou mensal)"):
         tabela = tabela[cols_presentes].rename(
             columns={orig: label for orig, label in cols_map if orig in cols_presentes}
         )
+        tabela = _format_table_br(tabela)
 
         column_config = {
             "Período": st.column_config.TextColumn("Período"),
         }
-        # Volumes (inteiros) — formato implícito do dataframe já cuida disso,
-        # mas garantimos com NumberColumn quando útil pra alinhamento.
+        # Volumes (inteiros)
         for col_int in (
             "Leads", "Leads +12", "Leads -12",
             "Agendamentos", "Agendamentos +12",
@@ -1447,29 +1535,10 @@ with st.expander("Ver dados do período (diário, semanal ou mensal)"):
                 column_config[col_int] = st.column_config.NumberColumn(
                     col_int, format="%d"
                 )
-        # Conversões em %
-        for col_pct in (
-            "% Lead → Agend.", "% Agend. → Comp.", "% Comp. → Venda",
-            "% Lead +12 → Agend. +12", "% Agend. +12 → Comp. +12",
-            "% Comp. +12 → Venda +12",
-        ):
-            if col_pct in tabela.columns:
-                column_config[col_pct] = st.column_config.NumberColumn(
-                    col_pct, format="%.1f%%"
-                )
-        # Financeiro
-        if "Montante" in tabela.columns:
-            column_config["Montante"] = st.column_config.NumberColumn(
-                "Montante", format="R$ %.2f"
-            )
-        if "Receita" in tabela.columns:
-            column_config["Receita"] = st.column_config.NumberColumn(
-                "Receita", format="R$ %.2f"
-            )
-        if "Ticket médio" in tabela.columns:
-            column_config["Ticket médio"] = st.column_config.NumberColumn(
-                "Ticket médio", format="R$ %.2f"
-            )
+        _txt_col = lambda label: st.column_config.TextColumn(label)  # noqa: E731
+        for col_fmt in _TABLE_PCT_COLS + _TABLE_MONEY_COLS:
+            if col_fmt in tabela.columns:
+                column_config[col_fmt] = _txt_col(col_fmt)
 
         st.caption(
             "**Funil por período.** Volumes dedup por `activity_id` "
@@ -1478,7 +1547,7 @@ with st.expander("Ver dados do período (diário, semanal ou mensal)"):
             "combinada (4 fontes em OR): `zoho_deals.lead_classification`, "
             "`zoho_deals.qualificacao`, `zoho_deals.classificado_cal` e "
             "`ext_reconecta.leads.classificado`. Conversões = razão dos "
-            "totais (não média das taxas diárias). Denominador 0 ⇒ 0,0%. "
+            "totais (não média das taxas diárias). Denominador 0 ⇒ 0,00%. "
             "Semana usa janela fixa 1-7 / 8-14 / 15-21 / 22-28 / 29-31."
         )
         st.dataframe(
@@ -1836,12 +1905,14 @@ with st.expander("Ver leads/agendamentos detalhados"):
         cols_det_presentes = [
             orig for orig, _ in cols_map_det if orig in tabela_view.columns
         ]
-        tabela_view = tabela_view[cols_det_presentes].rename(
-            columns={
-                orig: label
-                for orig, label in cols_map_det
-                if orig in cols_det_presentes
-            }
+        tabela_view = _format_table_br(
+            tabela_view[cols_det_presentes].rename(
+                columns={
+                    orig: label
+                    for orig, label in cols_map_det
+                    if orig in cols_det_presentes
+                }
+            )
         )
 
         column_config_det = {
@@ -1860,12 +1931,12 @@ with st.expander("Ver leads/agendamentos detalhados"):
                 "Data da venda", format="DD/MM/YYYY"
             )
         if "Montante" in tabela_view.columns:
-            column_config_det["Montante"] = st.column_config.NumberColumn(
-                "Montante", format="R$ %.2f"
+            column_config_det["Montante"] = st.column_config.TextColumn(
+                "Montante"
             )
         if "Receita" in tabela_view.columns:
-            column_config_det["Receita"] = st.column_config.NumberColumn(
-                "Receita", format="R$ %.2f"
+            column_config_det["Receita"] = st.column_config.TextColumn(
+                "Receita"
             )
 
         st.caption(f"{len(tabela_view)} linha(s) no recorte exibido.")
@@ -2018,7 +2089,7 @@ with st.expander(
             def _fmt_pct(v):
                 if v is None or pd.isna(v):
                     return ""
-                return f"{v:.2f}%".replace(".", ",")
+                return fmt_percent_br(v)
 
             # ----- Paleta azul progressiva (claro → escuro) -----
             # NaN → "" (fundo padrão escuro do dataframe).

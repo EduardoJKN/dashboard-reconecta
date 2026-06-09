@@ -419,8 +419,14 @@ def bar_qualif_pre_split(
     df: pd.DataFrame,
     *,
     height: int = 280,
+    pct_mode: str = "share",
 ) -> go.Figure:
-    """Barras Com Pré vs Não Qualif. com rótulo `valor (percentual do total)`."""
+    """Barras Com Pré vs Não Qualif. com rótulo `valor (percentual)`.
+
+    pct_mode:
+      - ``share``: percentual do total do gráfico (agendamentos)
+      - ``avanco``: taxa comparecimentos ÷ agendamentos da dimensão
+    """
     data = df.copy()
     ymax = float(data["valor"].max() or 1)
     labels: list[str] = []
@@ -450,7 +456,11 @@ def bar_qualif_pre_split(
             "%{y:,.0f} · %{customdata}<extra></extra>"
         ),
         customdata=[
-            f"{float(p):.1f}% do total".replace(".", ",")
+            (
+                f"{float(p):.1f}% comp. sobre agend.".replace(".", ",")
+                if pct_mode == "avanco"
+                else f"{float(p):.1f}% do total".replace(".", ",")
+            )
             for p in data["pct_total"]
         ],
     ))
@@ -531,7 +541,7 @@ def donut(df: pd.DataFrame, names: str, values: str,
 # ---------------------------------------------------------------------------
 
 def funnel(labels: list[str], values: list[float], height: int = 320,
-           show_dropoff: bool = False) -> go.Figure:
+           show_dropoff: bool = False, pct_casas: int = 1) -> go.Figure:
     """Funil padrão do projeto.
 
     Quando `show_dropoff=True`, cada estágio (a partir do 2º) ganha uma linha
@@ -577,7 +587,7 @@ def funnel(labels: list[str], values: list[float], height: int = 320,
                 texts.append(
                     f"<b>{valor_fmt}</b><br>"
                     f"<span style='font-size:0.78em;opacity:0.85'>"
-                    f"↓ {pct(drop)} queda"
+                    f"↓ {pct(drop, casas=pct_casas)} queda"
                     f"</span>"
                 )
             else:

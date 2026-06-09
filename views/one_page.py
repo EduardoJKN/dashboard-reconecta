@@ -31,7 +31,11 @@ Performance via `@st.cache_data(ttl=600)` em todos os repositories.
 from __future__ import annotations
 
 import html
-from datetime import timedelta
+import logging
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -1511,6 +1515,904 @@ def _render_indicadores_semanais(df_semanal: pd.DataFrame) -> None:
 
 
 # =============================================================================
+# Performance — medição, cache por bloco e deduplicação de queries.
+# Repositórios mantêm @st.cache_data global; aqui cacheamos o resultado
+# agregado de cada seção com TTL próprio e chaves independentes.
+#
+# Índices candidatos (validar nomes reais antes de criar no banco):
+#   ext_reconecta.leads          → created_at, lower(btrim(email))
+#   fdw_reconecta.typeform_*     → created_at, classificado
+#   public.zoho_deals            → closing_date, stage, tipo_venda, email
+#   public.zoho_activities       → created_time, activity_type, what_id
+#   fdw_reconecta.anuncios       → date_start (investimento legado One Page)
+#   bi.vw_investimento_diario    → data (investimento cards Vendas)
+# =============================================================================
+
+logger = logging.getLogger("reconecta.onepage.perf")
+
+_TTL_OP_CARDS = 600       # 10 min — cards principais (Marketing/Pré-vendas/Vendas)
+_TTL_OP_CHARTS = 1800     # 30 min — reservado para caches de série/gráfico
+_TTL_OP_AUX = 3600        # 60 min — cadastros e auxiliares de longa validade
+
+_OP_PERF_SESSION_KEY = "_onepage_perf_timings"
+
+
+def _op_reset_perf_timings() -> None:
+    st.session_state[_OP_PERF_SESSION_KEY] = []
+
+
+def _op_record_perf(block: str, seconds: float, detail: str = "") -> None:
+    st.session_state.setdefault(_OP_PERF_SESSION_KEY, []).append(
+        {"block": block, "seconds": seconds, "detail": detail},
+    )
+    msg = f"{block} carregou em {seconds:.2f}s"
+    if detail:
+        msg += f" ({detail})"
+    logger.info(msg)
+
+
+@contextmanager
+def _op_timed_block(block: str, detail: str = ""):
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        _op_record_perf(block, time.perf_counter() - t0, detail)
+
+
+def _op_log_query(name: str, t0: float) -> None:
+    logger.info("  query %s: %.2fs", name, time.perf_counter() - t0)
+
+
+def _ensure_op_css() -> None:
+    """Injeta CSS dos cards uma vez por sessão (evita markdown repetido)."""
+    if st.session_state.get("_op_css_injected"):
+        return
+    st.markdown(_OP_CARD_CSS, unsafe_allow_html=True)
+    st.session_state["_op_css_injected"] = True
+
+
+def _op_clear_onepage_caches() -> None:
+    load_onepage_marketing_cached.clear()
+    load_onepage_prevendas_cached.clear()
+    load_onepage_vendas_financeiro_cached.clear()
+
+
+def _op_render_perf_panel() -> None:
+    timings = st.session_state.get(_OP_PERF_SESSION_KEY) or []
+    if not timings:
+        return
+    with st.expander("Diagnóstico de performance", expanded=False):
+        for entry in timings:
+            extra = f" — {entry['detail']}" if entry.get("detail") else ""
+            st.caption(f"**{entry['block']}**: {entry['seconds']:.2f}s{extra}")
+        total = sum(e["seconds"] for e in timings)
+        st.caption(f"**Total medido**: {total:.2f}s")
+
+
+# =============================================================================
+# Carga setorizada — cada bloco consulta e renderiza de forma independente.
+# =============================================================================
+
+
+@dataclass
+class _MarketingSectionData:
+    k_apl: dict = field(default_factory=dict)
+    k_apl_prev: dict = field(default_factory=dict)
+    df_one: pd.DataFrame = field(default_factory=pd.DataFrame)
+    df_one_prev: pd.DataFrame = field(default_factory=pd.DataFrame)
+    error: str | None = None
+
+
+@dataclass
+class _PrevendasSectionData:
+    k_prev: dict = field(default_factory=dict)
+    por_fonte: dict = field(default_factory=dict)
+    df_prev_dia: pd.DataFrame = field(default_factory=pd.DataFrame)
+    df_prev_fonte: pd.DataFrame = field(default_factory=pd.DataFrame)
+    error: str | None = None
+
+
+@dataclass
+class _VendasSectionData:
+    k_vendas: dict = field(default_factory=dict)
+    k_vendas_prev: dict = field(default_factory=dict)
+    media_movel_val: float | None = None
+    novos_forma: dict = field(default_factory=lambda: {"em_call": 0, "follow": 0})
+    df_exec: pd.DataFrame = field(default_factory=pd.DataFrame)
+    error: str | None = None
+
+
+def load_onepage_marketing(
+    data_ini: date,
+    data_fim: date,
+    prev_ini: date,
+    prev_fim: date,
+    excluir_testes_aplicacoes: bool,
+) -> _MarketingSectionData:
+    """Marketing — regra legada (typeform + anúncios)."""
+    try:
+        t0 = time.perf_counter()
+        df_one = get_one_page_legacy_diario(
+            data_ini, data_fim,
+            excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+        )
+        _op_log_query("one_page_legacy_diario (atual)", t0)
+        t0 = time.perf_counter()
+        df_one_prev = get_one_page_legacy_diario(
+            prev_ini, prev_fim,
+            excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+        )
+        _op_log_query("one_page_legacy_diario (anterior)", t0)
+        return _MarketingSectionData(
+            k_apl=aplicacoes_kpis(df_one),
+            k_apl_prev=aplicacoes_kpis(df_one_prev),
+            df_one=df_one,
+            df_one_prev=df_one_prev,
+        )
+    except Exception as e:
+        empty = aplicacoes_kpis(pd.DataFrame())
+        return _MarketingSectionData(
+            k_apl=empty,
+            k_apl_prev=empty,
+            error=f"Falha ao consultar Marketing: {e}",
+        )
+
+
+@st.cache_data(ttl=_TTL_OP_CARDS, show_spinner=False)
+def load_onepage_marketing_cached(
+    data_ini: date,
+    data_fim: date,
+    prev_ini: date,
+    prev_fim: date,
+    excluir_testes_aplicacoes: bool,
+) -> _MarketingSectionData:
+    return load_onepage_marketing(
+        data_ini, data_fim, prev_ini, prev_fim, excluir_testes_aplicacoes,
+    )
+
+
+def load_onepage_prevendas(
+    data_ini: date,
+    data_fim: date,
+) -> _PrevendasSectionData:
+    """Pré-vendas — overview diário + quebra por fonte."""
+    base_fonte = {
+        m: 0.0
+        for m in (
+            "agendamentos", "agendamentos_vencidos",
+            "agendamentos_mais_12", "agendamentos_menos_12",
+            "agendamentos_criados", "agendamentos_ate_hoje",
+            "agendamentos_mais_12_ate_hoje", "agendamentos_menos_12_ate_hoje",
+            "comparecimentos", "comparecimentos_ate_hoje",
+            "vendas", "montante", "receita",
+        )
+    }
+    empty_fonte = {_FONTE_INBOUND: dict(base_fonte), _FONTE_SS: dict(base_fonte)}
+    try:
+        t0 = time.perf_counter()
+        df_prev_dia = get_prevendas_overview_diario(data_ini, data_fim)
+        _op_log_query("prevendas_overview_diario", t0)
+        t0 = time.perf_counter()
+        df_prev_fonte = get_one_page_prevendas_por_fonte(data_ini, data_fim)
+        _op_log_query("one_page_prevendas_por_fonte", t0)
+        return _PrevendasSectionData(
+            k_prev=prevendas_overview_kpis(df_prev_dia),
+            por_fonte=_prev_por_fonte(df_prev_fonte),
+            df_prev_dia=df_prev_dia,
+            df_prev_fonte=df_prev_fonte,
+        )
+    except Exception as e:
+        return _PrevendasSectionData(
+            por_fonte=empty_fonte,
+            error=f"Falha ao consultar Pré-vendas: {e}",
+        )
+
+
+@st.cache_data(ttl=_TTL_OP_CARDS, show_spinner=False)
+def load_onepage_prevendas_cached(
+    data_ini: date,
+    data_fim: date,
+) -> _PrevendasSectionData:
+    return load_onepage_prevendas(data_ini, data_fim)
+
+
+def load_onepage_vendas_financeiro(
+    data_ini: date,
+    data_fim: date,
+    prev_ini: date,
+    prev_fim: date,
+) -> _VendasSectionData:
+    """Vendas / Financeiro — executivas, investimento e auxiliares."""
+    try:
+        t0 = time.perf_counter()
+        df_exec = get_executivas(data_ini, data_fim)
+        _op_log_query("executivas (atual)", t0)
+        t0 = time.perf_counter()
+        df_inv = get_investimento_diario(data_ini, data_fim)
+        _op_log_query("investimento_diario (atual)", t0)
+        t0 = time.perf_counter()
+        df_exec_prev = get_executivas(prev_ini, prev_fim)
+        _op_log_query("executivas (anterior)", t0)
+        t0 = time.perf_counter()
+        df_inv_prev = get_investimento_diario(prev_ini, prev_fim)
+        _op_log_query("investimento_diario (anterior)", t0)
+        k_vendas = visao_geral_kpis(df_exec, df_inv)
+        k_vendas_prev = visao_geral_kpis(df_exec_prev, df_inv_prev)
+        try:
+            t0 = time.perf_counter()
+            k_vendas["indicacoes"] = get_one_page_indicacoes_fonte(data_ini, data_fim)
+            k_vendas_prev["indicacoes"] = get_one_page_indicacoes_fonte(
+                prev_ini, prev_fim,
+            )
+            _op_log_query("indicacoes_fonte", t0)
+        except Exception as e:
+            st.warning(f"Falha ao consultar Indic. (fonte): {e}")
+        novos_forma = {"em_call": 0, "follow": 0}
+        try:
+            t0 = time.perf_counter()
+            novos_forma = get_one_page_novos_forma_venda(data_ini, data_fim)
+            _op_log_query("novos_forma_venda", t0)
+        except Exception as e:
+            st.warning(f"Falha ao consultar Novos (forma venda): {e}")
+        media_movel_val = None
+        try:
+            t0 = time.perf_counter()
+            media_movel_val = get_media_movel_vendas()
+            _op_log_query("media_movel_vendas", t0)
+        except Exception:
+            pass
+        return _VendasSectionData(
+            k_vendas=k_vendas,
+            k_vendas_prev=k_vendas_prev,
+            media_movel_val=media_movel_val,
+            novos_forma=novos_forma,
+            df_exec=df_exec,
+        )
+    except Exception as e:
+        return _VendasSectionData(
+            k_vendas=visao_geral_kpis(pd.DataFrame(), pd.DataFrame()),
+            k_vendas_prev=visao_geral_kpis(pd.DataFrame(), pd.DataFrame()),
+            error=f"Falha ao consultar Vendas (executivas/investimento): {e}",
+        )
+
+
+@st.cache_data(ttl=_TTL_OP_CARDS, show_spinner=False)
+def load_onepage_vendas_financeiro_cached(
+    data_ini: date,
+    data_fim: date,
+    prev_ini: date,
+    prev_fim: date,
+) -> _VendasSectionData:
+    return load_onepage_vendas_financeiro(data_ini, data_fim, prev_ini, prev_fim)
+
+
+def _render_onepage_marketing(data: _MarketingSectionData) -> None:
+    """Coluna Marketing — cards de aplicações e ±12."""
+    op_section_marker("mkt")
+    section_title("Marketing", "leads × aplicações")
+    k_apl, k_apl_prev = data.k_apl, data.k_apl_prev
+    mkt_hero_opt = st.segmented_control(
+        "Métrica principal",
+        options=["Aplicações", "Leads Totais"],
+        default="Aplicações",
+        key="op_mkt_hero_metric",
+        label_visibility="collapsed",
+        required=True,
+    )
+    if mkt_hero_opt == "Leads Totais":
+        one_page_metric_card(
+            "Leads Totais",
+            int_br(k_apl["leads_totais"]),
+            delta_pct=delta_pct(k_apl["leads_totais"], k_apl_prev["leads_totais"]),
+            hint="e-mails únicos no período",
+            accent=True,
+            hero=True,
+            badges=[
+                ("% Aplic. / Leads", pct(k_apl["pct_aplicacoes"])),
+                ("CPL",              brl(k_apl["cpl"], casas=2)),
+            ],
+        )
+    else:
+        one_page_metric_card(
+            "Aplicações",
+            int_br(k_apl["aplicacoes"]),
+            delta_pct=delta_pct(k_apl["aplicacoes"], k_apl_prev["aplicacoes"]),
+            accent=True,
+            hero=True,
+            badges=[
+                ("% Agendamento", pct(k_apl["pct_agendamento_apl"])),
+                ("Custo / Apl.",  brl(k_apl["custo_aplicacao"], casas=2)),
+            ],
+        )
+    op_spacer("parent")
+    r = st.columns(2, gap="small")
+    with r[0]:
+        one_page_metric_card(
+            "Apl. -12",
+            int_br(k_apl["aplicacoes_menos_12"]),
+            delta_pct=delta_pct(
+                k_apl["aplicacoes_menos_12"], k_apl_prev["aplicacoes_menos_12"],
+            ),
+            badges=[
+                ("% Agend. -12",     pct(k_apl["pct_agendamento_apl_menos_12"])),
+                ("Custo / Apl. -12", brl(k_apl["custo_apl_menos_12"], casas=2)),
+            ],
+            row_class="op-row-mkt-pair",
+        )
+    with r[1]:
+        one_page_metric_card(
+            "Apl. +12",
+            int_br(k_apl["aplicacoes_mais_12"]),
+            delta_pct=delta_pct(
+                k_apl["aplicacoes_mais_12"], k_apl_prev["aplicacoes_mais_12"],
+            ),
+            accent=True,
+            badges=[
+                ("% Agend. +12",     pct(k_apl["pct_agendamento_apl_mais_12"])),
+                ("Custo / Apl. +12", brl(k_apl["custo_apl_mais_12"], casas=2)),
+            ],
+            row_class="op-row-mkt-pair",
+        )
+
+
+def _render_onepage_prevendas(
+    data: _PrevendasSectionData,
+    *,
+    inv_total: float,
+) -> None:
+    """Coluna Pré-vendas — agendamentos, fonte e comparecimentos."""
+    op_section_marker("prev")
+    section_title("Pré-vendas", "agendamentos por fonte")
+    k_prev = data.k_prev
+    inb = data.por_fonte[_FONTE_INBOUND]
+    ss = data.por_fonte[_FONTE_SS]
+    ag_bruto = int(k_prev.get("agendamentos", 0))
+    ag_venc = int(k_prev.get("vencidas", 0))
+    ag_exib = int(k_prev.get("agendamentos_exibidos", max(ag_bruto - ag_venc, 0)))
+    one_page_metric_card(
+        "Agendamentos",
+        int_br(ag_exib),
+        hint=f"vencidos: {int_br(ag_venc)}",
+        accent=True,
+        hero=True,
+        badges=[
+            ("Custo / Ag.", brl(_safe_div(inv_total, ag_exib), casas=2)),
+        ],
+    )
+    op_spacer("parent")
+    inb_tot = inb["agendamentos"]
+    ss_tot = ss["agendamentos"]
+    r = st.columns(2, gap="small")
+    with r[0]:
+        one_page_metric_card(
+            "Agend. INBOUND",
+            int_br(inb_tot),
+            hint="agendamentos Inbound",
+            row_class="op-row-prev-pair",
+            badges=[
+                ("Agend. -12 IN", int_br(inb["agendamentos_menos_12"]), [
+                    ("% Agend.", pct(_safe_div(inb["agendamentos_menos_12"], inb_tot) * 100)),
+                    ("Custo / Ag.", brl(_safe_div(inv_total, inb["agendamentos_menos_12"]), casas=2)),
+                ]),
+                ("Agend. +12 IN", int_br(inb["agendamentos_mais_12"]), [
+                    ("% Agend.", pct(_safe_div(inb["agendamentos_mais_12"], inb_tot) * 100)),
+                    ("Custo / Ag.", brl(_safe_div(inv_total, inb["agendamentos_mais_12"]), casas=2)),
+                ]),
+            ],
+        )
+    with r[1]:
+        one_page_metric_card(
+            "Agend. SS",
+            int_br(ss_tot),
+            hint="agendamentos Fábrica",
+            row_class="op-row-prev-pair",
+            badges=[
+                ("Agend. -12 SS", int_br(ss["agendamentos_menos_12"]), [
+                    ("% Agend.", pct(_safe_div(ss["agendamentos_menos_12"], ss_tot) * 100)),
+                    ("Custo / Ag.", brl(_safe_div(inv_total, ss["agendamentos_menos_12"]), casas=2)),
+                ]),
+                ("Agend. +12 SS", int_br(ss["agendamentos_mais_12"]), [
+                    ("% Agend.", pct(_safe_div(ss["agendamentos_mais_12"], ss_tot) * 100)),
+                    ("Custo / Ag.", brl(_safe_div(inv_total, ss["agendamentos_mais_12"]), casas=2)),
+                ]),
+            ],
+        )
+    op_spacer("row")
+    r = st.columns(2, gap="small")
+    with r[0]:
+        one_page_metric_card(
+            "Comp. INBOUND",
+            int_br(inb["comparecimentos"]),
+            hint="comparecimentos Inbound",
+            row_class="op-row-prev-pair",
+            badges=[("% Comp.", pct(_safe_div(inb["comparecimentos"], inb["agendamentos"]) * 100))],
+        )
+    with r[1]:
+        one_page_metric_card(
+            "Comp. SS",
+            int_br(ss["comparecimentos"]),
+            hint="comparecimentos Fábrica",
+            row_class="op-row-prev-pair",
+            badges=[("% Comp.", pct(_safe_div(ss["comparecimentos"], ss["agendamentos"]) * 100))],
+        )
+
+
+def _render_onepage_vendas(
+    data: _VendasSectionData,
+    *,
+    comparecimentos: float,
+) -> None:
+    """Coluna Vendas / Financeiro — breakdown e métricas financeiras."""
+    op_section_marker("vendas")
+    section_title("Vendas / Financeiro", "meta proporcional ao período")
+    k_vendas, k_vendas_prev = data.k_vendas, data.k_vendas_prev
+    pct_conversao = _safe_div(k_vendas["novos"], comparecimentos) * 100
+    r = st.columns(4, gap="small")
+    with r[0]:
+        one_page_metric_card(
+            "Novos",
+            int_br(k_vendas["novos"]),
+            delta_pct=delta_pct(k_vendas["novos"], k_vendas_prev["novos"]),
+            accent=True,
+            compact=True,
+            badges=[("% Conversão", pct(pct_conversao))],
+            badges_class="op-badges-novos",
+            footer_chips=[
+                ("Em call", int_br(data.novos_forma.get("em_call", 0))),
+                ("Follow",  int_br(data.novos_forma.get("follow", 0))),
+            ],
+            row_class="op-row-vendas-top",
+        )
+    with r[1]:
+        one_page_metric_card(
+            "Asc.",
+            int_br(k_vendas["ascensoes"]),
+            delta_pct=delta_pct(k_vendas["ascensoes"], k_vendas_prev["ascensoes"]),
+            compact=True,
+            row_class="op-row-vendas-top",
+        )
+    with r[2]:
+        one_page_metric_card(
+            "Renov.",
+            int_br(k_vendas["renovacoes"]),
+            delta_pct=delta_pct(k_vendas["renovacoes"], k_vendas_prev["renovacoes"]),
+            compact=True,
+            row_class="op-row-vendas-top",
+        )
+    with r[3]:
+        one_page_metric_card(
+            "Indic.",
+            int_br(k_vendas["indicacoes"]),
+            delta_pct=delta_pct(k_vendas["indicacoes"], k_vendas_prev["indicacoes"]),
+            compact=True,
+            row_class="op-row-vendas-top",
+        )
+    op_spacer("row")
+    r = st.columns(2, gap="small")
+    with r[0]:
+        one_page_metric_card(
+            "Montante",
+            brl(k_vendas["montante"]),
+            delta_pct=delta_pct(k_vendas["montante"], k_vendas_prev["montante"]),
+            hint=f"recebimento {pct(k_vendas['pct_recebimento'])}",
+            accent=True,
+            hero=True,
+            wine_accent=True,
+            row_class="op-row-vendas-hero",
+        )
+    with r[1]:
+        one_page_metric_card(
+            "Investido",
+            brl(k_vendas["investimento"]),
+            delta_pct=delta_pct(k_vendas["investimento"], k_vendas_prev["investimento"]),
+            hint=f"{int_br(k_vendas['dias'])} dias",
+            hero=True,
+            wine_accent=True,
+            row_class="op-row-vendas-hero",
+        )
+    op_spacer("row")
+    ritmo_fmt = (
+        f"{data.media_movel_val:.1f}".replace(".", ",")
+        if data.media_movel_val is not None else "—"
+    )
+    r = st.columns(3, gap="small")
+    with r[0]:
+        one_page_metric_card(
+            "CPA",
+            brl(k_vendas["cpa"]) if k_vendas["cpa"] else "—",
+            delta_pct=delta_pct(k_vendas["cpa"], k_vendas_prev["cpa"]),
+            hint="invest / vendas",
+            row_class="op-row-vendas-mid",
+        )
+    with r[1]:
+        one_page_metric_card(
+            "Média móvel",
+            ritmo_fmt,
+            hint="vendas/dia (21d)",
+            row_class="op-row-vendas-mid",
+        )
+    with r[2]:
+        one_page_metric_card(
+            "Ticket méd.",
+            brl(k_vendas["ticket_medio"]) if k_vendas["ticket_medio"] else "—",
+            delta_pct=delta_pct(k_vendas["ticket_medio"], k_vendas_prev["ticket_medio"]),
+            hint="montante / vendas",
+            accent=True,
+            row_class="op-row-vendas-mid",
+        )
+    op_spacer("row")
+    receita_hint = (
+        f"meta {brl(k_vendas['meta'])} · "
+        f"{pct(k_vendas['pct_atingimento'])} atingido"
+    )
+    one_page_metric_card(
+        "Receita / Vendido",
+        brl(k_vendas["receita"]),
+        delta_pct=delta_pct(k_vendas["receita"], k_vendas_prev["receita"]),
+        hint=receita_hint,
+        compact=True,
+        row_class="op-row-vendas-footer",
+    )
+
+
+def _render_onepage_tendencias_priory(df_one: pd.DataFrame) -> None:
+    """Gráficos prioritários — Leads × Aplicações e Investimento por dia."""
+    section_title("Tendências diárias", "evolução de leads, investimento e funil")
+    g_left, g_right = st.columns(2, gap="large")
+    with g_left:
+        st.markdown("**Leads × Aplicações** (regra Looker)")
+        df_evo = _df_evolucao_aplicacoes(df_one)
+        if df_evo.empty:
+            st.info("Sem série diária de Marketing no período.")
+        else:
+            _traces = [
+                ("Leads",      "leads_totais",        op_theme_color("gold"),       None,   2.5, 5),
+                ("Aplicações", "aplicacoes",          op_theme_color("wine_light"), None,   2.5, 5),
+                ("Apl. +12",   "aplicacoes_mais_12",  op_theme_color("plus_12"),    "dash", 2.0, 4),
+                ("Apl. -12",   "aplicacoes_menos_12", op_theme_color("minus_12"),   "dot",  2.0, 4),
+            ]
+            fig = go.Figure()
+            for name, col, color, dash, w, msz in _traces:
+                series = df_evo[col]
+                fmt_series = [int_br(v) for v in series]
+                fig.add_trace(go.Scatter(
+                    x=df_evo["data_ref"], y=series, name=name,
+                    customdata=[[v] for v in fmt_series],
+                    hovertemplate="%{customdata[0]}<extra></extra>",
+                    mode="lines+markers+text",
+                    text=annotate_adaptive(series, int_br),
+                    textposition="top center",
+                    textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
+                    cliponaxis=False,
+                    line=dict(color=color, width=w, dash=dash),
+                    marker=dict(size=msz),
+                ))
+            fig.update_layout(**_base_layout(height=320, unified=True))
+            _style_axes(fig)
+            style_temporal(fig)
+            op_chart_apply_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="op_chart_leads_apl")
+    with g_right:
+        st.markdown("**Investimento por dia**")
+        if df_one is None or df_one.empty or "investimento" not in df_one.columns:
+            st.info("Sem investimento registrado no período.")
+        else:
+            df_inv_one = df_one[["data_ref", "investimento"]].sort_values("data_ref")
+            inv_series = df_inv_one["investimento"]
+            fmt_inv = [brl(v) for v in inv_series]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df_inv_one["data_ref"], y=inv_series,
+                name="Investimento",
+                fill="tozeroy",
+                line=dict(color=op_theme_color("gold"), width=2.5),
+                fillcolor=op_theme_color("gold_fill"),
+                mode="lines+markers+text",
+                marker=dict(size=5),
+                customdata=[[v] for v in fmt_inv],
+                hovertemplate="%{customdata[0]}<extra></extra>",
+                text=annotate_adaptive(inv_series, brl),
+                textposition="top center",
+                textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
+                cliponaxis=False,
+            ))
+            fig.update_layout(**_base_layout(height=280, unified=True))
+            _style_axes(fig, money_axis="y")
+            style_temporal(fig)
+            op_chart_apply_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="op_chart_inv_dia")
+
+
+def _render_onepage_tendencias_extra(
+    df_prev_dia: pd.DataFrame,
+    df_exec: pd.DataFrame,
+) -> None:
+    """Gráficos secundários — agendamentos e funil ag/comp/vendas."""
+    g_left2, g_right2 = st.columns(2, gap="large")
+    with g_left2:
+        st.markdown("**Agendamentos × +12 / -12**")
+        if df_prev_dia is None or df_prev_dia.empty:
+            st.info("Sem série diária de Pré-vendas no período.")
+        else:
+            df_pd = df_prev_dia.sort_values("data_ref").copy()
+            df_pd["agendamentos_menos_12_aprox"] = (
+                df_pd["agendamentos"] - df_pd["agendamentos_mais_12"]
+            ).clip(lower=0)
+            _traces = [
+                ("Agendamentos",     "agendamentos",                op_theme_color("gold"),     None,   2.5, 5),
+                ("Ag. +12",          "agendamentos_mais_12",        op_theme_color("plus_12"),  "dash", 2.0, 4),
+                ("Ag. -12 (aprox.)", "agendamentos_menos_12_aprox", op_theme_color("minus_12"), "dot",  2.0, 4),
+            ]
+            fig = go.Figure()
+            for name, col, color, dash, w, msz in _traces:
+                series = df_pd[col]
+                fmt_series = [int_br(v) for v in series]
+                fig.add_trace(go.Scatter(
+                    x=df_pd["data_ref"], y=series, name=name,
+                    customdata=[[v] for v in fmt_series],
+                    hovertemplate="%{customdata[0]}<extra></extra>",
+                    mode="lines+markers+text",
+                    text=annotate_adaptive(series, int_br),
+                    textposition="top center",
+                    textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
+                    cliponaxis=False,
+                    line=dict(color=color, width=w, dash=dash),
+                    marker=dict(size=msz),
+                ))
+            fig.update_layout(**_base_layout(height=320, unified=True))
+            _style_axes(fig)
+            style_temporal(fig)
+            op_chart_apply_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="op_chart_ag_12")
+    with g_right2:
+        st.markdown("**Agendamentos × Comparecimentos × Vendas**")
+        if (df_prev_dia is None or df_prev_dia.empty
+                or df_exec is None or df_exec.empty):
+            st.info("Sem dados de Pré-vendas e/ou Vendas no período.")
+        else:
+            vendas_dia = df_exec.groupby("data_ref", as_index=False)["vendas"].sum()
+            merged = (
+                df_prev_dia[["data_ref", "agendamentos", "comparecimentos"]]
+                .merge(vendas_dia, on="data_ref", how="outer")
+                .fillna(0)
+                .sort_values("data_ref")
+            )
+            _traces = [
+                ("Agendamentos", "agendamentos",    op_theme_color("gold"),       None,  2.5, 5),
+                ("Comparec.",    "comparecimentos", op_theme_color("wine_light"), None,  2.5, 5),
+                ("Vendas",       "vendas",          op_theme_color("green"),      "dot", 2.5, 5),
+            ]
+            fig = go.Figure()
+            for name, col, color, dash, w, msz in _traces:
+                series = merged[col]
+                fmt_series = [int_br(v) for v in series]
+                fig.add_trace(go.Scatter(
+                    x=merged["data_ref"], y=series, name=name,
+                    customdata=[[v] for v in fmt_series],
+                    hovertemplate="%{customdata[0]}<extra></extra>",
+                    mode="lines+markers+text",
+                    text=annotate_adaptive(series, int_br),
+                    textposition="top center",
+                    textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
+                    cliponaxis=False,
+                    line=dict(color=color, width=w, dash=dash),
+                    marker=dict(size=msz),
+                ))
+            fig.update_layout(**_base_layout(height=320, unified=True))
+            _style_axes(fig)
+            style_temporal(fig)
+            op_chart_apply_theme(fig)
+            st.plotly_chart(fig, use_container_width=True, key="op_chart_funil")
+
+
+def _render_onepage_tabelas(
+    data_ini: date,
+    data_fim: date,
+    mkt: _MarketingSectionData,
+    prev: _PrevendasSectionData,
+    vendas: _VendasSectionData,
+) -> None:
+    """Tabelas analíticas — cada uma tolera ausência de dados da seção."""
+    df_prev_fonte = prev.df_prev_fonte
+    df_one = mkt.df_one
+    df_prev_dia = prev.df_prev_dia
+    df_exec = vendas.df_exec
+
+    section_title(
+        "Indicadores - Fonte de Lead",
+        "agendamentos líquidos · regra origem_final (Looker)",
+    )
+    tab_fonte = _tabela_indicadores_fonte(df_prev_fonte)
+    if tab_fonte.empty:
+        st.info("Sem dados de Pré-vendas por fonte no período.")
+    else:
+        tot_f = _total_prevendas_from_absolutes(
+            df_prev_fonte,
+            abs_cols=[
+                "agendamentos", "agendamentos_mais_12", "agendamentos_menos_12",
+                "comparecimentos", "vendas", "montante", "receita",
+            ],
+        )
+        total_row_f = {
+            "Fonte":             "Total do período",
+            "Agendamentos":      tot_f["agendamentos"],
+            "+12":               tot_f["agendamentos_mais_12"],
+            "% +12":             tot_f["pct_mais_12"],
+            "-12":               tot_f["agendamentos_menos_12"],
+            "% -12":             tot_f["pct_menos_12"],
+            "Comparecimento":    tot_f["comparecimentos"],
+            "Montante":          tot_f["montante"],
+            "Receita":           tot_f["receita"],
+            "% Recebimento":     tot_f["pct_recebimento"],
+            "% Conversão":       tot_f["pct_conversao"],
+            "% Venda":           tot_f["pct_venda"],
+            "% Comparecimento":  tot_f["pct_comparecimento"],
+        }
+        tab_fonte = pd.concat(
+            [tab_fonte, pd.DataFrame([total_row_f])],
+            ignore_index=True,
+        )
+        tab_fonte = _br_format_table(
+            tab_fonte,
+            money_cols=("Montante", "Receita"),
+            int_cols=("Agendamentos", "+12", "-12", "Comparecimento"),
+            pct_cols=("% +12", "% -12", "% Recebimento",
+                      "% Conversão", "% Venda", "% Comparecimento"),
+        )
+        st.dataframe(tab_fonte, use_container_width=True, hide_index=True)
+
+    section_title(
+        "Por Executiva",
+        "cálculo direto · zoho_deals + executivas_vendas (cadastro oficial)",
+    )
+    _modo_label = st.radio(
+        "Visualização de executivas",
+        options=("Ativas", "Todas / Histórico"),
+        index=0,
+        horizontal=True,
+        help=(
+            "Ativas: apenas executivas com `ativo='y'` no cadastro oficial.\n"
+            "Todas / Histórico: inclui inativas e IDs sem cadastro (para auditoria)."
+        ),
+        key="onepage_exec_modo",
+    )
+    _modo_arg = "ativas" if _modo_label == "Ativas" else "todas"
+    try:
+        rank_exec = get_one_page_por_executiva(data_ini, data_fim, _modo_arg)
+    except Exception as e:
+        st.warning(f"Falha ao consultar Por Executiva: {e}")
+        rank_exec = pd.DataFrame()
+    if rank_exec is None or rank_exec.empty:
+        st.info("Sem ranking de executivas no período.")
+    else:
+        cols_exec = [c for c in (
+            "executiva", "agendamentos", "comparecimentos", "vendas",
+            "montante", "receita",
+            "pct_recebimento", "pct_conversao", "pct_vendas", "pct_comparecimento",
+        ) if c in rank_exec.columns]
+        tab_exec = rank_exec[cols_exec].copy()
+        tab_exec_disp = tab_exec.rename(columns={
+            "executiva":          "Executiva",
+            "agendamentos":       "Agendamentos",
+            "comparecimentos":    "Comparec.",
+            "vendas":             "Vendas",
+            "montante":           "Montante",
+            "receita":            "Receita",
+            "pct_recebimento":    "% Recebimento",
+            "pct_conversao":      "% Conversão",
+            "pct_vendas":         "% Vendas",
+            "pct_comparecimento": "% Comparec.",
+        })
+        tot_e = _total_prevendas_from_absolutes(
+            tab_exec,
+            abs_cols=["agendamentos", "comparecimentos", "vendas", "montante", "receita"],
+        )
+        total_row_e = {
+            "Executiva":      "Total do período",
+            "Agendamentos":   tot_e["agendamentos"],
+            "Comparec.":      tot_e["comparecimentos"],
+            "Vendas":         tot_e["vendas"],
+            "Montante":       tot_e["montante"],
+            "Receita":        tot_e["receita"],
+            "% Recebimento":  tot_e["pct_recebimento"],
+            "% Conversão":    tot_e["pct_conversao"],
+            "% Vendas":       tot_e["pct_venda"],
+            "% Comparec.":    tot_e["pct_comparecimento"],
+        }
+        tab_exec_disp = pd.concat(
+            [tab_exec_disp, pd.DataFrame([total_row_e])],
+            ignore_index=True,
+        )
+        tab_exec_disp = _br_format_table(
+            tab_exec_disp,
+            money_cols=("Montante", "Receita"),
+            int_cols=("Agendamentos", "Comparec.", "Vendas"),
+            pct_cols=("% Recebimento", "% Conversão", "% Vendas", "% Comparec."),
+        )
+        st.dataframe(tab_exec_disp, use_container_width=True, hide_index=True)
+
+    section_title(
+        "Por SDR × Closer",
+        "cálculo direto · zoho_deals + executivas_pre_vendas / executivas_vendas",
+    )
+    _modo_sc_label = st.radio(
+        "Visualização SDR × Closer",
+        options=("Ativos", "Todas / Histórico"),
+        index=0,
+        horizontal=True,
+        help=(
+            "Ativos: SDR presente em `executivas_pre_vendas` e Closer com "
+            "`ativo='y'` no cadastro oficial.\n"
+            "Todas / Histórico: inclui inativas e IDs sem cadastro (para auditoria)."
+        ),
+        key="onepage_sc_modo",
+    )
+    _modo_sc_arg = "ativos" if _modo_sc_label == "Ativos" else "todas"
+    try:
+        df_prev_sc = get_one_page_sdr_closer(data_ini, data_fim, _modo_sc_arg)
+    except Exception as e:
+        st.warning(f"Falha ao consultar SDR × Closer: {e}")
+        df_prev_sc = pd.DataFrame()
+    tab_sc = _tabela_sdr_closer(df_prev_sc)
+    if tab_sc.empty:
+        st.info("Sem pares SDR × Closer com atividade no período.")
+    else:
+        tab_sc_disp = tab_sc.rename(columns={
+            "sdr":                "SDR",
+            "closer":             "Closer",
+            "agendamentos":       "Agendamentos",
+            "comparecimentos":    "Comparec.",
+            "vendas":             "Vendas",
+            "montante":           "Montante",
+            "receita":            "Receita",
+            "pct_recebimento":    "% Recebimento",
+            "pct_conversao":      "% Conversão",
+            "pct_vendas":         "% Vendas",
+            "pct_comparecimento": "% Comparec.",
+        })
+        tab_sc_disp = _br_format_table(
+            tab_sc_disp,
+            money_cols=("Montante", "Receita"),
+            int_cols=("Agendamentos", "Comparec.", "Vendas"),
+            pct_cols=("% Recebimento", "% Conversão", "% Vendas", "% Comparec."),
+        )
+        st.dataframe(
+            tab_sc_disp,
+            use_container_width=True,
+            hide_index=True,
+            height=420,
+        )
+        tot_sc = _total_prevendas_from_absolutes(
+            tab_sc,
+            abs_cols=["agendamentos", "comparecimentos", "vendas", "montante", "receita"],
+        )
+        _render_total_row(
+            cells=[
+                ("Total do período",                       "label"),
+                ("",                                        "txt"),
+                (int_br(tot_sc["agendamentos"]),            "accent"),
+                (int_br(tot_sc["comparecimentos"]),         "num"),
+                (int_br(tot_sc["vendas"]),                  "num"),
+                (brl(tot_sc["montante"]),                   "num"),
+                (brl(tot_sc["receita"]),                    "accent"),
+                (pct(tot_sc["pct_comparecimento"]),         "num"),
+                (pct(tot_sc["pct_conversao"]),              "num"),
+                (pct(tot_sc["pct_venda"]),                  "num"),
+                (pct(tot_sc["pct_recebimento"]),            "num"),
+            ],
+            weights=[1.5, 1.8, 0.95, 0.85, 0.75, 1.05, 1.05, 1.0, 0.95, 0.85, 1.0],
+        )
+
+    section_title(
+        "Indicadores semanais",
+        "matriz executiva · semanas no topo · métricas na lateral",
+    )
+    tab_sem = _tabela_semanal(df_one, df_prev_dia, df_exec)
+    _render_indicadores_semanais(tab_sem)
+
+
+# =============================================================================
 # Header — período apenas (decisão MVP: não usar canal nem
 # closer/times no header pra manter a visão executiva limpa).
 # =============================================================================
@@ -1535,909 +2437,88 @@ with _th_r:
 apply_one_page_theme()
 
 # =============================================================================
-# Carga
+# Painel executivo — carregamento setorizado (cards antes dos gráficos)
 # =============================================================================
-# Checkbox antes da query — mesma key do bloco Marketing (evita carregar com
-# flag defasada). Padrão True = e-mails únicos válidos, sem teste (Looker).
-excluir_testes_aplicacoes = st.checkbox(
-    "Excluir testes",
-    value=True,
-    key="onepage_excluir_testes_aplicacoes",
-    help=(
-        "Remove e-mails de teste/reconecta. Desmarcado inclui esses e-mails; "
-        "o card Aplicações sempre conta e-mails únicos com dados_completos."
-    ),
-)
+_op_reset_perf_timings()
+
+_cb_col, _refresh_col = st.columns([4, 1], gap="small")
+with _cb_col:
+    excluir_testes_aplicacoes = st.checkbox(
+        "Excluir testes",
+        value=True,
+        key="onepage_excluir_testes_aplicacoes",
+        help=(
+            "Remove e-mails de teste/reconecta. Desmarcado inclui esses e-mails; "
+            "o card Aplicações sempre conta e-mails únicos com dados_completos."
+        ),
+    )
+with _refresh_col:
+    if st.button(
+        "Atualizar dados",
+        key="onepage_refresh_cache",
+        help="Limpa o cache desta página e recarrega os blocos",
+        use_container_width=True,
+    ):
+        _op_clear_onepage_caches()
+        st.rerun()
+
 dias_periodo = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias_periodo - 1)
 
-# Vendas (executivas + investimento) — fontes oficiais
-try:
-    df_exec      = get_executivas(ctx.data_ini, ctx.data_fim)
-    df_inv       = get_investimento_diario(ctx.data_ini, ctx.data_fim)
-    df_exec_prev = get_executivas(prev_ini, prev_fim)
-    df_inv_prev  = get_investimento_diario(prev_ini, prev_fim)
-except Exception as e:
-    st.error(f"Falha ao consultar Vendas (executivas/investimento): {e}")
-    st.stop()
-
-# Marketing — regra LEGADA do One Page (typeform_aplicacoes + anuncios).
-# Substitui `mkt_visao_geral_periodo`/`_diario` nos cards e gráficos —
-# Aplicações deixam de ser `leads_qualificados` e passam a vir do
-# typeform específico do Looker.
-try:
-    df_one = get_one_page_legacy_diario(
-        ctx.data_ini,
-        ctx.data_fim,
-        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
-    )
-    df_one_prev = get_one_page_legacy_diario(
-        prev_ini,
-        prev_fim,
-        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
-    )
-except Exception as e:
-    st.error(f"Falha ao consultar One Page legado: {e}")
-    df_one      = pd.DataFrame()
-    df_one_prev = pd.DataFrame()
-
-# Pré-vendas
-# - `df_prev_dia`: alimenta o card consolidado de Agendamentos e a
-#   % Comparecimento via `prevendas_overview_kpis` (regra oficial).
-# - `df_prev_fonte`: alimenta os cards INBOUND/SS (regra origem_final do
-#   Looker — quebra por `zoho_deals.fonte_de_lead`, não por tipo de SDR).
-try:
-    df_prev_dia   = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
-    df_prev_fonte = get_one_page_prevendas_por_fonte(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.warning(f"Falha ao consultar Pré-vendas: {e}")
-    df_prev_dia   = pd.DataFrame()
-    df_prev_fonte = pd.DataFrame()
-
-# Média móvel — sempre últimos 21 dias (regra Looker)
-try:
-    media_movel_val = get_media_movel_vendas()
-except Exception:
-    media_movel_val = None
-
-# =============================================================================
-# KPIs base
-# =============================================================================
-k_apl      = aplicacoes_kpis(df_one)
-k_apl_prev = aplicacoes_kpis(df_one_prev)
-
-# Reaproveita o KPI oficial da Pré-vendas Visão Geral
-# (`src/prevendas_transforms.py`): garante que "Agendamentos" exiba
-# `agendamentos_exibidos = bruto - vencidas` e que `taxa_comparecimento`
-# use `comparecimentos / agendamentos_exibidos` — mesma regra validada
-# na página Pré-vendas. Evita re-implementar a fórmula localmente.
-k_prev = prevendas_overview_kpis(df_prev_dia)
-
-por_fonte = _prev_por_fonte(df_prev_fonte)
-
-k_vendas      = visao_geral_kpis(df_exec, df_inv)
-k_vendas_prev = visao_geral_kpis(df_exec_prev, df_inv_prev)
-
-# Card Indic. — regra Looker (`fonte_de_lead = 'Indicação'`), não a coluna
-# `indicacoes` da view (que classifica por `tipo_venda`). Pode sobrepor Novos.
-try:
-    k_vendas["indicacoes"] = get_one_page_indicacoes_fonte(
-        ctx.data_ini, ctx.data_fim,
-    )
-    k_vendas_prev["indicacoes"] = get_one_page_indicacoes_fonte(
-        prev_ini, prev_fim,
-    )
-except Exception as e:
-    st.warning(f"Falha ao consultar Indic. (fonte): {e}")
-
-# Sub-stats Em call / Follow no card Novos (forma_venda em zoho_deals).
-novos_forma = {"em_call": 0, "follow": 0}
-try:
-    novos_forma = get_one_page_novos_forma_venda(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.warning(f"Falha ao consultar Novos (forma venda): {e}")
-
-# =============================================================================
-# Painel executivo — 3 colunas (Marketing | Pré-vendas | Vendas).
-# Aproxima a leitura do One Page do Looker: cards mais próximos, blocos
-# alinhados em paralelo, menos altura desperdiçada. Os 3 section_titles
-# são curtos para não poluir o topo; a explicação completa das fontes
-# vive nas SQLs (`one_page_legacy_diario.sql`, `one_page_prevendas_por_
-# fonte.sql`) e nos hints dos próprios cards.
-# =============================================================================
-inb = por_fonte[_FONTE_INBOUND]
-ss  = por_fonte[_FONTE_SS]
-
-# Agendamentos consolidado (regra Pré-vendas Visão Geral)
-ag_bruto = int(k_prev.get("agendamentos", 0))
-ag_venc  = int(k_prev.get("vencidas", 0))
-ag_exib  = int(k_prev.get("agendamentos_exibidos", max(ag_bruto - ag_venc, 0)))
-
-# CSS dos cards locais — injetado uma vez, antes do KPI grid.
-# Idempotente (re-injeção a cada rerun apenas redefine as regras).
-st.markdown(_OP_CARD_CSS, unsafe_allow_html=True)
+_ensure_op_css()
 
 col_mkt, col_prev, col_vendas = st.columns([1.0, 1.25, 1.05], gap="medium")
 
-# -----------------------------------------------------------------------------
-# Coluna esquerda — Marketing / Aplicações
-# Estrutura Looker — cards compostos (cada Aplicação carrega seu próprio
-# % Agendamento + Custo/Apl. como mini-indicadores):
-#   Hero (Aplicações ↔ Leads Totais via toggle):
-#     - Aplicações:    badges = % Agendamento, Custo / Apl.
-#     - Leads Totais:  badges = % Aplic. / Leads, CPL
-#   Linha 2: Apl. -12 (badges: % Agend. -12, Custo / Apl. -12)
-#          | Apl. +12 (badges: % Agend. +12, Custo / Apl. +12)
-# -----------------------------------------------------------------------------
 with col_mkt:
-    op_section_marker("mkt")
-    section_title("Marketing", "leads × aplicações")
-
-    # Toggle do hero — alterna métrica principal sem trocar o layout.
-    # `required=True` evita o estado None (clicar no selecionado deselecta
-    # por padrão no segmented_control single-mode).
-    mkt_hero_opt = st.segmented_control(
-        "Métrica principal",
-        options=["Aplicações", "Leads Totais"],
-        default="Aplicações",
-        key="op_mkt_hero_metric",
-        label_visibility="collapsed",
-        required=True,
-    )
-    if mkt_hero_opt == "Leads Totais":
-        # Hero Leads — indicadores associados a Leads
-        one_page_metric_card(
-            "Leads Totais",
-            int_br(k_apl["leads_totais"]),
-            delta_pct=delta_pct(k_apl["leads_totais"],
-                                k_apl_prev["leads_totais"]),
-            hint="e-mails únicos no período",
-            accent=True,
-            hero=True,
-            badges=[
-                ("% Aplic. / Leads", pct(k_apl["pct_aplicacoes"])),
-                ("CPL",              brl(k_apl["cpl"], casas=2)),
-            ],
-        )
+    with st.spinner("Carregando Marketing..."):
+        with _op_timed_block("Marketing"):
+            _mkt_data = load_onepage_marketing_cached(
+                ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
+                excluir_testes_aplicacoes,
+            )
+    if _mkt_data.error:
+        st.error(_mkt_data.error)
     else:
-        # Hero Aplicações — % Agendamento total + custo médio por aplicação
-        one_page_metric_card(
-            "Aplicações",
-            int_br(k_apl["aplicacoes"]),
-            delta_pct=delta_pct(k_apl["aplicacoes"], k_apl_prev["aplicacoes"]),
-            accent=True,
-            hero=True,
-            badges=[
-                ("% Agendamento", pct(k_apl["pct_agendamento_apl"])),
-                ("Custo / Apl.",  brl(k_apl["custo_aplicacao"], casas=2)),
-            ],
-        )
+        _render_onepage_marketing(_mkt_data)
 
-    op_spacer("parent")
-
-    # Linha 2 — Aplic. ±12 (cards compostos, cada um com % e custo do
-    # próprio segmento)
-    r = st.columns(2, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Apl. -12",
-            int_br(k_apl["aplicacoes_menos_12"]),
-            delta_pct=delta_pct(k_apl["aplicacoes_menos_12"],
-                                k_apl_prev["aplicacoes_menos_12"]),
-            badges=[
-                ("% Agend. -12",     pct(k_apl["pct_agendamento_apl_menos_12"])),
-                ("Custo / Apl. -12", brl(k_apl["custo_apl_menos_12"], casas=2)),
-            ],
-            row_class="op-row-mkt-pair",
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Apl. +12",
-            int_br(k_apl["aplicacoes_mais_12"]),
-            delta_pct=delta_pct(k_apl["aplicacoes_mais_12"],
-                                k_apl_prev["aplicacoes_mais_12"]),
-            accent=True,
-            badges=[
-                ("% Agend. +12",     pct(k_apl["pct_agendamento_apl_mais_12"])),
-                ("Custo / Apl. +12", brl(k_apl["custo_apl_mais_12"], casas=2)),
-            ],
-            row_class="op-row-mkt-pair",
-        )
-
-# -----------------------------------------------------------------------------
-# Coluna central — Pré-vendas (INBOUND = fonte 'Inbound' / SS = fonte 'Fábrica')
-# Estrutura Looker — cards compostos (a quebra -12/+12 e a taxa de
-# comparecimento ficam acopladas ao card "pai" como badges, evitando
-# cards soltos que duplicam a hierarquia da informação):
-#   L1: Agendamentos (hero, largo)
-#   L2: Agend. INBOUND  (badges: Agend. -12 IN | Agend. +12 IN)
-#     | Agend. SS       (badges: Agend. -12 SS | Agend. +12 SS)
-#   L3: Comp. INBOUND  (badge: % Comp. Inbound)
-#     | Comp. SS       (badge: % Comp. SS)
-# Regra rígida: -12 sempre na esquerda, +12 sempre na direita.
-# -----------------------------------------------------------------------------
 with col_prev:
-    op_section_marker("prev")
-    section_title("Pré-vendas", "agendamentos por fonte")
+    with st.spinner("Carregando Pré-vendas..."):
+        with _op_timed_block("Pré-vendas"):
+            _prev_data = load_onepage_prevendas_cached(ctx.data_ini, ctx.data_fim)
+    if _prev_data.error:
+        st.error(_prev_data.error)
+    else:
+        _inv_total = float(_mkt_data.k_apl.get("investimento", 0) or 0)
+        _render_onepage_prevendas(_prev_data, inv_total=_inv_total)
 
-    # L1 — Agendamentos consolidado (hero, full-width) com Custo /
-    # Agendamento acoplado (investimento legado da query Looker / total
-    # de agendamentos exibidos no período).
-    one_page_metric_card(
-        "Agendamentos",
-        int_br(ag_exib),
-        hint=f"vencidos: {int_br(ag_venc)}",
-        accent=True,
-        hero=True,
-        badges=[
-            ("Custo / Ag.",
-             brl(_safe_div(k_apl["investimento"], ag_exib), casas=2)),
-        ],
-    )
-
-    op_spacer("parent")
-
-    # L2 — Consultas (Inbound | SS) com quebra ±12 acoplada como badges.
-    #
-    # Origem dos números ±12 acoplados:
-    #   - Fonte: `one_page_prevendas_por_fonte.sql` (1 row por fonte/dia,
-    #     agregada em Python pelo helper `_prev_por_fonte`).
-    #   - LÍQUIDO: o SQL já aplica `FILTER (WHERE status_reuniao <> 'Vencida')`
-    #     em `agendamentos_mais_12` / `agendamentos_menos_12` — vencidos
-    #     NÃO entram nestes cards. Mesma regra do hero "Agendamentos".
-    #   - Classificação: regra COMBINADA das 4 fontes (espelha
-    #     prevendas_overview_diario.sql): `lead_classification` OR
-    #     `qualificacao` OR `classificado_cal` (CRM) OR
-    #     `ext_reconecta.leads.classificado`.
-    #   - Fonte INBOUND/SS: `zoho_deals.fonte_de_lead` com CASE no SQL —
-    #     'Fábrica de Contatos' → SS; demais (Inbound, Reagendamento,
-    #     Follow-up, NULL) → INBOUND. ('Outbound' fica fora dos cards.)
-    #
-    # Cada badge ±12 carrega sub-stats (% por consulta + custo por
-    # consulta) — % usa o total de consultas da própria fonte como
-    # denominador; custo usa o investimento legado k_apl["investimento"]
-    # (mesma base do Custo / Agendamento do hero).
-    inv_total = k_apl["investimento"]
-    inb_tot   = inb["agendamentos"]
-    ss_tot    = ss["agendamentos"]
-    r = st.columns(2, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Agend. INBOUND",
-            int_br(inb_tot),
-            hint="agendamentos Inbound",
-            row_class="op-row-prev-pair",
-            badges=[
-                ("Agend. -12 IN",
-                 int_br(inb["agendamentos_menos_12"]),
-                 [
-                     ("% Agend.",
-                      pct(_safe_div(inb["agendamentos_menos_12"],
-                                    inb_tot) * 100)),
-                     ("Custo / Ag.",
-                      brl(_safe_div(inv_total,
-                                    inb["agendamentos_menos_12"]),
-                          casas=2)),
-                 ]),
-                ("Agend. +12 IN",
-                 int_br(inb["agendamentos_mais_12"]),
-                 [
-                     ("% Agend.",
-                      pct(_safe_div(inb["agendamentos_mais_12"],
-                                    inb_tot) * 100)),
-                     ("Custo / Ag.",
-                      brl(_safe_div(inv_total,
-                                    inb["agendamentos_mais_12"]),
-                          casas=2)),
-                 ]),
-            ],
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Agend. SS",
-            int_br(ss_tot),
-            hint="agendamentos Fábrica",
-            row_class="op-row-prev-pair",
-            badges=[
-                ("Agend. -12 SS",
-                 int_br(ss["agendamentos_menos_12"]),
-                 [
-                     ("% Agend.",
-                      pct(_safe_div(ss["agendamentos_menos_12"],
-                                    ss_tot) * 100)),
-                     ("Custo / Ag.",
-                      brl(_safe_div(inv_total,
-                                    ss["agendamentos_menos_12"]),
-                          casas=2)),
-                 ]),
-                ("Agend. +12 SS",
-                 int_br(ss["agendamentos_mais_12"]),
-                 [
-                     ("% Agend.",
-                      pct(_safe_div(ss["agendamentos_mais_12"],
-                                    ss_tot) * 100)),
-                     ("Custo / Ag.",
-                      brl(_safe_div(inv_total,
-                                    ss["agendamentos_mais_12"]),
-                          casas=2)),
-                 ]),
-            ],
-        )
-
-    op_spacer("row")
-
-    # L3 — Comparecimentos (Inbound | SS) com % próprio acoplado como badge
-    # (substitui o antigo card "% Comparecimento" geral, full-width).
-    r = st.columns(2, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Comp. INBOUND",
-            int_br(inb["comparecimentos"]),
-            hint="comparecimentos Inbound",
-            row_class="op-row-prev-pair",
-            badges=[
-                ("% Comp.",
-                 pct(_safe_div(inb["comparecimentos"],
-                               inb["agendamentos"]) * 100)),
-            ],
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Comp. SS",
-            int_br(ss["comparecimentos"]),
-            hint="comparecimentos Fábrica",
-            row_class="op-row-prev-pair",
-            badges=[
-                ("% Comp.",
-                 pct(_safe_div(ss["comparecimentos"],
-                               ss["agendamentos"]) * 100)),
-            ],
-        )
-
-# -----------------------------------------------------------------------------
-# Coluna direita — Vendas / Financeiro
-# Estrutura Looker:
-#   L1 (4 cards): Novos (badge: % Conversão = novos / comparecimentos) ·
-#                 Ascensões · Renovações · Indicações
-#   L2 (2 cards): Montante (hero accent) · Investido (hero)
-#   L3 (3 cards): CPA · Média móvel · Ticket médio
-#   L4 extra:     Receita / Vendido (compact, full-width)
-# Montante virou o destaque financeiro principal; Receita / Vendido ficou
-# como métrica secundária no rodapé.
-# -----------------------------------------------------------------------------
 with col_vendas:
-    op_section_marker("vendas")
-    section_title("Vendas / Financeiro", "meta proporcional ao período")
-
-    # L1 — breakdown de Vendas (4 cards). % Conversão acoplado a Novos
-    # (vendas novas / comparecimentos do período — base k_prev).
-    pct_conversao = _safe_div(
-        k_vendas["novos"], k_prev.get("comparecimentos", 0)
-    ) * 100
-    r = st.columns(4, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Novos",
-            int_br(k_vendas["novos"]),
-            delta_pct=delta_pct(k_vendas["novos"], k_vendas_prev["novos"]),
-            accent=True,
-            compact=True,
-            badges=[("% Conversão", pct(pct_conversao))],
-            badges_class="op-badges-novos",
-            footer_chips=[
-                ("Em call", int_br(novos_forma.get("em_call", 0))),
-                ("Follow",  int_br(novos_forma.get("follow", 0))),
-            ],
-            row_class="op-row-vendas-top",
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Asc.",
-            int_br(k_vendas["ascensoes"]),
-            delta_pct=delta_pct(k_vendas["ascensoes"],
-                                k_vendas_prev["ascensoes"]),
-            compact=True,
-            row_class="op-row-vendas-top",
-        )
-    with r[2]:
-        one_page_metric_card(
-            "Renov.",
-            int_br(k_vendas["renovacoes"]),
-            delta_pct=delta_pct(k_vendas["renovacoes"],
-                                k_vendas_prev["renovacoes"]),
-            compact=True,
-            row_class="op-row-vendas-top",
-        )
-    with r[3]:
-        one_page_metric_card(
-            "Indic.",
-            int_br(k_vendas["indicacoes"]),
-            delta_pct=delta_pct(k_vendas["indicacoes"],
-                                k_vendas_prev["indicacoes"]),
-            compact=True,
-            row_class="op-row-vendas-top",
-        )
-
-    op_spacer("row")
-
-    # L2 — Montante | Investido (2 cards hero). Montante é o destaque
-    # principal (accent). Hint usa `pct_recebimento` (receita / montante)
-    # — descreve quanto do montante já virou caixa, sem invadir a
-    # narrativa de "meta de receita" que pertence ao card Receita / Vendido.
-    r = st.columns(2, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Montante",
-            brl(k_vendas["montante"]),
-            delta_pct=delta_pct(k_vendas["montante"],
-                                k_vendas_prev["montante"]),
-            hint=f"recebimento {pct(k_vendas['pct_recebimento'])}",
-            accent=True,
-            hero=True,
-            wine_accent=True,
-            row_class="op-row-vendas-hero",
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Investido",
-            brl(k_vendas["investimento"]),
-            delta_pct=delta_pct(k_vendas["investimento"],
-                                k_vendas_prev["investimento"]),
-            hint=f"{int_br(k_vendas['dias'])} dias",
-            hero=True,
-            wine_accent=True,
-            row_class="op-row-vendas-hero",
-        )
-
-    op_spacer("row")
-
-    # L3 — CPA | Média móvel | Ticket médio (3 cards)
-    ritmo_fmt = (
-        f"{media_movel_val:.1f}".replace(".", ",")
-        if media_movel_val is not None else "—"
-    )
-    r = st.columns(3, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "CPA",
-            brl(k_vendas["cpa"]) if k_vendas["cpa"] else "—",
-            delta_pct=delta_pct(k_vendas["cpa"], k_vendas_prev["cpa"]),
-            hint="invest / vendas",
-            row_class="op-row-vendas-mid",
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Média móvel",
-            ritmo_fmt,
-            hint="vendas/dia (21d)",
-            row_class="op-row-vendas-mid",
-        )
-    with r[2]:
-        one_page_metric_card(
-            "Ticket méd.",
-            brl(k_vendas["ticket_medio"]) if k_vendas["ticket_medio"] else "—",
-            delta_pct=delta_pct(k_vendas["ticket_medio"],
-                                k_vendas_prev["ticket_medio"]),
-            hint="montante / vendas",
-            accent=True,
-            row_class="op-row-vendas-mid",
-        )
-
-    op_spacer("row")
-
-    # L4 — Receita / Vendido (full-width, compact — métrica secundária no
-    # rodapé da área financeira). Meta + atingimento descrevem a receita
-    # (pct_atingimento = receita / meta), por isso o hint da meta vive
-    # aqui e não no card de Montante.
-    receita_hint = (
-        f"meta {brl(k_vendas['meta'])} · "
-        f"{pct(k_vendas['pct_atingimento'])} atingido"
-    )
-    one_page_metric_card(
-        "Receita / Vendido",
-        brl(k_vendas["receita"]),
-        delta_pct=delta_pct(k_vendas["receita"], k_vendas_prev["receita"]),
-        hint=receita_hint,
-        compact=True,
-        row_class="op-row-vendas-footer",
-    )
-
-# =============================================================================
-# Gráficos
-# =============================================================================
-section_title("Tendências diárias", "evolução de leads, investimento e funil")
-
-g_left, g_right = st.columns(2, gap="large")
-
-# ---- 1. Evolução leads × aplicações ----------------------------------------
-with g_left:
-    st.markdown("**Leads × Aplicações** (regra Looker)")
-    df_evo = _df_evolucao_aplicacoes(df_one)
-    if df_evo.empty:
-        st.info("Sem série diária de Marketing no período.")
+    with st.spinner("Carregando Vendas / Financeiro..."):
+        with _op_timed_block("Vendas / Financeiro"):
+            _vendas_data = load_onepage_vendas_financeiro_cached(
+                ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
+            )
+    if _vendas_data.error:
+        st.error(_vendas_data.error)
     else:
-        # Specs por trace: (nome, coluna, cor, dash, espessura, tamanho marker).
-        # Formatter compartilhado (int_br) — todas as séries são contagens.
-        # Cores lidas do tema ativo (`op_theme_color`) — substitui PALETTE
-        # direto pra acompanhar troca de tema.
-        _traces = [
-            ("Leads",      "leads_totais",        op_theme_color("gold"),       None,   2.5, 5),
-            ("Aplicações", "aplicacoes",          op_theme_color("wine_light"), None,   2.5, 5),
-            ("Apl. +12",   "aplicacoes_mais_12",  op_theme_color("plus_12"),    "dash", 2.0, 4),
-            ("Apl. -12",   "aplicacoes_menos_12", op_theme_color("minus_12"),   "dot",  2.0, 4),
-        ]
-        fig = go.Figure()
-        for name, col, color, dash, w, msz in _traces:
-            series = df_evo[col]
-            fmt_series = [int_br(v) for v in series]
-            fig.add_trace(go.Scatter(
-                x=df_evo["data_ref"], y=series, name=name,
-                customdata=[[v] for v in fmt_series],
-                hovertemplate="%{customdata[0]}<extra></extra>",
-                mode="lines+markers+text",
-                text=annotate_adaptive(series, int_br),
-                textposition="top center",
-                textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
-                cliponaxis=False,
-                line=dict(color=color, width=w, dash=dash),
-                marker=dict(size=msz),
-            ))
-        fig.update_layout(**_base_layout(height=320, unified=True))
-        _style_axes(fig)
-        style_temporal(fig)
-        op_chart_apply_theme(fig)
-        st.plotly_chart(fig, use_container_width=True)
+        _comparecimentos = float(_prev_data.k_prev.get("comparecimentos", 0) or 0)
+        _render_onepage_vendas(_vendas_data, comparecimentos=_comparecimentos)
 
-# ---- 2. Investimento por dia (mesma base do CPL: anuncios sem REL_02*) ----
-with g_right:
-    st.markdown("**Investimento por dia**")
-    if df_one is None or df_one.empty or "investimento" not in df_one.columns:
-        st.info("Sem investimento registrado no período.")
-    else:
-        df_inv_one = df_one[["data_ref", "investimento"]].sort_values("data_ref")
-        # Construído inline (em vez de chamar `area()`) pra ter hovertemplate
-        # com brl BR (R$ X.XXX,XX); o helper area() ainda não suporta
-        # formatter customizado.
-        inv_series = df_inv_one["investimento"]
-        fmt_inv = [brl(v) for v in inv_series]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_inv_one["data_ref"], y=inv_series,
-            name="Investimento",
-            fill="tozeroy",
-            line=dict(color=op_theme_color("gold"), width=2.5),
-            fillcolor=op_theme_color("gold_fill"),
-            mode="lines+markers+text",
-            marker=dict(size=5),
-            customdata=[[v] for v in fmt_inv],
-            hovertemplate="%{customdata[0]}<extra></extra>",
-            text=annotate_adaptive(inv_series, brl),
-            textposition="top center",
-            textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
-            cliponaxis=False,
-        ))
-        fig.update_layout(**_base_layout(height=280, unified=True))
-        _style_axes(fig, money_axis="y")
-        style_temporal(fig)
-        op_chart_apply_theme(fig)
-        st.plotly_chart(fig, use_container_width=True)
+with st.expander("Tendências diárias", expanded=False):
+    with st.spinner("Carregando tendências diárias..."):
+        with _op_timed_block("Tendências diárias"):
+            _render_onepage_tendencias_priory(_mkt_data.df_one)
+    with st.spinner("Carregando gráficos de funil..."):
+        with _op_timed_block("Gráficos de funil"):
+            _render_onepage_tendencias_extra(
+                _prev_data.df_prev_dia, _vendas_data.df_exec,
+            )
 
-g_left2, g_right2 = st.columns(2, gap="large")
+with st.spinner("Carregando tabelas analíticas..."):
+    with _op_timed_block("Tabelas analíticas"):
+        _render_onepage_tabelas(
+            ctx.data_ini, ctx.data_fim,
+            _mkt_data, _prev_data, _vendas_data,
+        )
 
-# ---- 3. Evolução de agendamentos -------------------------------------------
-with g_left2:
-    st.markdown("**Agendamentos × +12 / -12**")
-    if df_prev_dia is None or df_prev_dia.empty:
-        st.info("Sem série diária de Pré-vendas no período.")
-    else:
-        df_pd = df_prev_dia.sort_values("data_ref").copy()
-        # Agendamentos -12: na série diária só temos `agendamentos_mais_12`.
-        # Deriva o complemento como (total - +12) — aproximação aceitável
-        # para visualização (regra +12/-12 não é mutuamente exclusiva no
-        # detalhe, mas no agregado a sobreposição é marginal).
-        df_pd["agendamentos_menos_12_aprox"] = (
-            df_pd["agendamentos"] - df_pd["agendamentos_mais_12"]
-        ).clip(lower=0)
-        _traces = [
-            ("Agendamentos",     "agendamentos",                op_theme_color("gold"),     None,   2.5, 5),
-            ("Ag. +12",          "agendamentos_mais_12",        op_theme_color("plus_12"),  "dash", 2.0, 4),
-            ("Ag. -12 (aprox.)", "agendamentos_menos_12_aprox", op_theme_color("minus_12"), "dot",  2.0, 4),
-        ]
-        fig = go.Figure()
-        for name, col, color, dash, w, msz in _traces:
-            series = df_pd[col]
-            fmt_series = [int_br(v) for v in series]
-            fig.add_trace(go.Scatter(
-                x=df_pd["data_ref"], y=series, name=name,
-                customdata=[[v] for v in fmt_series],
-                hovertemplate="%{customdata[0]}<extra></extra>",
-                mode="lines+markers+text",
-                text=annotate_adaptive(series, int_br),
-                textposition="top center",
-                textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
-                cliponaxis=False,
-                line=dict(color=color, width=w, dash=dash),
-                marker=dict(size=msz),
-            ))
-        fig.update_layout(**_base_layout(height=320, unified=True))
-        _style_axes(fig)
-        style_temporal(fig)
-        op_chart_apply_theme(fig)
-        st.plotly_chart(fig, use_container_width=True)
-
-# ---- 4. Volumes (ag/comp/vendas) -------------------------------------------
-with g_right2:
-    st.markdown("**Agendamentos × Comparecimentos × Vendas**")
-    if df_prev_dia is None or df_prev_dia.empty or df_exec is None or df_exec.empty:
-        st.info("Sem dados de Pré-vendas e/ou Vendas no período.")
-    else:
-        # Junta vendas (df_exec.vendas) à série diária de Pré-vendas.
-        # As duas séries usam `data_ref` no mesmo grão (1 row/dia).
-        vendas_dia = (df_exec.groupby("data_ref", as_index=False)["vendas"]
-                      .sum())
-        merged = (df_prev_dia[["data_ref", "agendamentos", "comparecimentos"]]
-                  .merge(vendas_dia, on="data_ref", how="outer")
-                  .fillna(0)
-                  .sort_values("data_ref"))
-        _traces = [
-            ("Agendamentos", "agendamentos",     op_theme_color("gold"),       None,  2.5, 5),
-            ("Comparec.",    "comparecimentos",  op_theme_color("wine_light"), None,  2.5, 5),
-            ("Vendas",       "vendas",           op_theme_color("green"),      "dot", 2.5, 5),
-        ]
-        fig = go.Figure()
-        for name, col, color, dash, w, msz in _traces:
-            series = merged[col]
-            fmt_series = [int_br(v) for v in series]
-            fig.add_trace(go.Scatter(
-                x=merged["data_ref"], y=series, name=name,
-                customdata=[[v] for v in fmt_series],
-                hovertemplate="%{customdata[0]}<extra></extra>",
-                mode="lines+markers+text",
-                text=annotate_adaptive(series, int_br),
-                textposition="top center",
-                textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
-                cliponaxis=False,
-                line=dict(color=color, width=w, dash=dash),
-                marker=dict(size=msz),
-            ))
-        fig.update_layout(**_base_layout(height=320, unified=True))
-        _style_axes(fig)
-        style_temporal(fig)
-        op_chart_apply_theme(fig)
-        st.plotly_chart(fig, use_container_width=True)
-
-# =============================================================================
-# Tabelas
-# =============================================================================
-
-# ---- Tabela Indicadores - Fonte de Lead -----------------------------------
-# Fonte: `one_page_prevendas_por_fonte.sql` (mesma base dos cards INBOUND/SS).
-# Agendamentos já chegam LÍQUIDOS (sem vencidos); ±12 usa regra combinada
-# (CRM + ext_reconecta.leads). `st.dataframe` interativo (sort/scroll/
-# resize do Glide preservados). Linha "Total do período" é a última row
-# do df — percentuais recalculados sobre os totais via
-# `_total_prevendas_from_absolutes` (não média simples). Sem suporte
-# nativo a pinning no Glide; total acompanha o sort do usuário.
-section_title(
-    "Indicadores - Fonte de Lead",
-    "agendamentos líquidos · regra origem_final (Looker)",
-)
-tab_fonte = _tabela_indicadores_fonte(df_prev_fonte)
-if tab_fonte.empty:
-    st.info("Sem dados de Pré-vendas por fonte no período.")
-else:
-    tot_f = _total_prevendas_from_absolutes(
-        df_prev_fonte,
-        abs_cols=[
-            "agendamentos", "agendamentos_mais_12", "agendamentos_menos_12",
-            "comparecimentos", "vendas", "montante", "receita",
-        ],
-    )
-    total_row_f = {
-        "Fonte":             "Total do período",
-        "Agendamentos":      tot_f["agendamentos"],
-        "+12":               tot_f["agendamentos_mais_12"],
-        "% +12":             tot_f["pct_mais_12"],
-        "-12":               tot_f["agendamentos_menos_12"],
-        "% -12":             tot_f["pct_menos_12"],
-        "Comparecimento":    tot_f["comparecimentos"],
-        "Montante":          tot_f["montante"],
-        "Receita":           tot_f["receita"],
-        "% Recebimento":     tot_f["pct_recebimento"],
-        "% Conversão":       tot_f["pct_conversao"],
-        "% Venda":           tot_f["pct_venda"],
-        "% Comparecimento":  tot_f["pct_comparecimento"],
-    }
-    tab_fonte = pd.concat(
-        [tab_fonte, pd.DataFrame([total_row_f])],
-        ignore_index=True,
-    )
-    tab_fonte = _br_format_table(
-        tab_fonte,
-        money_cols=("Montante", "Receita"),
-        int_cols=("Agendamentos", "+12", "-12", "Comparecimento"),
-        pct_cols=("% +12", "% -12", "% Recebimento",
-                  "% Conversão", "% Venda", "% Comparecimento"),
-    )
-    st.dataframe(
-        tab_fonte,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-# ---- Tabela por Executiva --------------------------------------------------
-# Fonte: cálculo direto a partir de `zoho_deals` + `zoho_activities` +
-# `fdw_reconecta.executivas_vendas`. Nome resolvido por
-# `zoho_deals.executiva_vendas = executivas_vendas.id_crm`. Visão padrão
-# mostra só ativas; opção "Todas / Histórico" expõe inativas e IDs órfãos
-# pra auditoria. Não usa mais a view legada nem o `df_exec` cá no bloco.
-section_title(
-    "Por Executiva",
-    "cálculo direto · zoho_deals + executivas_vendas (cadastro oficial)",
-)
-_modo_label = st.radio(
-    "Visualização de executivas",
-    options=("Ativas", "Todas / Histórico"),
-    index=0,
-    horizontal=True,
-    help=(
-        "Ativas: apenas executivas com `ativo='y'` no cadastro oficial.\n"
-        "Todas / Histórico: inclui inativas e IDs sem cadastro (para auditoria)."
-    ),
-    key="onepage_exec_modo",
-)
-_modo_arg = "ativas" if _modo_label == "Ativas" else "todas"
-rank_exec = get_one_page_por_executiva(ctx.data_ini, ctx.data_fim, _modo_arg)
-if rank_exec is None or rank_exec.empty:
-    st.info("Sem ranking de executivas no período.")
-else:
-    cols_exec = [c for c in (
-        "executiva", "agendamentos", "comparecimentos", "vendas",
-        "montante", "receita",
-        "pct_recebimento", "pct_conversao", "pct_vendas", "pct_comparecimento",
-    ) if c in rank_exec.columns]
-    tab_exec = rank_exec[cols_exec].copy()
-    tab_exec_disp = tab_exec.rename(columns={
-        "executiva":          "Executiva",
-        "agendamentos":       "Agendamentos",
-        "comparecimentos":    "Comparec.",
-        "vendas":             "Vendas",
-        "montante":           "Montante",
-        "receita":            "Receita",
-        "pct_recebimento":    "% Recebimento",
-        "pct_conversao":      "% Conversão",
-        "pct_vendas":         "% Vendas",
-        "pct_comparecimento": "% Comparec.",
-    })
-    tot_e = _total_prevendas_from_absolutes(
-        tab_exec,
-        abs_cols=["agendamentos", "comparecimentos",
-                  "vendas", "montante", "receita"],
-    )
-    total_row_e = {
-        "Executiva":      "Total do período",
-        "Agendamentos":   tot_e["agendamentos"],
-        "Comparec.":      tot_e["comparecimentos"],
-        "Vendas":         tot_e["vendas"],
-        "Montante":       tot_e["montante"],
-        "Receita":        tot_e["receita"],
-        "% Recebimento":  tot_e["pct_recebimento"],
-        "% Conversão":    tot_e["pct_conversao"],
-        "% Vendas":       tot_e["pct_venda"],
-        "% Comparec.":    tot_e["pct_comparecimento"],
-    }
-    tab_exec_disp = pd.concat(
-        [tab_exec_disp, pd.DataFrame([total_row_e])],
-        ignore_index=True,
-    )
-    tab_exec_disp = _br_format_table(
-        tab_exec_disp,
-        money_cols=("Montante", "Receita"),
-        int_cols=("Agendamentos", "Comparec.", "Vendas"),
-        pct_cols=("% Recebimento", "% Conversão",
-                  "% Vendas", "% Comparec."),
-    )
-    st.dataframe(
-        tab_exec_disp,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-# ---- Tabela por SDR × Closer -----------------------------------------------
-# Fonte: cálculo direto a partir de `zoho_deals` + `zoho_activities` +
-# `fdw_reconecta.executivas_pre_vendas` + `executivas_vendas`. Visão padrão
-# mostra só SDR cadastrada + closer ativa; "Todas / Histórico" inclui
-# inativas e IDs órfãos (fallback SDR em `zoho_users` quando possível).
-section_title(
-    "Por SDR × Closer",
-    "cálculo direto · zoho_deals + executivas_pre_vendas / executivas_vendas",
-)
-_modo_sc_label = st.radio(
-    "Visualização SDR × Closer",
-    options=("Ativos", "Todas / Histórico"),
-    index=0,
-    horizontal=True,
-    help=(
-        "Ativos: SDR presente em `executivas_pre_vendas` e Closer com "
-        "`ativo='y'` no cadastro oficial.\n"
-        "Todas / Histórico: inclui inativas e IDs sem cadastro (para auditoria)."
-    ),
-    key="onepage_sc_modo",
-)
-_modo_sc_arg = "ativos" if _modo_sc_label == "Ativos" else "todas"
-try:
-    df_prev_sc = get_one_page_sdr_closer(
-        ctx.data_ini, ctx.data_fim, _modo_sc_arg,
-    )
-except Exception as e:
-    st.warning(f"Falha ao consultar SDR × Closer: {e}")
-    df_prev_sc = pd.DataFrame()
-tab_sc = _tabela_sdr_closer(df_prev_sc)
-if tab_sc.empty:
-    st.info("Sem pares SDR × Closer com atividade no período.")
-else:
-    tab_sc_disp = tab_sc.rename(columns={
-        "sdr":                "SDR",
-        "closer":             "Closer",
-        "agendamentos":       "Agendamentos",
-        "comparecimentos":    "Comparec.",
-        "vendas":             "Vendas",
-        "montante":           "Montante",
-        "receita":            "Receita",
-        "pct_recebimento":    "% Recebimento",
-        "pct_conversao":      "% Conversão",
-        "pct_vendas":         "% Vendas",
-        "pct_comparecimento": "% Comparec.",
-    })
-    tab_sc_disp = _br_format_table(
-        tab_sc_disp,
-        money_cols=("Montante", "Receita"),
-        int_cols=("Agendamentos", "Comparec.", "Vendas"),
-        pct_cols=("% Recebimento", "% Conversão",
-                  "% Vendas", "% Comparec."),
-    )
-    # Altura limitada (~420px) — até ~64 linhas no período típico,
-    # ocuparia metade da One Page sem scroll interno. Total fica FORA
-    # do scroll, numa linha-rodapé `_render_total_row` alinhada por
-    # CSS Grid (aproximação visual: Glide não expõe larguras reais).
-    st.dataframe(
-        tab_sc_disp,
-        use_container_width=True,
-        hide_index=True,
-        height=420,
-    )
-    tot_sc = _total_prevendas_from_absolutes(
-        tab_sc,
-        abs_cols=["agendamentos", "comparecimentos",
-                  "vendas", "montante", "receita"],
-    )
-    # Pesos calibrados pelo conteúdo médio das colunas (SDR/Closer com
-    # nomes longos = mais peso; numéricas/percentuais menores). Ordem
-    # MESMA do `tab_sc_disp` pra colunas caírem visualmente alinhadas:
-    # SDR · Closer · Agend. · Comp. · Vendas · Montante · Receita ·
-    # % Comp. · % Conv. · % Vendas · % Recb.
-    _render_total_row(
-        cells=[
-            ("Total do período",                       "label"),
-            ("",                                        "txt"),
-            (int_br(tot_sc["agendamentos"]),            "accent"),
-            (int_br(tot_sc["comparecimentos"]),         "num"),
-            (int_br(tot_sc["vendas"]),                  "num"),
-            (brl(tot_sc["montante"]),                   "num"),
-            (brl(tot_sc["receita"]),                    "accent"),
-            (pct(tot_sc["pct_comparecimento"]),         "num"),
-            (pct(tot_sc["pct_conversao"]),              "num"),
-            (pct(tot_sc["pct_venda"]),                  "num"),
-            (pct(tot_sc["pct_recebimento"]),            "num"),
-        ],
-        weights=[1.5, 1.8, 0.95, 0.85, 0.75, 1.05, 1.05, 1.0, 0.95, 0.85, 1.0],
-    )
-
-# ---- Tabela semanal (matriz executiva no formato Looker) -------------------
-section_title(
-    "Indicadores semanais",
-    "matriz executiva · semanas no topo · métricas na lateral",
-)
-tab_sem = _tabela_semanal(df_one, df_prev_dia, df_exec)
-_render_indicadores_semanais(tab_sem)
+_op_render_perf_panel()

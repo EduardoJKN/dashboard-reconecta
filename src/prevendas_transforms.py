@@ -10,6 +10,7 @@ usada nas páginas de Vendas e na regra do SDR × Closer.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 
 import pandas as pd
@@ -17,6 +18,8 @@ import pandas as pd
 from .team_classification import (
     SDR_UNKNOWN_LABEL,
     SEM_SDR_LABEL,
+    TIMES_CLOSER,
+    TIPOS_SDR,
     classify_sdr,
 )
 from .ui.theme import int_br
@@ -824,19 +827,29 @@ LABEL_NAO_QUALIF = "Não Qualif."
 LABEL_PRE_MAIS_NAO_QUAL = "Com Pré + Não Qualif."
 
 HINT_COM_PRE = (
-    "Com Pré = activity.prevendas ou SDR do deal (sdr_ss) identificada"
+    "Com Pré = SDR/pré identificada (regra híbrida) e stage ≠ Recepção"
 )
 HINT_NAO_QUALIF = "Não Qualif. = stage Recepção no deal ligado à activity"
 HINT_PRE_MAIS_NAO_QUAL = (
-    "Interseção: pré identificada (regra híbrida) e stage Recepção"
+    "Auditoria: pré identificada (regra híbrida) e stage Recepção — "
+    "não entra no total operacional de Com Pré"
 )
 
 QUALIF_LEGENDA_ABA = (
-    "**Com Pré** indica que existe SDR/pré-vendedora identificada na activity "
-    "ou no deal. **Não Qualificados** indica stage Recepção. Essas dimensões "
-    "podem se cruzar; os casos **Com Pré + Não Qualificados** são exibidos "
-    "separadamente — não some Com Pré com Não Qualif. como categorias excludentes."
+    "**Com Pré** considera registros com SDR/pré-vendedora identificada "
+    "e que **não** estejam em Recepção. **Não Qualificados** considera "
+    "stage Recepção. Registros com pré associada mas ainda em Recepção "
+    "são tratados como Não Qualificados e aparecem na auditoria de "
+    "**Com Pré + Não Qualificados**.\n\n"
+    "Os números de **comparecimento** usam a mesma base classificada nos "
+    "agendamentos e contam quantos desses registros chegaram à etapa de "
+    "comparecimento (`status_reuniao` Concluída/Concluído). As taxas "
+    "% Comp. são **comparecimentos ÷ agendamentos** de cada dimensão."
 )
+
+HINT_PCT_COMP_COM_PRE = "comparecimentos Com Pré real ÷ agendamentos Com Pré real"
+HINT_PCT_COMP_NAO_QUALIF = "comparecimentos Não Qualif. ÷ agendamentos Não Qualif."
+HINT_PCT_COMP_INTERSECAO = "comparecimentos interseção ÷ agendamentos interseção"
 
 
 def _as_bool_series(df: pd.DataFrame, col: str) -> pd.Series:
@@ -855,7 +868,8 @@ def _qualif_mask_nao_qual(df: pd.DataFrame) -> pd.Series:
     return pd.Series(False, index=df.index)
 
 
-def _qualif_mask_com_pre(df: pd.DataFrame) -> pd.Series:
+def _qualif_mask_pre_identificado(df: pd.DataFrame) -> pd.Series:
+    """SDR/pré identificada pela regra híbrida (inclui Recepção)."""
     if df is None or df.empty:
         return pd.Series(dtype=bool)
     if "tem_pre" in df.columns:
@@ -865,18 +879,34 @@ def _qualif_mask_com_pre(df: pd.DataFrame) -> pd.Series:
     return pd.Series(False, index=df.index)
 
 
+def _qualif_mask_com_pre(df: pd.DataFrame) -> pd.Series:
+    """Com Pré operacional: pré identificada e stage ≠ Recepção."""
+    return _qualif_mask_pre_identificado(df) & ~_qualif_mask_nao_qual(df)
+
+
 def _qualif_mask_pre_mais_nao_qual(df: pd.DataFrame) -> pd.Series:
+    """Auditoria: pré identificada, mas stage ainda é Recepção."""
     if df is None or df.empty:
         return pd.Series(dtype=bool)
     if "pre_mais_nao_qualificados" in df.columns:
         return _as_bool_series(df, "pre_mais_nao_qualificados")
-    return _qualif_mask_com_pre(df) & _qualif_mask_nao_qual(df)
+    return _qualif_mask_pre_identificado(df) & _qualif_mask_nao_qual(df)
 
 
 def _qualif_mask_comparec(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty or "comparecimento" not in df.columns:
         return pd.Series(dtype=bool)
     return _as_bool_series(df, "comparecimento")
+
+
+def _qualif_count_distinct(df: pd.DataFrame, mask: pd.Series) -> int:
+    """Conta activity_id distintos no recorte (1 linha/activity na query)."""
+    if df is None or df.empty or mask is None or not mask.any():
+        return 0
+    sub = df.loc[mask]
+    if "activity_id" in sub.columns:
+        return int(sub["activity_id"].nunique())
+    return len(sub)
 
 
 def prevendas_qualif_comparecimento_kpis(df: pd.DataFrame) -> dict:
@@ -917,16 +947,16 @@ def prevendas_qualif_comparecimento_kpis(df: pd.DataFrame) -> dict:
         else pd.Series(False, index=df.index)
     )
 
-    total_ag = len(df)
-    ag_pre = int(mask_pre.sum())
-    ag_nao = int(mask_nao.sum())
-    ag_inter = int(mask_inter.sum())
-    total_comp = int(mask_comp.sum())
-    comp_pre = int((mask_comp & mask_pre).sum())
-    comp_nao = int((mask_comp & mask_nao).sum())
-    comp_inter = int((mask_comp & mask_inter).sum())
-    ag_qual = int(mask_qual_stage.sum())
-    comp_qual = int((mask_comp & mask_qual_stage).sum())
+    total_ag = _qualif_count_distinct(df, pd.Series(True, index=df.index))
+    ag_pre = _qualif_count_distinct(df, mask_pre)
+    ag_nao = _qualif_count_distinct(df, mask_nao)
+    ag_inter = _qualif_count_distinct(df, mask_inter)
+    total_comp = _qualif_count_distinct(df, mask_comp)
+    comp_pre = _qualif_count_distinct(df, mask_comp & mask_pre)
+    comp_nao = _qualif_count_distinct(df, mask_comp & mask_nao)
+    comp_inter = _qualif_count_distinct(df, mask_comp & mask_inter)
+    ag_qual = _qualif_count_distinct(df, mask_qual_stage)
+    comp_qual = _qualif_count_distinct(df, mask_comp & mask_qual_stage)
 
     return {
         "total_agendamentos": total_ag,
@@ -936,15 +966,15 @@ def prevendas_qualif_comparecimento_kpis(df: pd.DataFrame) -> dict:
         "pct_agend_nao_qualificados": _safe_div(ag_nao, total_ag) * 100,
         "total_comparecimentos": total_comp,
         "comp_com_pre": comp_pre,
-        "pct_comp_com_pre": _safe_div(comp_pre, total_comp) * 100,
+        "pct_comp_com_pre": _safe_div(comp_pre, ag_pre) * 100,
         "comp_nao_qualificados": comp_nao,
-        "pct_comp_nao_qualificados": _safe_div(comp_nao, total_comp) * 100,
+        "pct_comp_nao_qualificados": _safe_div(comp_nao, ag_nao) * 100,
         "pct_comparecimento_geral": _safe_div(total_comp, total_ag) * 100,
         "pct_comparec_nao_qual_agend": _safe_div(comp_nao, ag_nao) * 100,
         "agend_pre_mais_nao_qual": ag_inter,
         "pct_agend_pre_mais_nao_qual": _safe_div(ag_inter, total_ag) * 100,
         "comp_pre_mais_nao_qual": comp_inter,
-        "pct_comp_pre_mais_nao_qual": _safe_div(comp_inter, total_comp) * 100,
+        "pct_comp_pre_mais_nao_qual": _safe_div(comp_inter, ag_inter) * 100,
         "pct_comparec_pre_mais_nao_qual": _safe_div(comp_inter, ag_inter) * 100,
         "qualificados_stage": ag_qual,
         "comparec_qualificados_stage": comp_qual,
@@ -981,9 +1011,11 @@ def prevendas_qualif_comparecimento_por_sdr(df: pd.DataFrame) -> pd.DataFrame:
         "agendamentos_total",
         "agend_com_pre",
         "pct_agend_com_pre",
+        "agend_pre_mais_nao_qual",
         "comparecimentos_total",
         "comp_com_pre",
         "pct_comp_com_pre",
+        "comp_pre_mais_nao_qual",
         "agend_nao_qualificados",
         "comp_nao_qualificados",
         "pct_comparec_nao_qualificados",
@@ -1000,9 +1032,11 @@ def prevendas_qualif_comparecimento_por_sdr(df: pd.DataFrame) -> pd.DataFrame:
             "agendamentos_total": k["total_agendamentos"],
             "agend_com_pre": k["agend_com_pre"],
             "pct_agend_com_pre": k["pct_agend_com_pre"],
+            "agend_pre_mais_nao_qual": k["agend_pre_mais_nao_qual"],
             "comparecimentos_total": k["total_comparecimentos"],
             "comp_com_pre": k["comp_com_pre"],
             "pct_comp_com_pre": k["pct_comp_com_pre"],
+            "comp_pre_mais_nao_qual": k["comp_pre_mais_nao_qual"],
             "agend_nao_qualificados": k["agend_nao_qualificados"],
             "comp_nao_qualificados": k["comp_nao_qualificados"],
             "pct_comparec_nao_qualificados": k["pct_comparec_nao_qual_agend"],
@@ -1041,48 +1075,186 @@ def prevendas_qualif_chart_agendamentos(df: pd.DataFrame) -> pd.DataFrame:
     ])
 
 
+_QUALIF_DETALHE_CONNECTORS = frozenset({"de", "da", "do", "das", "dos", "e"})
+_LEONARDO_ROSSO_MARKER = "leonardo rosso"
+_QUALIF_DETALHE_SEM_ETAPA = "Sem etapa"
+
+QUALIF_LEGENDA_LEONARDO = (
+    "Registros com `deal_name` contendo **Leonardo Rosso** são removidos "
+    "das métricas operacionais de agendamentos e comparecimentos "
+    "(case-insensitive, sem acento)."
+)
+
+def is_leonardo_rosso_deal(deal_name) -> bool:
+    """True quando o nome do deal contém 'Leonardo Rosso' (normalizado)."""
+    return _LEONARDO_ROSSO_MARKER in _normalize_audit_text(deal_name)
+
+
+def prevendas_qualif_anotar_leonardo(df: pd.DataFrame) -> pd.DataFrame:
+    """Marca `eh_leonardo_rosso` para filtros e auditoria."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "deal_name" in out.columns:
+        out["eh_leonardo_rosso"] = out["deal_name"].map(is_leonardo_rosso_deal)
+    else:
+        out["eh_leonardo_rosso"] = False
+    return out
+
+
+def prevendas_qualif_aplicar_filtro_leonardo(
+    df: pd.DataFrame,
+    *,
+    excluir: bool = True,
+) -> pd.DataFrame:
+    """Remove deals internos/históricos do CEO quando `excluir=True`."""
+    if not excluir or df is None or df.empty:
+        return df
+    if "eh_leonardo_rosso" in df.columns:
+        return df.loc[~df["eh_leonardo_rosso"]].reset_index(drop=True)
+    if "deal_name" in df.columns:
+        mask = ~df["deal_name"].map(is_leonardo_rosso_deal)
+        return df.loc[mask].reset_index(drop=True)
+    return df
+
+
+def _qualif_detalhe_stage_tratado(value) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return _QUALIF_DETALHE_SEM_ETAPA
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return _QUALIF_DETALHE_SEM_ETAPA
+    return text
+
+QUALIF_DETALHE_DISPLAY_COLS = [
+    # Leitura humana primeiro
+    "data_reuniao_fmt",
+    "sdr",
+    "deal_name",
+    "deal_email",
+    # Conferência técnica
+    "activity_id",
+    "what_id_raw",
+    "deal_id",
+    "existe_em_activities",
+    "existe_em_deals",
+    "vinculo_activity_deal",
+    # Demais colunas de auditoria
+    "fonte_sdr",
+    "prevendas_raw",
+    "deal_sdr_ss_id",
+    "deal_sdr_ss_nome",
+    "stage",
+    "status_reuniao",
+    "compareceu",
+    "sdr_aparece_no_deal",
+    "possivel_registro_interno",
+    "deal_email_secundario",
+    "email_preenchido",
+    "activity_type",
+    "activity_owner_nome",
+    "activity_created_time_fmt",
+    "deal_created_at_fmt",
+]
+
+
+def _normalize_audit_text(value) -> str:
+    s = _normalize_name(value)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _qualif_detalhe_nome_tokens(nome: str) -> list[str]:
+    return [
+        token
+        for token in _normalize_audit_text(nome).split()
+        if token and token not in _QUALIF_DETALHE_CONNECTORS and len(token) >= 2
+    ]
+
+
+def _qualif_detalhe_internal_team_names() -> list[str]:
+    names = ["Leonardo Rosso"]
+    for members in TIPOS_SDR.values():
+        names.extend(members)
+    for members in TIMES_CLOSER.values():
+        names.extend(members)
+    return names
+
+
+def _qualif_detalhe_nome_interno_no_deal(deal_name: str) -> bool:
+    deal_norm = _normalize_audit_text(deal_name)
+    if not deal_norm:
+        return False
+    for nome in _qualif_detalhe_internal_team_names():
+        nome_norm = _normalize_audit_text(nome)
+        if not nome_norm:
+            continue
+        if " " in nome_norm:
+            if nome_norm in deal_norm:
+                return True
+            continue
+        tokens = deal_norm.split()
+        if nome_norm in tokens:
+            return True
+    return False
+
+
+def _qualif_detalhe_sdr_aparece_no_deal(deal_name: str, sdr: str) -> bool:
+    if not sdr or sdr == SEM_SDR_LABEL:
+        return False
+    deal_norm = _normalize_audit_text(deal_name)
+    tokens = _qualif_detalhe_nome_tokens(sdr)
+    if not deal_norm or not tokens:
+        return False
+    matches = sum(1 for token in tokens if token in deal_norm)
+    if len(tokens) >= 2:
+        return matches >= 2
+    return matches >= 1
+
+
+def _qualif_detalhe_possivel_interno(
+    deal_name: str,
+    sdr: str,
+    sdr_aparece_no_deal: bool,
+) -> bool:
+    if is_leonardo_rosso_deal(deal_name):
+        return True
+    if sdr_aparece_no_deal:
+        return True
+    return _qualif_detalhe_nome_interno_no_deal(deal_name)
+
+
 def prevendas_qualif_detalhe_pre_mais_nao_qual(
     df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Tabela detalhada — interseção Com Pré + stage Recepção."""
-    cols = [
-        "data_reuniao_fmt",
-        "activity_id",
-        "what_id_raw",
-        "deal_id",
-        "existe_em_activities",
-        "existe_em_deals",
-        "vinculo_activity_deal",
-        "deal_name",
-        "sdr",
-        "fonte_sdr",
-        "prevendas_raw",
-        "deal_sdr_ss_id",
-        "deal_sdr_ss_nome",
-        "stage",
-        "status_reuniao",
-        "compareceu",
-        "activity_type",
-        "activity_owner_nome",
-        "activity_created_time_fmt",
-        "deal_created_at_fmt",
+    """Base enriquecida — interseção Com Pré + stage Recepção (auditoria)."""
+    internal_cols = QUALIF_DETALHE_DISPLAY_COLS + [
+        "data_reuniao",
+        "data_reuniao_label",
+        "stage_tratado",
+        "eh_leonardo_rosso",
+        "comparecimento_bool",
     ]
     if df is None or df.empty:
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=internal_cols)
 
     mask = _qualif_mask_pre_mais_nao_qual(df)
     sub = df.loc[mask].copy()
     if sub.empty:
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=internal_cols)
+
+    if "data_reuniao" in sub.columns:
+        sub["data_reuniao"] = pd.to_datetime(sub["data_reuniao"], errors="coerce")
+    else:
+        sub["data_reuniao"] = pd.NaT
 
     if "start_datetime" in sub.columns:
-        sub["data_reuniao_fmt"] = pd.to_datetime(
-            sub["start_datetime"], errors="coerce"
-        ).dt.strftime("%d/%m/%Y %H:%M")
+        start_dt = pd.to_datetime(sub["start_datetime"], errors="coerce")
+        sub["data_reuniao"] = sub["data_reuniao"].fillna(start_dt)
+        sub["data_reuniao_fmt"] = start_dt.dt.strftime("%d/%m/%Y %H:%M")
     else:
-        sub["data_reuniao_fmt"] = pd.to_datetime(
-            sub.get("data_reuniao"), errors="coerce"
-        ).dt.strftime("%d/%m/%Y")
+        sub["data_reuniao_fmt"] = sub["data_reuniao"].dt.strftime("%d/%m/%Y")
+
+    sub["data_reuniao_label"] = sub["data_reuniao"].dt.strftime("%d/%m/%Y")
 
     for src, dst in (
         ("activity_created_time", "activity_created_time_fmt"),
@@ -1095,7 +1267,12 @@ def prevendas_qualif_detalhe_pre_mais_nao_qual(
         else:
             sub[dst] = ""
 
-    sub["compareceu"] = sub["comparecimento"].map(
+    if "comparecimento" in sub.columns:
+        sub["comparecimento_bool"] = _as_bool_series(sub, "comparecimento")
+    else:
+        sub["comparecimento_bool"] = False
+
+    sub["compareceu"] = sub["comparecimento_bool"].map(
         {True: "Sim", False: "Não"}
     ).fillna("Não")
 
@@ -1120,14 +1297,146 @@ def prevendas_qualif_detalhe_pre_mais_nao_qual(
     )
 
     for c in ("what_id_raw", "prevendas_raw", "deal_sdr_ss_id", "deal_sdr_ss_nome",
-              "deal_name", "activity_owner_nome"):
+              "deal_name", "deal_email", "deal_email_secundario", "email_deal",
+              "activity_owner_nome", "sdr"):
         if c not in sub.columns:
             sub[c] = ""
         sub[c] = sub[c].fillna("").astype(str).replace("nan", "")
 
+    sub["email_preenchido"] = sub["email_deal"].map(
+        lambda value: "Sim" if _normalize_audit_text(value) else "Não"
+    )
+
+    if "stage" not in sub.columns:
+        sub["stage"] = ""
+    sub["stage_tratado"] = sub["stage"].map(_qualif_detalhe_stage_tratado)
+    sub["stage"] = sub["stage_tratado"]
+
+    if "eh_leonardo_rosso" not in sub.columns:
+        sub["eh_leonardo_rosso"] = sub["deal_name"].map(is_leonardo_rosso_deal)
+    sub["sdr_aparece_no_deal"] = sub.apply(
+        lambda row: "Sim"
+        if _qualif_detalhe_sdr_aparece_no_deal(row["deal_name"], row["sdr"])
+        else "Não",
+        axis=1,
+    )
+    sub["possivel_registro_interno"] = sub.apply(
+        lambda row: "Sim"
+        if _qualif_detalhe_possivel_interno(
+            row["deal_name"],
+            row["sdr"],
+            row["sdr_aparece_no_deal"] == "Sim",
+        )
+        else "Não",
+        axis=1,
+    )
+
     sort_cols = [c for c in ("data_reuniao", "start_datetime") if c in sub.columns]
-    out = sub.sort_values(sort_cols or ["data_reuniao"], ascending=False)
-    return out[cols].reset_index(drop=True)
+    return sub.sort_values(sort_cols or ["data_reuniao"], ascending=False).reset_index(
+        drop=True
+    )
+
+
+def prevendas_qualif_detalhe_display(df: pd.DataFrame) -> pd.DataFrame:
+    """Colunas visíveis da tabela de detalhe."""
+    cols = [c for c in QUALIF_DETALHE_DISPLAY_COLS if c in df.columns]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+    return df[cols].reset_index(drop=True)
+
+
+def prevendas_qualif_detalhe_filtrar(
+    df: pd.DataFrame,
+    *,
+    excluir_leonardo_rosso: bool = False,
+    datas_reuniao: list[str] | None = None,
+    deals: list[str] | None = None,
+    sdrs: list[str] | None = None,
+    stages: list[str] | None = None,
+    busca_deal: str = "",
+) -> pd.DataFrame:
+    """Filtros locais da seção de detalhe (não altera KPIs da aba principal)."""
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    if datas_reuniao:
+        out = out[out["data_reuniao_label"].isin(datas_reuniao)]
+
+    if deals:
+        out = out[out["deal_name"].isin(deals)]
+
+    busca = _normalize_audit_text(busca_deal)
+    if busca:
+        out = out[
+            out["deal_name"].map(
+                lambda value: busca in _normalize_audit_text(value)
+            )
+        ]
+
+    if sdrs:
+        out = out[out["sdr"].isin(sdrs)]
+
+    if stages:
+        stage_col = (
+            "stage_tratado"
+            if "stage_tratado" in out.columns
+            else "stage"
+        )
+        if stage_col in out.columns:
+            out = out[out[stage_col].isin(stages)]
+
+    if excluir_leonardo_rosso:
+        out = prevendas_qualif_aplicar_filtro_leonardo(out, excluir=True)
+
+    return out.reset_index(drop=True)
+
+
+def prevendas_qualif_detalhe_kpis(
+    df: pd.DataFrame,
+    *,
+    excluir_leonardo_rosso: bool = False,
+) -> dict:
+    """KPIs do bloco de detalhe (após filtros locais da seção)."""
+    empty = {
+        "total_registros": 0,
+        "deals_unicos": 0,
+        "activities_unicas": 0,
+        "sdrs_unicas": 0,
+        "comparecimentos": 0,
+        "pct_comparecimento": 0.0,
+        "vinculo_ok": 0,
+        "sem_deal_ligado": 0,
+        "leonardo_rosso": 0,
+        "mostrar_leonardo_rosso": not excluir_leonardo_rosso,
+    }
+    if df is None or df.empty:
+        return empty
+
+    total = len(df)
+    comp = int(df["comparecimento_bool"].sum()) if "comparecimento_bool" in df.columns else 0
+    vinculo = (
+        df["vinculo_activity_deal"].fillna("").astype(str)
+        if "vinculo_activity_deal" in df.columns
+        else pd.Series("", index=df.index)
+    )
+
+    return {
+        "total_registros": total,
+        "deals_unicos": int(df["deal_id"].nunique()) if "deal_id" in df.columns else 0,
+        "activities_unicas": int(df["activity_id"].nunique())
+        if "activity_id" in df.columns
+        else 0,
+        "sdrs_unicas": int(df["sdr"].nunique()) if "sdr" in df.columns else 0,
+        "comparecimentos": comp,
+        "pct_comparecimento": _safe_div(comp, total) * 100,
+        "vinculo_ok": int((vinculo == "OK").sum()),
+        "sem_deal_ligado": int((vinculo == "Sem deal ligado").sum()),
+        "leonardo_rosso": int(df["eh_leonardo_rosso"].sum())
+        if "eh_leonardo_rosso" in df.columns
+        else 0,
+        "mostrar_leonardo_rosso": not excluir_leonardo_rosso,
+    }
 
 
 def prevendas_qualif_chart_comparecimentos(df: pd.DataFrame) -> pd.DataFrame:

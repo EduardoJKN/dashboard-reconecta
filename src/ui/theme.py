@@ -66,6 +66,16 @@ def pct(v: float | int | None, casas: int = 1) -> str:
     return f"{v:.{casas}f}%".replace(".", ",")
 
 
+def fmt_currency_br(v: float | int | None) -> str:
+    """R$ pt-BR com 2 casas decimais (padrão dashboards executivos)."""
+    return brl(v, casas=2)
+
+
+def fmt_percent_br(v: float | int | None) -> str:
+    """Percentual pt-BR com 2 casas decimais."""
+    return pct(v, casas=2)
+
+
 def int_br(v: float | int | None) -> str:
     if v is None or v != v:
         return "—"
@@ -651,6 +661,174 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 .mcard-origens-muted .lbl {{ letter-spacing: 0.4px; font-weight: 600; }}
 .mcard-origens-muted .val {{ font-variant-numeric: tabular-nums; font-weight: 500; }}
 
+/* ----- metric-card resumo (linha executiva — alinhada, sem cortar) ----- */
+.mcard.mcard-resumo {{
+  min-height: 235px;
+  height: auto;
+  justify-content: flex-start;
+  gap: 0;
+  margin-bottom: 16px;
+  min-width: 0;
+  overflow: visible;
+  box-sizing: border-box;
+}}
+.mcard.mcard-resumo .mcard-header-block {{
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 86px;
+  min-width: 0;
+  width: 100%;
+}}
+.mcard.mcard-resumo .mcard-value {{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 1.45rem;
+  min-width: 0;
+}}
+.mcard.mcard-resumo .mcard-hint {{
+  min-height: 2.5em;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 0 0 auto;
+  min-width: 0;
+}}
+.mcard.mcard-resumo .mcard-hint-placeholder {{
+  visibility: hidden;
+}}
+.mcard.mcard-resumo .mcard-cost {{
+  flex: 0 0 auto;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}}
+.mcard.mcard-resumo .mcard-cost span {{
+  color: var(--color-text-subtle);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+}}
+.mcard.mcard-resumo .mcard-cost strong {{
+  color: var(--color-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}}
+.mcard.mcard-resumo .mcard-cost-placeholder span,
+.mcard.mcard-resumo .mcard-cost-placeholder strong {{
+  visibility: hidden;
+}}
+.mcard.mcard-resumo .mcard-resumo-spacer {{
+  flex: 1 1 auto;
+  min-height: 8px;
+  width: 100%;
+}}
+.mcard.mcard-resumo .mcard-origin-block {{
+  flex: 0 0 auto;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 52px;
+  min-width: 0;
+  width: 100%;
+  overflow: visible;
+}}
+.mcard.mcard-resumo .mcard-origin-placeholder {{
+  border-top-color: transparent;
+  visibility: hidden;
+  pointer-events: none;
+}}
+.mcard.mcard-resumo .mcard-origens-title {{
+  min-width: 0;
+}}
+.mcard.mcard-resumo .mcard-origens-chips {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: baseline;
+  min-width: 0;
+  width: 100%;
+  overflow: visible;
+}}
+.mcard.mcard-resumo .mcard-origens-chip {{
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  flex-shrink: 1;
+}}
+.mcard.mcard-resumo .mcard-origens-chip .val {{
+  white-space: normal;
+  word-break: break-word;
+}}
+.mcard.mcard-resumo .mcard-footer {{
+  flex: 0 0 auto;
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 20px;
+  min-width: 0;
+  width: 100%;
+  font-size: 0.66rem;
+  color: var(--color-text-subtle);
+  opacity: 0.7;
+  padding-top: 4px;
+  overflow: visible;
+}}
+.mcard.mcard-resumo .mcard-footer .lbl {{
+  letter-spacing: 0.4px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}}
+.mcard.mcard-resumo .mcard-footer .val {{
+  font-size: 0.6rem;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: right;
+  word-break: break-word;
+}}
+.mcard.mcard-resumo .mcard-footer-placeholder {{
+  visibility: hidden;
+  pointer-events: none;
+}}
+
+/* Linha financeira Pré-vendas */
+.mcard.prevendas-finance {{
+  min-height: 84px;
+  height: 100%;
+  margin-bottom: 0;
+}}
+.mcard.prevendas-finance .mcard-value {{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}}
+
 /* ----- hero financial (Receita com barra/meta/status — slim, não dominante) ----- */
 .hero-fin {{
   background: var(--color-card);
@@ -769,6 +947,7 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 [data-testid="stHorizontalBlock"] > [data-testid="column"] {{
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }}
 [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] > div,
 [data-testid="stHorizontalBlock"] > [data-testid="column"] > div {{
@@ -776,9 +955,17 @@ header[data-testid="stHeader"] {{ background: transparent; }}
   display: flex;
   flex-direction: column;
 }}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"] [data-testid="stMarkdownContainer"],
+[data-testid="stHorizontalBlock"] > [data-testid="column"] [data-testid="stMarkdownContainer"] {{
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}}
 /* garante cards preenchendo 100% da altura disponível */
 .mcard, .hero-fin {{
   flex: 1 1 auto;
+  width: 100%;
 }}
 .mcard {{ min-height: 84px; }}
 .hero-fin {{ min-height: 96px; }}

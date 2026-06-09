@@ -58,6 +58,12 @@ SELECT
         ELSE 'Sem deal ligado'
     END                                                     AS vinculo_activity_deal,
     NULLIF(btrim(d.deal_name), '')                          AS deal_name,
+    NULLIF(lower(btrim(d.email)), '')                       AS deal_email,
+    NULLIF(lower(btrim(d.email_secundario)), '')            AS deal_email_secundario,
+    COALESCE(
+        NULLIF(lower(btrim(d.email)), ''),
+        NULLIF(lower(btrim(d.email_secundario)), '')
+    )                                                       AS email_deal,
     d.created_at                                            AS deal_created_at,
     d.sdr_ss::text                                          AS deal_sdr_ss_id,
     COALESCE(NULLIF(btrim(d.stage), ''), 'Sem etapa')       AS stage,
