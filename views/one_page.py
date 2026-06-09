@@ -35,8 +35,10 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -1623,6 +1625,117 @@ class _VendasSectionData:
     error: str | None = None
 
 
+def _op_cache_safe_df(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Materializa DataFrame para persistência em `st.cache_data`."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame()
+    out = pd.DataFrame(df).copy()
+    for col in out.columns:
+        if out[col].dtype != object:
+            continue
+        sample = out[col].dropna()
+        if sample.empty:
+            continue
+        first = sample.iloc[0]
+        if isinstance(first, Decimal):
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+    return out
+
+
+def _op_cache_safe_value(val):
+    if val is None or isinstance(val, (bool, int, float, str)):
+        return val
+    if isinstance(val, (date, datetime)):
+        return val.isoformat()
+    if isinstance(val, Decimal):
+        return float(val)
+    if isinstance(val, (np.integer, np.floating, np.bool_)):
+        return val.item()
+    if isinstance(val, pd.Timestamp):
+        return val.isoformat()
+    if isinstance(val, pd.DataFrame):
+        return _op_cache_safe_df(val)
+    if isinstance(val, dict):
+        return {str(k): _op_cache_safe_value(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple)):
+        return [_op_cache_safe_value(v) for v in val]
+    raise TypeError(f"Valor não serializável para cache: {type(val)!r}")
+
+
+def _op_cache_safe_dict(d: dict | None) -> dict:
+    if not d:
+        return {}
+    return {str(k): _op_cache_safe_value(v) for k, v in d.items()}
+
+
+def _marketing_to_cache(data: _MarketingSectionData) -> dict:
+    return {
+        "k_apl": _op_cache_safe_dict(data.k_apl),
+        "k_apl_prev": _op_cache_safe_dict(data.k_apl_prev),
+        "df_one": _op_cache_safe_df(data.df_one),
+        "df_one_prev": _op_cache_safe_df(data.df_one_prev),
+        "error": data.error,
+    }
+
+
+def _marketing_from_cache(payload: dict) -> _MarketingSectionData:
+    return _MarketingSectionData(
+        k_apl=payload.get("k_apl") or {},
+        k_apl_prev=payload.get("k_apl_prev") or {},
+        df_one=_op_cache_safe_df(payload.get("df_one")),
+        df_one_prev=_op_cache_safe_df(payload.get("df_one_prev")),
+        error=payload.get("error"),
+    )
+
+
+def _prevendas_to_cache(data: _PrevendasSectionData) -> dict:
+    return {
+        "k_prev": _op_cache_safe_dict(data.k_prev),
+        "por_fonte": _op_cache_safe_dict(data.por_fonte),
+        "df_prev_dia": _op_cache_safe_df(data.df_prev_dia),
+        "df_prev_fonte": _op_cache_safe_df(data.df_prev_fonte),
+        "error": data.error,
+    }
+
+
+def _prevendas_from_cache(payload: dict) -> _PrevendasSectionData:
+    return _PrevendasSectionData(
+        k_prev=payload.get("k_prev") or {},
+        por_fonte=payload.get("por_fonte") or {},
+        df_prev_dia=_op_cache_safe_df(payload.get("df_prev_dia")),
+        df_prev_fonte=_op_cache_safe_df(payload.get("df_prev_fonte")),
+        error=payload.get("error"),
+    )
+
+
+def _vendas_to_cache(data: _VendasSectionData) -> dict:
+    media = data.media_movel_val
+    if media is not None:
+        media = float(media)
+    return {
+        "k_vendas": _op_cache_safe_dict(data.k_vendas),
+        "k_vendas_prev": _op_cache_safe_dict(data.k_vendas_prev),
+        "media_movel_val": media,
+        "novos_forma": _op_cache_safe_dict(data.novos_forma),
+        "df_exec": _op_cache_safe_df(data.df_exec),
+        "error": data.error,
+    }
+
+
+def _vendas_from_cache(payload: dict) -> _VendasSectionData:
+    media = payload.get("media_movel_val")
+    if media is not None:
+        media = float(media)
+    return _VendasSectionData(
+        k_vendas=payload.get("k_vendas") or {},
+        k_vendas_prev=payload.get("k_vendas_prev") or {},
+        media_movel_val=media,
+        novos_forma=payload.get("novos_forma") or {"em_call": 0, "follow": 0},
+        df_exec=_op_cache_safe_df(payload.get("df_exec")),
+        error=payload.get("error"),
+    )
+
+
 def load_onepage_marketing(
     data_ini: date,
     data_fim: date,
@@ -1666,9 +1779,11 @@ def load_onepage_marketing_cached(
     prev_ini: date,
     prev_fim: date,
     excluir_testes_aplicacoes: bool,
-) -> _MarketingSectionData:
-    return load_onepage_marketing(
-        data_ini, data_fim, prev_ini, prev_fim, excluir_testes_aplicacoes,
+) -> dict:
+    return _marketing_to_cache(
+        load_onepage_marketing(
+            data_ini, data_fim, prev_ini, prev_fim, excluir_testes_aplicacoes,
+        ),
     )
 
 
@@ -1713,8 +1828,8 @@ def load_onepage_prevendas(
 def load_onepage_prevendas_cached(
     data_ini: date,
     data_fim: date,
-) -> _PrevendasSectionData:
-    return load_onepage_prevendas(data_ini, data_fim)
+) -> dict:
+    return _prevendas_to_cache(load_onepage_prevendas(data_ini, data_fim))
 
 
 def load_onepage_vendas_financeiro(
@@ -1783,8 +1898,10 @@ def load_onepage_vendas_financeiro_cached(
     data_fim: date,
     prev_ini: date,
     prev_fim: date,
-) -> _VendasSectionData:
-    return load_onepage_vendas_financeiro(data_ini, data_fim, prev_ini, prev_fim)
+) -> dict:
+    return _vendas_to_cache(
+        load_onepage_vendas_financeiro(data_ini, data_fim, prev_ini, prev_fim),
+    )
 
 
 def _render_onepage_marketing(data: _MarketingSectionData) -> None:
@@ -2473,9 +2590,11 @@ col_mkt, col_prev, col_vendas = st.columns([1.0, 1.25, 1.05], gap="medium")
 with col_mkt:
     with st.spinner("Carregando Marketing..."):
         with _op_timed_block("Marketing"):
-            _mkt_data = load_onepage_marketing_cached(
-                ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
-                excluir_testes_aplicacoes,
+            _mkt_data = _marketing_from_cache(
+                load_onepage_marketing_cached(
+                    ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
+                    excluir_testes_aplicacoes,
+                ),
             )
     if _mkt_data.error:
         st.error(_mkt_data.error)
@@ -2485,7 +2604,9 @@ with col_mkt:
 with col_prev:
     with st.spinner("Carregando Pré-vendas..."):
         with _op_timed_block("Pré-vendas"):
-            _prev_data = load_onepage_prevendas_cached(ctx.data_ini, ctx.data_fim)
+            _prev_data = _prevendas_from_cache(
+                load_onepage_prevendas_cached(ctx.data_ini, ctx.data_fim),
+            )
     if _prev_data.error:
         st.error(_prev_data.error)
     else:
@@ -2495,8 +2616,10 @@ with col_prev:
 with col_vendas:
     with st.spinner("Carregando Vendas / Financeiro..."):
         with _op_timed_block("Vendas / Financeiro"):
-            _vendas_data = load_onepage_vendas_financeiro_cached(
-                ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
+            _vendas_data = _vendas_from_cache(
+                load_onepage_vendas_financeiro_cached(
+                    ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
+                ),
             )
     if _vendas_data.error:
         st.error(_vendas_data.error)
@@ -2504,7 +2627,7 @@ with col_vendas:
         _comparecimentos = float(_prev_data.k_prev.get("comparecimentos", 0) or 0)
         _render_onepage_vendas(_vendas_data, comparecimentos=_comparecimentos)
 
-with st.expander("Tendências diárias", expanded=False):
+with st.expander("Tendências diárias", expanded=True):
     with st.spinner("Carregando tendências diárias..."):
         with _op_timed_block("Tendências diárias"):
             _render_onepage_tendencias_priory(_mkt_data.df_one)
