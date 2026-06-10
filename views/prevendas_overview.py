@@ -39,6 +39,16 @@ from src.team_classification import classify_sdr, is_known_sdr
 from src.ui.charts import bar_ranked, funnel
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
+from src.ui.prevendas_ranking_cost import (
+    INDICADORES_OPORT_METRIC_COLS,
+    RANKING_AVG_COST_LABELS,
+    augment_ranking_plot_with_cost,
+    custos_medios_indicadores_oport,
+    fmt_celula_indicador_com_custo,
+    init_ranking_metric_col_state,
+    investimento_estimado_sdr,
+    render_ranking_metric_controls,
+)
 from src.ui.theme import PALETTE, fmt_currency_br, fmt_percent_br, int_br
 
 # Colunas de tabela que recebem formatação pt-BR nesta página.
@@ -672,16 +682,16 @@ ranking_metric_options = {
     "Cancelados": "cancelados",
     "Vencidos": "vencidos",
 }
-
-# `section_title` precisa do label da métrica → resolvemos do session_state
-# antes de criar as colunas (o selectbox vive na coluna da esquerda, mas o
-# header da seção fica acima das duas colunas).
-_label_atual = st.session_state.get(
+_RANKING_LABEL_BY_COL = {
+    col: label for label, col in ranking_metric_options.items()
+}
+_col_atual_ranking = init_ranking_metric_col_state(
+    ranking_metric_options,
+    "Agendamentos",
+    "prevendas_overview_ranking_metric_col",
     "prevendas_overview_ranking_metric",
-    list(ranking_metric_options.keys())[1],   # default = "Agendamentos"
 )
-if _label_atual not in ranking_metric_options:
-    _label_atual = list(ranking_metric_options.keys())[1]
+_label_atual = _RANKING_LABEL_BY_COL[_col_atual_ranking]
 section_title("Top SDRs", f"ranking do período · {_label_atual.lower()}")
 
 ranking = prevendas_ranking_sdr_oficiais(df_sdr_filt, df_sdrs_oficiais)
@@ -692,13 +702,17 @@ col_grafico, col_detalhe = st.columns([1.45, 1], gap="large")
 # COLUNA ESQUERDA — métrica + gráfico clicável
 # ===========================================================================
 with col_grafico:
-    ranking_metric_label = st.selectbox(
-        "Métrica do ranking",
-        options=list(ranking_metric_options.keys()),
-        index=list(ranking_metric_options.keys()).index(_label_atual),
-        key="prevendas_overview_ranking_metric",
+    ranking_metric_col, ranking_metric_label, mostrar_custo_grafico = (
+        render_ranking_metric_controls(
+            metric_options=ranking_metric_options,
+            default_metric_label="Agendamentos",
+            key_prefix="prevendas_overview",
+            investido_total=_investido_total,
+            kpis=k,
+            df_rank_base=df_sdr_filt,
+            agendamentos_exibidos=agendamentos_exibidos,
+        )
     )
-    ranking_metric_col = ranking_metric_options[ranking_metric_label]
 
     ranking_plot = ranking[ranking[ranking_metric_col].fillna(0) > 0].copy()
     chart_state = None
@@ -706,12 +720,29 @@ with col_grafico:
     if ranking_plot.empty:
         st.info(f"Sem {ranking_metric_label.lower()} no período.")
     else:
-        # `bar_ranked` injeta `customdata = [[nome_sdr]]` em cada barra
-        # (charts.py:211), então não dependemos do label do eixo y truncado.
-        # `on_select="rerun"` é nativo do Streamlit >= 1.37 — sem dependência
-        # externa. `selection_mode="points"` permite clicar uma barra por vez.
+        ranking_plot, _custo_medio_num, _custo_medio_fmt = (
+            augment_ranking_plot_with_cost(
+                ranking_plot,
+                ranking_metric_col,
+                df_sdr_filt,
+                _investido_total,
+                k,
+                agendamentos_exibidos=agendamentos_exibidos,
+            )
+        )
         fig_top = bar_ranked(
-            ranking_plot, "sdr", ranking_metric_col, top_n=12, height=320,
+            ranking_plot,
+            "sdr",
+            ranking_metric_col,
+            top_n=12,
+            height=320,
+            metric_label=ranking_metric_label,
+            cost_col="_inv_estimado_sdr",
+            cost_label=RANKING_AVG_COST_LABELS.get(
+                ranking_metric_col, "Custo médio",
+            ),
+            avg_cost_display=_custo_medio_fmt,
+            show_cost_on_bar=mostrar_custo_grafico,
         )
         chart_state = st.plotly_chart(
             fig_top,
@@ -1113,6 +1144,8 @@ else:
         official_names = []
 
     df_oport = df_oport_raw.copy()
+    if "comparecimentos" not in df_oport.columns:
+        df_oport["comparecimentos"] = 0
     df_oport["sdr"] = df_oport["sdr"].astype(str)
     df_oport["sdr_oficial"] = df_oport["sdr"].apply(
         lambda nome: _canonical_official_name(nome, official_names)
@@ -1140,6 +1173,7 @@ else:
                              as_index=False, dropna=False)
                     .agg(oport=("oportunidades", "sum"),
                          agend=("agendamentos", "sum"),
+                         comp=("comparecimentos", "sum"),
                          vendas=("vendas", "sum"))
         )
 
@@ -1153,6 +1187,7 @@ else:
 
         piv_oport  = _piv("oport")
         piv_agend  = _piv("agend")
+        piv_comp   = _piv("comp")
         piv_vendas = _piv("vendas")
 
         tabela = pd.DataFrame({
@@ -1166,7 +1201,13 @@ else:
             "agend_-12":                  piv_agend["-12"].values,
             "agend_nao_atua":             piv_agend["Não atua"].values,
             "agend_total":                piv_agend.sum(axis=1).values,
+            "comp_+12":                   piv_comp["+12"].values,
+            "comp_-12":                   piv_comp["-12"].values,
+            "comp_nao_atua":              piv_comp["Não atua"].values,
+            "comp_total":                 piv_comp.sum(axis=1).values,
             "vendas_+12":                 piv_vendas["+12"].values,
+            "vendas_-12":                 piv_vendas["-12"].values,
+            "vendas_nao_atua":            piv_vendas["Não atua"].values,
             "vendas_total":               piv_vendas.sum(axis=1).values,
         })
 
@@ -1209,41 +1250,75 @@ else:
             tabela = tabela.sort_values(
                 "oport_total", ascending=False,
             ).reset_index(drop=True)
-            tabela.insert(0, "#", range(1, len(tabela) + 1))
 
-            # 6) Toggle Números / Percentuais / Números + Percentuais —
-            #    `st.segmented_control` (Streamlit ≥ 1.34) é mais visual
-            #    que radio. Cai pra radio se o atributo não existir.
+            # 6) Controles — modo de visualização + custo (só Números / híbrido).
             opcoes_view = ["Números", "Percentuais", "Números + Percentuais"]
-            if hasattr(st, "segmented_control"):
-                modo_view = st.segmented_control(
-                    "Visualizar indicadores como",
-                    options=opcoes_view,
-                    default="Números",
-                    key="prevendas_overview_oport_modo",
-                )
-            else:
-                modo_view = st.radio(
-                    "Visualizar indicadores como",
-                    options=opcoes_view,
-                    index=0,
-                    horizontal=True,
-                    key="prevendas_overview_oport_modo",
-                )
-            # segmented_control pode devolver None se o usuário desclicar.
+            ctrl_modo, ctrl_custo = st.columns([2.2, 1.0], gap="medium")
+            with ctrl_modo:
+                if hasattr(st, "segmented_control"):
+                    modo_view = st.segmented_control(
+                        "Visualizar indicadores como",
+                        options=opcoes_view,
+                        default="Números",
+                        key="prevendas_overview_oport_modo",
+                    )
+                else:
+                    modo_view = st.radio(
+                        "Visualizar indicadores como",
+                        options=opcoes_view,
+                        index=0,
+                        horizontal=True,
+                        key="prevendas_overview_oport_modo",
+                    )
+            with ctrl_custo:
+                if modo_view == "Percentuais":
+                    mostrar_custo_oport = False
+                    st.checkbox(
+                        "Exibir custo ao lado do valor",
+                        value=False,
+                        disabled=True,
+                        key="prevendas_overview_oport_show_cost",
+                        help="Disponível nos modos Números e Números + Percentuais.",
+                    )
+                else:
+                    mostrar_custo_oport = st.checkbox(
+                        "Exibir custo ao lado do valor",
+                        value=False,
+                        key="prevendas_overview_oport_show_cost",
+                        help=(
+                            "Investimento estimado por SDR = valor × custo "
+                            "médio da métrica (investido ÷ total da coluna)."
+                        ),
+                    )
+
             if modo_view not in opcoes_view:
                 modo_view = "Números"
 
-            # 7) Renderização — colunas variam conforme `modo_view`.
-            #    Larguras: SDR fica como única coluna "medium"; resto
-            #    "small". Streamlit alinha números à direita por padrão.
-            _num_small = lambda label, fmt="%d": st.column_config.NumberColumn(  # noqa: E731
-                label, format=fmt, width="small"
+            custos_medios_oport = custos_medios_indicadores_oport(
+                tabela, _investido_total,
             )
 
+            _sdr_col_cfg = st.column_config.TextColumn(
+                "SDR / Pré-vendas",
+                width=260,
+                pinned=True,
+                alignment="left",
+            )
+            _w_num = 145 if mostrar_custo_oport else 100
+            _w_wide = 155 if mostrar_custo_oport else 125
+
+            def _cfg_metrica(label: str, *, wide: bool = False):
+                w = _w_wide if wide else _w_num
+                if modo_view == "Números" and not mostrar_custo_oport:
+                    return st.column_config.NumberColumn(
+                        label, format="%d", width=w, alignment="center",
+                    )
+                return st.column_config.TextColumn(
+                    label, width=w, alignment="center",
+                )
+
             def _fmt_n_pct(n, denom) -> str:
-                """Formata 'N (P,P%)'. Denominador zero → só o número.
-                Percentual com 2 casas pt-BR. Aceita None/NaN como 0."""
+                """Formata 'N (P,P%)'. Denominador zero → só o número."""
                 try:
                     n_int = int(n) if pd.notna(n) else 0
                 except (TypeError, ValueError):
@@ -1253,39 +1328,69 @@ else:
                     return f"{n_int} ({fmt_percent_br(pct_val)})"
                 return f"{n_int}"
 
+            def _fmt_n_pct_cost(n, denom, label: str) -> str:
+                base = _fmt_n_pct(n, denom)
+                if not mostrar_custo_oport:
+                    return base
+                try:
+                    n_int = int(n) if pd.notna(n) else 0
+                except (TypeError, ValueError):
+                    n_int = 0
+                if n_int <= 0:
+                    return base
+                custo = custos_medios_oport.get(label, 0.0)
+                inv = investimento_estimado_sdr(n_int, custo)
+                if inv == "—":
+                    return base
+                if "(" in base and base.endswith(")"):
+                    num_part, pct_part = base.split(" (", 1)
+                    return f"{num_part} ({inv}) ({pct_part}"
+                return f"{base} ({inv})"
+
+            # Denominadores do modo híbrido (inalterados).
+            _denom_hibrido: dict[str, pd.Series] = {
+                "Op. +12": tabela["oport_total"],
+                "Op. -12": tabela["oport_total"],
+                "Op. Não atua": tabela["oport_total"],
+                "Ag.": tabela["oport_total"],
+                "Ag. +12": tabela["oport_+12"],
+                "Ag. -12": tabela["oport_-12"],
+                "Ag. Não atua": tabela["oport_nao_atua"],
+                "Comp.": tabela["agend_total"],
+                "Comp. +12": tabela["agend_+12"],
+                "Comp. -12": tabela["agend_-12"],
+                "Comp. Não atua": tabela["agend_nao_atua"],
+                "Vendas": tabela["agend_total"],
+                "Vendas +12": tabela["agend_+12"],
+                "Vendas -12": tabela["agend_-12"],
+                "Vendas Não atua": tabela["agend_nao_atua"],
+            }
+
+            # 7) Renderização — colunas variam conforme `modo_view`.
             if modo_view == "Números":
-                tabela_view = pd.DataFrame({
-                    "#":                tabela["#"],
-                    "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
-                    "Op.":              tabela["oport_total"].astype(int),
-                    "Op. +12":          tabela["oport_+12"].astype(int),
-                    "Op. -12":          tabela["oport_-12"].astype(int),
-                    "Op. Não atua":     tabela["oport_nao_atua"].astype(int),
-                    "Ag.":              tabela["agend_total"].astype(int),
-                    "Ag. +12":          tabela["agend_+12"].astype(int),
-                    "Ag. -12":          tabela["agend_-12"].astype(int),
-                    "Ag. Não atua":     tabela["agend_nao_atua"].astype(int),
-                    "Vendas":           tabela["vendas_total"].astype(int),
-                    "Vendas +12":       tabela["vendas_+12"].astype(int),
-                })
+                dados: dict = {"SDR / Pré-vendas": tabela["SDR / Pré-vendas"]}
+                for label, col, wide in INDICADORES_OPORT_METRIC_COLS:
+                    vals = tabela[col].fillna(0)
+                    if mostrar_custo_oport:
+                        custo = custos_medios_oport[label]
+                        dados[label] = [
+                            fmt_celula_indicador_com_custo(
+                                v, custo, show_cost=True,
+                            )
+                            for v in vals
+                        ]
+                    else:
+                        dados[label] = vals.astype(int)
+                tabela_view = pd.DataFrame(dados)
                 column_config_oport = {
-                    "#":                _num_small("#"),
-                    "SDR / Pré-vendas": st.column_config.TextColumn(
-                        "SDR / Pré-vendas", width="medium"),
-                    "Op.":              _num_small("Op."),
-                    "Op. +12":          _num_small("Op. +12"),
-                    "Op. -12":          _num_small("Op. -12"),
-                    "Op. Não atua":     _num_small("Op. Não atua"),
-                    "Ag.":              _num_small("Ag."),
-                    "Ag. +12":          _num_small("Ag. +12"),
-                    "Ag. -12":          _num_small("Ag. -12"),
-                    "Ag. Não atua":     _num_small("Ag. Não atua"),
-                    "Vendas":           _num_small("Vendas"),
-                    "Vendas +12":       _num_small("Vendas +12"),
+                    "SDR / Pré-vendas": _sdr_col_cfg,
+                    **{
+                        label: _cfg_metrica(label, wide=wide)
+                        for label, _, wide in INDICADORES_OPORT_METRIC_COLS
+                    },
                 }
             elif modo_view == "Percentuais":
                 tabela_view = _format_table_br(pd.DataFrame({
-                    "#":                tabela["#"],
                     "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
                     "% Agendamento":    tabela["pct_agend"],
                     "% Ag. +12":        tabela["pct_agend_+12"],
@@ -1294,67 +1399,55 @@ else:
                     "% Conversão":      tabela["pct_conversao"],
                     "% Conversão +12":  tabela["pct_conv_+12"],
                 }))
-                _txt_small = lambda label: st.column_config.TextColumn(  # noqa: E731
-                    label, width="small"
-                )
+                _w_pct = 115
                 column_config_oport = {
-                    "#":                _num_small("#"),
-                    "SDR / Pré-vendas": st.column_config.TextColumn(
-                        "SDR / Pré-vendas", width="medium"),
-                    "% Agendamento":    _txt_small("% Agendamento"),
-                    "% Ag. +12":        _txt_small("% Ag. +12"),
-                    "% Ag. -12":        _txt_small("% Ag. -12"),
-                    "% Ag. Não atua":   _txt_small("% Ag. Não atua"),
-                    "% Conversão":      _txt_small("% Conversão"),
-                    "% Conversão +12":  _txt_small("% Conversão +12"),
+                    "SDR / Pré-vendas": _sdr_col_cfg,
+                    "% Agendamento": st.column_config.TextColumn(
+                        "% Agendamento", width=_w_pct, alignment="center",
+                    ),
+                    "% Ag. +12": st.column_config.TextColumn(
+                        "% Ag. +12", width=_w_pct, alignment="center",
+                    ),
+                    "% Ag. -12": st.column_config.TextColumn(
+                        "% Ag. -12", width=_w_pct, alignment="center",
+                    ),
+                    "% Ag. Não atua": st.column_config.TextColumn(
+                        "% Ag. Não atua", width=125, alignment="center",
+                    ),
+                    "% Conversão": st.column_config.TextColumn(
+                        "% Conversão", width=_w_pct, alignment="center",
+                    ),
+                    "% Conversão +12": st.column_config.TextColumn(
+                        "% Conversão +12", width=125, alignment="center",
+                    ),
                 }
-            else:  # "Números + Percentuais" — célula = "N (P,P%)"
-                # Denominadores conforme spec:
-                #   Op. → sem % (base); Op.{+12,-12,Não atua} / Op.
-                #   Ag. / Op.; Ag.{+12,-12,Não atua} / Op.{respectivo}
-                #   Vendas / Ag.; Vendas +12 / Ag. +12
-                tabela_view = pd.DataFrame({
-                    "#":                tabela["#"],
-                    "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
-                    "Op.":              tabela["oport_total"].astype(int).astype(str),
-                    "Op. +12":          [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["oport_+12"], tabela["oport_total"])],
-                    "Op. -12":          [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["oport_-12"], tabela["oport_total"])],
-                    "Op. Não atua":     [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["oport_nao_atua"], tabela["oport_total"])],
-                    "Ag.":              [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["agend_total"], tabela["oport_total"])],
-                    "Ag. +12":          [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["agend_+12"], tabela["oport_+12"])],
-                    "Ag. -12":          [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["agend_-12"], tabela["oport_-12"])],
-                    "Ag. Não atua":     [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["agend_nao_atua"], tabela["oport_nao_atua"])],
-                    "Vendas":           [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["vendas_total"], tabela["agend_total"])],
-                    "Vendas +12":       [_fmt_n_pct(n, d) for n, d in
-                                          zip(tabela["vendas_+12"], tabela["agend_+12"])],
-                })
-                # Células viram texto — Streamlit alinha texto à esquerda.
-                # `width="small"` cabe "999 (100,00%)" sem quebrar.
-                _txt_small = lambda label: st.column_config.TextColumn(  # noqa: E731
-                    label, width="small"
-                )
+            else:  # "Números + Percentuais"
+                dados_h: dict = {"SDR / Pré-vendas": tabela["SDR / Pré-vendas"]}
+                for label, col, wide in INDICADORES_OPORT_METRIC_COLS:
+                    vals = tabela[col].fillna(0)
+                    if label == "Op.":
+                        if mostrar_custo_oport:
+                            dados_h[label] = [
+                                fmt_celula_indicador_com_custo(
+                                    v, custos_medios_oport[label], show_cost=True,
+                                )
+                                for v in vals
+                            ]
+                        else:
+                            dados_h[label] = vals.astype(int).astype(str)
+                    else:
+                        denom = _denom_hibrido[label]
+                        dados_h[label] = [
+                            _fmt_n_pct_cost(n, d, label)
+                            for n, d in zip(vals, denom)
+                        ]
+                tabela_view = pd.DataFrame(dados_h)
                 column_config_oport = {
-                    "#":                _num_small("#"),
-                    "SDR / Pré-vendas": st.column_config.TextColumn(
-                        "SDR / Pré-vendas", width="medium"),
-                    "Op.":              _txt_small("Op."),
-                    "Op. +12":          _txt_small("Op. +12"),
-                    "Op. -12":          _txt_small("Op. -12"),
-                    "Op. Não atua":     _txt_small("Op. Não atua"),
-                    "Ag.":              _txt_small("Ag."),
-                    "Ag. +12":          _txt_small("Ag. +12"),
-                    "Ag. -12":          _txt_small("Ag. -12"),
-                    "Ag. Não atua":     _txt_small("Ag. Não atua"),
-                    "Vendas":           _txt_small("Vendas"),
-                    "Vendas +12":       _txt_small("Vendas +12"),
+                    "SDR / Pré-vendas": _sdr_col_cfg,
+                    **{
+                        label: _cfg_metrica(label, wide=wide)
+                        for label, _, wide in INDICADORES_OPORT_METRIC_COLS
+                    },
                 }
 
             st.dataframe(
@@ -1367,6 +1460,7 @@ else:
             # 7) Totais + caption explicativo.
             total_oport  = int(tabela["oport_total"].sum())
             total_agend  = int(tabela["agend_total"].sum())
+            total_comp   = int(tabela["comp_total"].sum())
             total_vendas = int(tabela["vendas_total"].sum())
             pct_agend_g  = (total_agend  / total_oport  * 100.0) if total_oport  else 0.0
             pct_conv_g   = (total_vendas / total_agend  * 100.0) if total_agend  else 0.0
@@ -1374,12 +1468,15 @@ else:
                 f"**{int_br(len(tabela))} SDR(s)** · "
                 f"**{int_br(total_oport)} oport.** · "
                 f"**{int_br(total_agend)} agend.** · "
+                f"**{int_br(total_comp)} comp.** · "
                 f"**{int_br(total_vendas)} vendas** · "
                 f"% Agendamento **{fmt_percent_br(pct_agend_g)}** · "
                 f"% Conversão **{fmt_percent_br(pct_conv_g)}**. "
                 "**% Conversão = Vendas / Agendamentos** (padrão Looker). "
                 "Oportunidades = `zoho_deals` criados no período; "
                 "agendamentos = activities Consulta/Indicação no período; "
+                "comparecimentos = activities concluídas no período "
+                "(status Concluída/Concluído); "
                 "vendas = deals ganhos no período (stage Ganho · tipo "
                 "Novo cliente). SDR atribuído via cascata "
                 "`activity.prevendas > deal.sdr_ss`. Apenas SDRs do cadastro "

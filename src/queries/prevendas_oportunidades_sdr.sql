@@ -3,9 +3,10 @@
 -- "Indicadores por Pré-vendas" na Visão Geral Pré-vendas.
 -- =============================================================================
 -- Grão devolvido: 1 row por (sdr, classif_bucket).
---   - oportunidades = COUNT(DISTINCT deal_id) criados no período
---   - agendamentos  = COUNT(DISTINCT activity_id) Consulta/Indicação no período
---   - vendas        = COUNT(DISTINCT deal_id) ganhos no período
+--   - oportunidades   = COUNT(DISTINCT deal_id) criados no período
+--   - agendamentos    = COUNT(DISTINCT activity_id) Consulta/Indicação no período
+--   - comparecimentos = COUNT(DISTINCT activity_id) concluídas no período
+--   - vendas          = COUNT(DISTINCT deal_id) ganhos no período
 -- O Python pivota para 1 row por SDR com colunas por bucket e calcula:
 --   % Agendamento = Agend / Oport
 --   % Conversão   = Vendas / Agendamentos  (padrão Looker)
@@ -206,6 +207,32 @@ agend_por_deal AS (
         anp.activity_id
     FROM acts_no_periodo anp
     WHERE anp.deal_id IS NOT NULL AND anp.deal_id <> ''
+),
+acts_comparecimentos_periodo AS (
+    -- Comparecimentos: activities concluídas no período (mesma janela
+    -- de agendamentos; status IN ('Concluída','Concluído') — regra
+    -- centralizada do projeto / prevendas_overview_diario.sql).
+    SELECT
+        a.id::text                              AS activity_id,
+        CASE
+            WHEN a.what_id ~ '^\{.*\}$'
+                THEN (a.what_id::json ->> 'id')::text
+            ELSE regexp_replace(COALESCE(a.what_id, ''), '\D', '', 'g')
+        END                                     AS deal_id
+    FROM zoho_activities a
+    WHERE a.activity_type IN ('Consulta', 'Indicação')
+      AND a.status_reuniao IN ('Concluída', 'Concluído')
+      AND (
+          a.created_time::date     BETWEEN :data_ini AND :data_fim
+          OR a.start_datetime::date BETWEEN :data_ini AND :data_fim
+      )
+),
+comp_por_deal AS (
+    SELECT
+        acp.deal_id,
+        acp.activity_id
+    FROM acts_comparecimentos_periodo acp
+    WHERE acp.deal_id IS NOT NULL AND acp.deal_id <> ''
 )
 SELECT
     da.sdr,
@@ -213,8 +240,10 @@ SELECT
     da.funil_origem,
     COUNT(DISTINCT da.deal_id) FILTER (WHERE da.is_oport)::bigint AS oportunidades,
     COUNT(DISTINCT apd.activity_id)::bigint                       AS agendamentos,
+    COUNT(DISTINCT cpd.activity_id)::bigint                       AS comparecimentos,
     COUNT(DISTINCT da.deal_id) FILTER (WHERE da.is_venda)::bigint AS vendas
 FROM deal_attrs da
 LEFT JOIN agend_por_deal apd ON apd.deal_id = da.deal_id
+LEFT JOIN comp_por_deal  cpd ON cpd.deal_id = da.deal_id
 GROUP BY da.sdr, da.classif_bucket, da.funil_origem
 ORDER BY da.sdr, da.classif_bucket, da.funil_origem;

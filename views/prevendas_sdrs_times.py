@@ -33,12 +33,15 @@ from src.prevendas_transforms import (
     prevendas_ranking_sdr,
 )
 from src.repositories import (
+    get_executivas,
+    get_investimento_diario,
     get_prevendas_leads_detalhe_diario,
     get_prevendas_overview_diario,
     get_prevendas_por_sdr,
     get_prevendas_qualif_comparecimento,
     get_prevendas_sdrs_oficiais,
 )
+from src.transforms import visao_geral_kpis
 from src.ui.charts import bar_qualif_pre_split, bar_simple
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
@@ -62,6 +65,15 @@ try:
 except Exception as e:
     st.error(f"Falha ao consultar Pré-vendas: {e}")
     st.stop()
+
+# Investido — mesma fonte/cálculo da One Page e Visão Geral Pré-vendas.
+try:
+    df_inv_periodo = get_investimento_diario(ctx.data_ini, ctx.data_fim)
+    df_exec_inv = get_executivas(ctx.data_ini, ctx.data_fim)
+    k_investido = visao_geral_kpis(df_exec_inv, df_inv_periodo)
+except Exception:
+    k_investido = {"investimento": 0, "dias": 0}
+_investido_total = float(k_investido.get("investimento") or 0)
 
 # Aplica filtros do header (sdr e tipo_sdr) — anota tipo antes pra que o
 # filtro de tipo funcione mesmo no df_sdr (que originalmente não tem essa
@@ -102,6 +114,13 @@ if excluir_lr_global:
     _splits_resumo = prevendas_qualif_resumo_splits(df_qualif_sem_lr)
 else:
     _splits_resumo = prevendas_qualif_resumo_splits(df_qualif_anotado)
+
+agendamentos_exibidos = int(
+    k.get(
+        "agendamentos_exibidos",
+        max(int(k["agendamentos"]) - int(k.get("vencidas", 0) or 0), 0),
+    )
+)
 
 # ---------------------------------------------------------------------------
 # Resumo do período (totais, sem filtro fino — referência cross-SDR)
@@ -170,6 +189,9 @@ with tab_rank:
         data_fim=ctx.data_fim,
         key_prefix="prevendas_sdrs_times",
         section_title_text="Ranking por SDR",
+        investido_total=_investido_total,
+        kpis=k,
+        agendamentos_exibidos=agendamentos_exibidos,
     )
 
     ranking_bruto = prevendas_ranking_sdr(df_sdr_filt)

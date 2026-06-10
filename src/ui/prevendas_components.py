@@ -26,6 +26,12 @@ from src.prevendas_transforms import (
 )
 from src.ui.charts import bar_ranked
 from src.ui.components import metric_card_v2, section_title
+from src.ui.prevendas_ranking_cost import (
+    RANKING_AVG_COST_LABELS,
+    augment_ranking_plot_with_cost,
+    init_ranking_metric_col_state,
+    render_ranking_metric_controls,
+)
 from src.ui.theme import int_br
 
 
@@ -42,6 +48,9 @@ def render_top_sdr_interativo(
     section_title_text: str = "Top SDRs",
     section_subtitle: str | None = None,
     column_grid: tuple[float, float] = (1.45, 1.0),
+    investido_total: float | None = None,
+    kpis: dict | None = None,
+    agendamentos_exibidos: int | None = None,
 ) -> None:
     """Bloco completo Top SDR interativo — gráfico à esquerda, painel
     retrátil à direita.
@@ -55,15 +64,25 @@ def render_top_sdr_interativo(
       Ex.: `{"Agendamentos": "agendamentos", "Vendas": "vendas"}`.
     - `key_prefix`: usado pra prefixar todas as keys de widgets desta
       página — evita colisão entre as 3 páginas que usam o helper.
+    - `investido_total` + `kpis`: quando informados, habilita checkbox de
+      custo, seletor com custo médio e tooltip/bar labels como na Visão Geral.
     """
-    # --- Header da seção (label do header reage à métrica escolhida) ---
     metric_labels = list(metric_options.keys())
-    default_idx = (metric_labels.index(default_metric_label)
-                   if default_metric_label in metric_labels else 0)
-    metric_state_key = f"{key_prefix}_ranking_metric"
-    _label_atual = st.session_state.get(metric_state_key, default_metric_label)
-    if _label_atual not in metric_options:
-        _label_atual = default_metric_label
+    label_by_col = {col: label for label, col in metric_options.items()}
+    ranking_com_custo = investido_total is not None and kpis is not None
+
+    if ranking_com_custo:
+        col_state_key = f"{key_prefix}_ranking_metric_col"
+        legacy_label_key = f"{key_prefix}_ranking_metric"
+        _col_header = init_ranking_metric_col_state(
+            metric_options, default_metric_label, col_state_key, legacy_label_key,
+        )
+        _label_atual = label_by_col[_col_header]
+    else:
+        metric_state_key = f"{key_prefix}_ranking_metric"
+        _label_atual = st.session_state.get(metric_state_key, default_metric_label)
+        if _label_atual not in metric_options:
+            _label_atual = default_metric_label
 
     subtitle = (
         section_subtitle
@@ -81,13 +100,30 @@ def render_top_sdr_interativo(
     # COLUNA ESQUERDA — métrica + gráfico clicável
     # =======================================================================
     with col_grafico:
-        ranking_metric_label = st.selectbox(
-            "Métrica do ranking",
-            options=metric_labels,
-            index=default_idx,
-            key=metric_state_key,
-        )
-        ranking_metric_col = metric_options[ranking_metric_label]
+        if ranking_com_custo:
+            ranking_metric_col, ranking_metric_label, mostrar_custo = (
+                render_ranking_metric_controls(
+                    metric_options=metric_options,
+                    default_metric_label=default_metric_label,
+                    key_prefix=key_prefix,
+                    investido_total=float(investido_total),
+                    kpis=kpis,
+                    df_rank_base=df_sdr_filt,
+                    agendamentos_exibidos=agendamentos_exibidos,
+                )
+            )
+        else:
+            default_idx = (metric_labels.index(default_metric_label)
+                           if default_metric_label in metric_labels else 0)
+            metric_state_key = f"{key_prefix}_ranking_metric"
+            ranking_metric_label = st.selectbox(
+                "Métrica do ranking",
+                options=metric_labels,
+                index=default_idx,
+                key=metric_state_key,
+            )
+            ranking_metric_col = metric_options[ranking_metric_label]
+            mostrar_custo = False
 
         ranking_plot = ranking[
             ranking[ranking_metric_col].fillna(0) > 0
@@ -100,9 +136,32 @@ def render_top_sdr_interativo(
         if ranking_plot.empty:
             st.info(f"Sem {ranking_metric_label.lower()} no período.")
         else:
+            bar_kwargs: dict = {}
+            plot_data = ranking_plot
+            if ranking_com_custo:
+                plot_data, _custo_num, _custo_fmt = (
+                    augment_ranking_plot_with_cost(
+                        ranking_plot,
+                        ranking_metric_col,
+                        df_sdr_filt,
+                        float(investido_total),
+                        kpis,
+                        agendamentos_exibidos=agendamentos_exibidos,
+                    )
+                )
+                bar_kwargs = dict(
+                    metric_label=ranking_metric_label,
+                    cost_col="_inv_estimado_sdr",
+                    cost_label=RANKING_AVG_COST_LABELS.get(
+                        ranking_metric_col, "Custo médio",
+                    ),
+                    avg_cost_display=_custo_fmt,
+                    show_cost_on_bar=mostrar_custo,
+                )
             fig_top = bar_ranked(
-                ranking_plot, "sdr", ranking_metric_col,
+                plot_data, "sdr", ranking_metric_col,
                 top_n=12, height=320,
+                **bar_kwargs,
             )
             chart_state = st.plotly_chart(
                 fig_top,

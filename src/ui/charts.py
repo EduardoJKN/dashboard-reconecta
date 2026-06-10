@@ -314,12 +314,33 @@ def dual_line(df: pd.DataFrame, x: str, y_left: str, y_right: str,
 def bar_ranked(df: pd.DataFrame, category: str, value: str,
                top_n: int = 15, money: bool = False,
                height: int | None = None,
-               label_max_len: int = 26) -> go.Figure:
+               label_max_len: int = 26,
+               metric_label: str | None = None,
+               cost_col: str | None = None,
+               cost_label: str | None = None,
+               show_cost_on_bar: bool = False,
+               avg_cost_display: str | None = None) -> go.Figure:
     data = df.nlargest(top_n, value).sort_values(value, ascending=True)
     h = height or max(260, 26 * len(data) + 60)
-    text_vals = data[value].map(
-        lambda v: f"R$ {v:,.0f}".replace(",", ".") if money else f"{v:,.0f}".replace(",", ".")
-    )
+
+    def _fmt_bar_val(v: float) -> str:
+        if money:
+            return f"R$ {v:,.0f}".replace(",", ".")
+        return f"{v:,.0f}".replace(",", ".")
+
+    if (show_cost_on_bar and cost_col and cost_col in data.columns):
+        text_vals = [
+            (
+                f"{_fmt_bar_val(v)} ({c})"
+                if str(c).strip() and str(c).strip() != "—"
+                else _fmt_bar_val(v)
+            )
+            for v, c in zip(data[value], data[cost_col])
+        ]
+        bar_text_size = 9
+    else:
+        text_vals = data[value].map(_fmt_bar_val)
+        bar_text_size = 10
     full_labels = data[category].astype(str)
     y_labels = full_labels.apply(lambda s: _truncate(s, label_max_len))
 
@@ -332,6 +353,36 @@ def bar_ranked(df: pd.DataFrame, category: str, value: str,
     else:
         norm = [0.0] * len(vals)
     inside_text_colors = ["#1a1410" if n >= 0.75 else "#ffffff" for n in norm]
+
+    if cost_col and cost_col in data.columns and cost_label:
+        metric_name = metric_label or value
+        if avg_cost_display is not None:
+            customdata = list(zip(
+                full_labels.tolist(),
+                [avg_cost_display] * len(data),
+                data[cost_col].astype(str).tolist(),
+            ))
+            hovertemplate = (
+                f"<b>%{{customdata[0]}}</b><br>"
+                f"{metric_name}: %{{x:,.0f}}<br>"
+                f"{cost_label}: %{{customdata[1]}}<br>"
+                f"Investimento estimado: %{{customdata[2]}}"
+                f"<extra></extra>"
+            )
+        else:
+            customdata = list(zip(
+                full_labels.tolist(),
+                data[cost_col].astype(str).tolist(),
+            ))
+            hovertemplate = (
+                f"<b>%{{customdata[0]}}</b><br>"
+                f"{metric_name}: %{{x:,.0f}}<br>"
+                f"{cost_label}: %{{customdata[1]}}"
+                f"<extra></extra>"
+            )
+    else:
+        customdata = full_labels.to_numpy(dtype=object).reshape(-1, 1)
+        hovertemplate = "<b>%{customdata[0]}</b><br>%{x:,.0f}<extra></extra>"
 
     fig = go.Figure(go.Bar(
         y=y_labels,
@@ -346,11 +397,11 @@ def bar_ranked(df: pd.DataFrame, category: str, value: str,
         # auto: barra grande -> dentro (anchored end); pequena -> fora
         textposition="auto",
         insidetextanchor="end",
-        insidetextfont=dict(color=inside_text_colors, size=10, family="Inter"),
-        outsidetextfont=dict(color=PALETTE["text_subtle"], size=10, family="Inter"),
+        insidetextfont=dict(color=inside_text_colors, size=bar_text_size, family="Inter"),
+        outsidetextfont=dict(color=PALETTE["text_subtle"], size=bar_text_size, family="Inter"),
         cliponaxis=False,
-        customdata=full_labels.to_numpy(dtype=object).reshape(-1, 1),
-        hovertemplate="<b>%{customdata[0]}</b><br>%{x:,.0f}<extra></extra>",
+        customdata=customdata,
+        hovertemplate=hovertemplate,
     ))
     fig.update_layout(**_base_layout(height=h))
     fig.update_layout(
