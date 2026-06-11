@@ -1113,27 +1113,147 @@ div[data-testid="stPopover"] button[kind="secondary"] {{
   font-weight: 600;
 }}
 
-/* =====  Sidebar com st.navigation (marca Reconecta no topo) ===== */
+/* =====  Sidebar — hierarquia grupo (expansor) > subpáginas ===== */
 section[data-testid="stSidebar"] [data-testid="stSidebarNav"] {{
   padding-top: 0 !important;
 }}
-section[data-testid="stSidebar"] [data-testid="stSidebarNav"] ul {{
-  gap: 2px;
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] {{
+  gap: 0 !important;
+  padding-left: 4px !important;
+  padding-right: 4px !important;
 }}
-section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a {{
-  color: var(--color-text-subtle) !important;
-  padding: 8px 14px !important;
+
+/* --- Cabeçalho dos grupos (Time de Marketing, etc.) --- */
+section[data-testid="stSidebar"] [data-testid="stNavSectionHeader"] {{
+  font-size: 0.62rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  color: var(--color-gold-soft) !important;
+  background: var(--color-card) !important;
+  border: 1px solid var(--color-border) !important;
   border-radius: 8px !important;
-  font-weight: 500;
-  font-size: 0.88rem;
+  padding: 9px 12px !important;
+  margin: 16px 6px 8px 6px !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  line-height: 1.25 !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
 }}
-section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a:hover {{
+section[data-testid="stSidebar"] [data-testid="stNavSectionHeader"]:hover {{
+  background: var(--color-card-hover) !important;
+  border-color: var(--color-border-strong) !important;
+  color: var(--color-gold) !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stNavSectionHeader"] > span {{
+  overflow: visible !important;
+  white-space: normal !important;
+  text-overflow: unset !important;
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stNavSectionHeader"] > div:last-child {{
+  visibility: visible !important;
+  flex-shrink: 0 !important;
+  margin-left: auto !important;
+  color: var(--color-muted) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}}
+
+/* --- Bloco de cada grupo --- */
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > div:has([data-testid="stNavSectionHeader"]) {{
+  margin-bottom: 6px !important;
+}}
+
+/* --- Subpáginas dentro do expansor (árvore com linha guia) --- */
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > div:has([data-testid="stNavSectionHeader"]) > li {{
+  position: relative !important;
+  margin: 1px 0 1px 10px !important;
+  padding-left: 16px !important;
+  list-style: none !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > div:has([data-testid="stNavSectionHeader"]) > li::before {{
+  content: "" !important;
+  position: absolute !important;
+  left: 4px !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: 1px !important;
+  background: var(--color-border) !important;
+  opacity: 0.9 !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > div:has([data-testid="stNavSectionHeader"]) > li::after {{
+  content: "" !important;
+  position: absolute !important;
+  left: 4px !important;
+  top: 50% !important;
+  width: 9px !important;
+  height: 1px !important;
+  background: var(--color-border) !important;
+  opacity: 0.9 !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > div:has([data-testid="stNavSectionHeader"]) > li:last-child::before {{
+  bottom: 50% !important;
+}}
+
+/* --- Links de subpágina --- */
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > div:has([data-testid="stNavSectionHeader"]) [data-testid="stSidebarNavLink"] {{
+  font-size: 0.80rem !important;
+  font-weight: 450 !important;
+  padding: 7px 10px 7px 8px !important;
+  margin: 1px 2px !important;
+  border-radius: 8px !important;
+  color: var(--color-text-subtle) !important;
+  line-height: 1.35 !important;
+  border-left: 2px solid transparent !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > div:has([data-testid="stNavSectionHeader"]) [data-testid="stSidebarNavLink"]:hover {{
+  background: var(--color-card) !important;
+  color: var(--color-text) !important;
+  border-left-color: var(--color-border-strong) !important;
+}}
+
+/* --- Páginas de topo (ex.: One Page, fora de grupo) --- */
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > li [data-testid="stSidebarNavLink"] {{
+  font-size: 0.85rem !important;
+  font-weight: 500 !important;
+  padding: 8px 12px !important;
+  margin: 2px 4px !important;
+  border-radius: 8px !important;
+  color: var(--color-text-subtle) !important;
+  border-left: 2px solid transparent !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > li [data-testid="stSidebarNavLink"]:hover {{
   background: var(--color-card) !important;
   color: var(--color-text) !important;
 }}
-section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a[aria-current="page"] {{
-  background: var(--color-wine-soft) !important;
-  color: var(--color-gold-bright) !important;
-  border-left: 3px solid var(--color-gold);
+
+/* --- Labels: permitir quebra em nomes longos (sem truncar feio) --- */
+section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"] span {{
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  display: block !important;
+  line-height: 1.35 !important;
+}}
+
+/* --- Página ativa (grupo ou topo) --- */
+section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"][aria-current="page"] {{
+  background: var(--color-wine) !important;
+  color: #ffffff !important;
+  border-left: 3px solid var(--color-gold) !important;
+  font-weight: 600 !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"][aria-current="page"]:hover {{
+  background: var(--color-wine-light) !important;
+  color: #ffffff !important;
+  border-left-color: var(--color-gold-bright) !important;
 }}
 """

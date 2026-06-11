@@ -61,8 +61,8 @@ pages = {
         st.Page("views/prevendas_overview.py",        title="Visão Geral Pré-vendas"),
         st.Page("views/prevendas_sdrs_times.py",      title="SDRs & Times"),
         st.Page("views/prevendas_sdr_closer.py",      title="SDR × Closer"),
-        st.Page("views/prevendas_comparecimentos.py", title="Comparecimentos & Oportunidades"),
-        st.Page("views/prevendas_sla.py",             title="SLA & Tempo de Resposta"),
+        st.Page("views/prevendas_comparecimentos.py", title="Comparecimentos"),
+        st.Page("views/prevendas_sla.py",             title="SLA & Resposta"),
     ],
     "Time de Vendas": [
         st.Page("views/home.py",         title="Visão Geral", default=True),
