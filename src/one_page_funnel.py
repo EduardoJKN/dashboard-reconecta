@@ -111,12 +111,21 @@ class FunnelSnapshot:
     comparecimento: float
     vendas: float
     montante: float
+    receita: float
+    pct_recebimento: float
     custo_lead: float
     pct_la: float
     pct_a_ag: float
     pct_ag_c: float
     pct_c_v: float
     ticket: float
+
+
+def project_receita_from_montante(montante: float, pct_recebimento: float) -> float:
+    """Receita projetada — % recebimento de `visao_geral_kpis` (0–100)."""
+    if montante <= 0 or pct_recebimento <= 0:
+        return 0.0
+    return montante * (pct_recebimento / 100.0)
 
 
 def load_one_page_funnel(
@@ -146,6 +155,8 @@ def load_one_page_funnel(
     comparecimento = float(k_prev["comparecimentos"])
     vendas = float(k_vend["vendas"])
     montante = float(k_vend["montante"])
+    receita = float(k_vend["receita"])
+    pct_recebimento = float(k_vend["pct_recebimento"])
 
     return FunnelSnapshot(
         investimento=investimento,
@@ -155,6 +166,8 @@ def load_one_page_funnel(
         comparecimento=comparecimento,
         vendas=vendas,
         montante=montante,
+        receita=receita,
+        pct_recebimento=pct_recebimento,
         custo_lead=safe_div(investimento, leads),
         pct_la=safe_div(aplicacoes, leads),
         # Mesma regra da One Page (`pct_agendamento_apl`): match por e-mail, 1x por aplicação.
@@ -192,7 +205,8 @@ def snapshot_calc_display(
         "agendamentos": snapshot.agendamentos / div,
         "comparecimento": snapshot.comparecimento / div,
         "vendas": snapshot.vendas / div,
-        "faturamento": snapshot.montante / div,
+        "montante": snapshot.montante / div,
+        "receita": snapshot.receita / div,
     }
 
 

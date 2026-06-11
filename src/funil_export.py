@@ -15,7 +15,6 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from src.funil_meta_store import metas_dict_from_scenario
 
 MetricKind = Literal["money", "percent", "integer", "text"]
 
@@ -89,7 +88,7 @@ def metric_kind(metric_name: str) -> MetricKind:
     if "%" in metric_name:
         return "percent"
     money_kw = (
-        "r$", "investimento", "custo", "ticket", "faturamento",
+        "r$", "investimento", "custo", "ticket", "montante",
         "receita", "ganho", "delta", "impacto", "diferença",
     )
     if any(k in name for k in money_kw):
@@ -162,8 +161,10 @@ def _comparativo_rows(bundle: FunilExportBundle) -> list[ComparativoRow]:
         ComparativoRow("Vendas", "integer",
                        ca["vendas"], cs["vendas"], cm["vendas"]),
         ComparativoRow("Ticket Médio (R$)", "money", a.ticket, s.ticket, m.ticket),
-        ComparativoRow("Faturamento", "money",
-                       ca["faturamento"], cs["faturamento"], cm["faturamento"]),
+        ComparativoRow("Montante", "money",
+                       ca["montante"], cs["montante"], cm["montante"]),
+        ComparativoRow("Receita", "money",
+                       ca.get("receita", 0), cs.get("receita", 0), cm.get("receita", 0)),
     ]
 
 
@@ -174,8 +175,16 @@ def _comparativo_rows(bundle: FunilExportBundle) -> list[ComparativoRow]:
 def build_export_resumo_df(bundle: FunilExportBundle) -> pd.DataFrame:
     gargalo = _gargalo_top(bundle.impactos)
     gargalo_txt = gargalo["label"] if gargalo else "Nenhum (funil alinhado à meta)"
-    delta_sim = bundle.calc_sim["faturamento"] - bundle.calc_atual["faturamento"]
-    delta_meta = bundle.calc_meta["faturamento"] - bundle.calc_atual["faturamento"]
+    delta_sim = bundle.calc_sim["montante"] - bundle.calc_atual["montante"]
+    delta_meta = bundle.calc_meta["montante"] - bundle.calc_atual["montante"]
+    delta_rec_sim = (
+        float(bundle.calc_sim.get("receita") or 0)
+        - float(bundle.calc_atual.get("receita") or 0)
+    )
+    delta_rec_meta = (
+        float(bundle.calc_meta.get("receita") or 0)
+        - float(bundle.calc_atual.get("receita") or 0)
+    )
     return pd.DataFrame(
         {
             "Campo": [
@@ -185,8 +194,10 @@ def build_export_resumo_df(bundle: FunilExportBundle) -> pd.DataFrame:
                 "Visualização",
                 "Excluir testes nas aplicações",
                 "Gargalo crítico",
-                "Δ Faturamento Simulador - Atual",
-                "Δ Faturamento Meta - Atual",
+                "Δ Montante Simulador - Atual",
+                "Δ Montante Meta - Atual",
+                "Δ Receita Simulador - Atual",
+                "Δ Receita Meta - Atual",
             ],
             "Valor": [
                 "Funil da Reconecta",
@@ -197,6 +208,8 @@ def build_export_resumo_df(bundle: FunilExportBundle) -> pd.DataFrame:
                 gargalo_txt,
                 fmt_brl(delta_sim),
                 fmt_brl(delta_meta),
+                fmt_brl(delta_rec_sim),
+                fmt_brl(delta_rec_meta),
             ],
         }
     )
@@ -250,7 +263,15 @@ def build_export_gargalos_df(bundle: FunilExportBundle) -> pd.DataFrame:
 
 
 def build_export_metas_df(bundle: FunilExportBundle) -> pd.DataFrame:
-    md = metas_dict_from_scenario(bundle.meta)
+    md = {
+        "investimento": float(bundle.meta.investimento),
+        "custo_lead": float(bundle.meta.custo_lead),
+        "pct_la": float(bundle.meta.pct_la),
+        "pct_a_ag": float(bundle.meta.pct_a_ag),
+        "pct_ag_c": float(bundle.meta.pct_ag_c),
+        "pct_c_v": float(bundle.meta.pct_c_v),
+        "ticket": float(bundle.meta.ticket),
+    }
     specs = [
         ("Investimento (mês)", md["investimento"], "money"),
         ("Custo por Lead (R$)", md["custo_lead"], "money"),
@@ -419,8 +440,16 @@ def _write_resumo_executivo_sheet(ws: Worksheet, bundle: FunilExportBundle) -> N
     gargalo_txt = (
         gargalo["label"] if gargalo else "Nenhum (funil alinhado à meta)"
     )
-    delta_sim = bundle.calc_sim["faturamento"] - bundle.calc_atual["faturamento"]
-    delta_meta = bundle.calc_meta["faturamento"] - bundle.calc_atual["faturamento"]
+    delta_sim = bundle.calc_sim["montante"] - bundle.calc_atual["montante"]
+    delta_meta = bundle.calc_meta["montante"] - bundle.calc_atual["montante"]
+    delta_rec_sim = (
+        float(bundle.calc_sim.get("receita") or 0)
+        - float(bundle.calc_atual.get("receita") or 0)
+    )
+    delta_rec_meta = (
+        float(bundle.calc_meta.get("receita") or 0)
+        - float(bundle.calc_atual.get("receita") or 0)
+    )
     ncol = 5
 
     r = 1
@@ -457,11 +486,16 @@ def _write_resumo_executivo_sheet(ws: Worksheet, bundle: FunilExportBundle) -> N
         ws,
         r,
         [
-            ("Faturamento Atual", bundle.calc_atual["faturamento"], "money"),
-            ("Faturamento Simulador", bundle.calc_sim["faturamento"], "money"),
-            ("Faturamento Meta", bundle.calc_meta["faturamento"], "money"),
-            ("Delta Simulador - Atual", delta_sim, "money"),
-            ("Delta Meta - Atual", delta_meta, "money"),
+            ("Montante Atual", bundle.calc_atual["montante"], "money"),
+            ("Montante Simulador", bundle.calc_sim["montante"], "money"),
+            ("Montante Meta", bundle.calc_meta["montante"], "money"),
+            ("Receita Atual", bundle.calc_atual.get("receita", 0), "money"),
+            ("Receita Simulador", bundle.calc_sim.get("receita", 0), "money"),
+            ("Receita Meta", bundle.calc_meta.get("receita", 0), "money"),
+            ("Delta Montante Simulador - Atual", delta_sim, "money"),
+            ("Delta Montante Meta - Atual", delta_meta, "money"),
+            ("Delta Receita Simulador - Atual", delta_rec_sim, "money"),
+            ("Delta Receita Meta - Atual", delta_rec_meta, "money"),
         ],
     )
     r += 1
@@ -694,8 +728,16 @@ def _pdf_table(
 
 def export_funil_pdf(bundle: FunilExportBundle) -> bytes:
     gargalo = _gargalo_top(bundle.impactos)
-    delta_sim = bundle.calc_sim["faturamento"] - bundle.calc_atual["faturamento"]
-    delta_meta = bundle.calc_meta["faturamento"] - bundle.calc_atual["faturamento"]
+    delta_sim = bundle.calc_sim["montante"] - bundle.calc_atual["montante"]
+    delta_meta = bundle.calc_meta["montante"] - bundle.calc_atual["montante"]
+    delta_rec_sim = (
+        float(bundle.calc_sim.get("receita") or 0)
+        - float(bundle.calc_atual.get("receita") or 0)
+    )
+    delta_rec_meta = (
+        float(bundle.calc_meta.get("receita") or 0)
+        - float(bundle.calc_atual.get("receita") or 0)
+    )
 
     pdf = _FunilPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=16)
@@ -730,11 +772,16 @@ def export_funil_pdf(bundle: FunilExportBundle) -> bytes:
     _pdf_kv_block(
         pdf,
         [
-            ("Faturamento Atual:", fmt_brl(bundle.calc_atual["faturamento"])),
-            ("Faturamento Simulador:", fmt_brl(bundle.calc_sim["faturamento"])),
-            ("Faturamento Meta:", fmt_brl(bundle.calc_meta["faturamento"])),
-            ("Delta Simulador - Atual:", fmt_brl(delta_sim)),
-            ("Delta Meta - Atual:", fmt_brl(delta_meta)),
+            ("Montante Atual:", fmt_brl(bundle.calc_atual["montante"])),
+            ("Montante Simulador:", fmt_brl(bundle.calc_sim["montante"])),
+            ("Montante Meta:", fmt_brl(bundle.calc_meta["montante"])),
+            ("Receita Atual:", fmt_brl(bundle.calc_atual.get("receita", 0))),
+            ("Receita Simulador:", fmt_brl(bundle.calc_sim.get("receita", 0))),
+            ("Receita Meta:", fmt_brl(bundle.calc_meta.get("receita", 0))),
+            ("Delta Montante Sim. - Atual:", fmt_brl(delta_sim)),
+            ("Delta Montante Meta - Atual:", fmt_brl(delta_meta)),
+            ("Delta Receita Sim. - Atual:", fmt_brl(delta_rec_sim)),
+            ("Delta Receita Meta - Atual:", fmt_brl(delta_rec_meta)),
             ("Gargalo crítico:", gargalo_txt),
         ],
     )

@@ -4,6 +4,8 @@ Cards consolidados + Tendência diária + Funil 4 etapas + Top SDRs.
 SDR primário = `zoho_activities.prevendas` (NULL → 'Sem SDR').
 Vendas atribuídas via `what_id` da activity → deal Ganho/Fechado Ganho
 + tipo_venda='Novo cliente' (mesma regra Visão Geral)."""
+from datetime import date
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -13,6 +15,7 @@ from src.prevendas_transforms import (
     prevendas_agregar_por_granularidade,
     prevendas_anotar_sdr,
     prevendas_anotar_tipo_sdr_detalhe,
+    prevendas_auditoria_agendamentos_bruto_dia,
     prevendas_detalhe_mask_por_metrica,
     prevendas_diario_filtrado_por_sdr,
     prevendas_funil_etapas,
@@ -507,6 +510,66 @@ with r2c5:
                    fmt_currency_br(k["ticket_medio"]),
                    hint="montante ÷ vendas",
                    **_fin_card)
+
+# ---------------------------------------------------------------------------
+# Auditoria temporária — Agendamentos 10/06/2026 (não altera o card)
+# ---------------------------------------------------------------------------
+_AUDITORIA_AG_DIA = date(2026, 6, 10)
+with st.expander(
+    f"🔎 Auditoria temporária — Agendamentos {_AUDITORIA_AG_DIA.strftime('%d/%m/%Y')}",
+    expanded=False,
+):
+    st.caption(
+        "Conferência entre o dashboard e o sistema da gestora. "
+        "Lista as activities que entram no **bruto** do card "
+        "(reunião na data · Consulta/Indicação · status preenchido). "
+        "O **exibido** segue a regra atual: bruto − vencidas "
+        "(canceladas permanecem no exibido). "
+        "Referência esperada pela gestora: **27** exibidos."
+    )
+    try:
+        # Mês inteiro — captura activities criadas antes da data da reunião.
+        _df_audit = get_prevendas_leads_detalhe_diario(
+            date(_AUDITORIA_AG_DIA.year, _AUDITORIA_AG_DIA.month, 1),
+            date(_AUDITORIA_AG_DIA.year, _AUDITORIA_AG_DIA.month, 30),
+        )
+        _det_audit = prevendas_normalizar_detalhe(_df_audit)
+        tabela_audit = prevendas_auditoria_agendamentos_bruto_dia(
+            _det_audit, _AUDITORIA_AG_DIA,
+        )
+    except Exception as _e_audit:
+        st.error(f"Falha ao montar auditoria: {_e_audit}")
+        tabela_audit = pd.DataFrame()
+
+    if tabela_audit.empty:
+        st.info("Nenhuma activity encontrada na base bruta para essa data.")
+    else:
+        n_bruto = len(tabela_audit)
+        n_venc = int((tabela_audit["É vencido"] == "Sim").sum())
+        n_canc = int((tabela_audit["É cancelado"] == "Sim").sum())
+        n_exib = int((tabela_audit["Entra no card (exibido)"] == "Sim").sum())
+        st.markdown(
+            f"**Resumo:** {int_br(n_bruto)} brutos · "
+            f"{int_br(n_venc)} vencidos removidos · "
+            f"{int_br(n_canc)} cancelados no CRM (ainda no exibido) · "
+            f"**{int_br(n_exib)} exibidos** · gestora: **27** · "
+            f"Δ {int_br(n_exib - 27):+d}"
+        )
+        st.dataframe(
+            tabela_audit,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Data/hora da reunião": st.column_config.TextColumn(
+                    "Data/hora da reunião", width="medium",
+                ),
+                "Nome do deal": st.column_config.TextColumn(
+                    "Nome do deal", width="large",
+                ),
+                "SDR": st.column_config.TextColumn("SDR", width="medium"),
+                "Motivo": st.column_config.TextColumn("Motivo", width="large"),
+            },
+        )
 
 # ---------------------------------------------------------------------------
 # Filtro local de Funil de Origem (VSL / SE / AG / Sem origem).

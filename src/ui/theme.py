@@ -1,10 +1,12 @@
 """Paleta de marca Reconecta + formatadores BR.
 
 A paleta é exposta como dict (`PALETTE`) para uso em componentes Python e
-injetada como CSS variables (`--color-…`) via `apply_global_style`."""
+injetada como CSS variables (`--color-…`) via `apply_app_theme`."""
 from __future__ import annotations
 
-PALETTE = {
+from collections.abc import Mapping
+
+PALETTE_DARK = {
     # superfícies
     "bg":            "#0a0806",
     "bg_soft":       "#110d09",
@@ -35,6 +37,61 @@ PALETTE = {
     "yellow":        "#fbbf24",
     "blue":          "#60a5fa",
 }
+
+PALETTE_LIGHT = {
+    # superfícies (alinhado ao tema Looker / legibilidade em fundo claro)
+    "bg":            "#f5f5f5",
+    "bg_soft":       "#eeeeee",
+    "card":          "#ffffff",
+    "card_hover":    "#fafafa",
+    "card_strong":   "#f5f5f5",
+    "border":        "#dadce0",
+    "border_strong": "#bdc1c6",
+
+    # marca
+    "gold":          "#9a7b2f",
+    "gold_bright":   "#b8860b",
+    "gold_soft":     "#c9a84c",
+    "wine":          "#8b2828",
+    "wine_light":    "#a83838",
+    "wine_soft":     "#fce8e8",
+
+    # texto
+    "text":          "#202124",
+    "text_subtle":   "#5f6368",
+    "muted":         "#80868b",
+
+    # semânticas
+    "green":         "#0f9d58",
+    "green_soft":    "#d4f4dd",
+    "red":           "#d93025",
+    "red_soft":      "#fce8e6",
+    "yellow":        "#f4b400",
+    "blue":          "#1a73e8",
+}
+
+
+class _PaletteView(Mapping[str, str]):
+    """Proxy — delega para a paleta ativa (`app_theme.get_active_palette`)."""
+
+    def __getitem__(self, key: str) -> str:
+        from .app_theme import get_active_palette
+        return get_active_palette()[key]
+
+    def __iter__(self):
+        from .app_theme import get_active_palette
+        return iter(get_active_palette())
+
+    def __len__(self) -> int:
+        from .app_theme import get_active_palette
+        return len(get_active_palette())
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        from .app_theme import get_active_palette
+        return get_active_palette().get(key, default)
+
+
+PALETTE: Mapping[str, str] = _PaletteView()
 
 
 # ---------------------------------------------------------------------------
@@ -83,22 +140,12 @@ def int_br(v: float | int | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CSS global
+# CSS global (variáveis `--color-*` são injetadas em `app_theme.py`)
 # ---------------------------------------------------------------------------
 
-def _css_vars() -> str:
-    return "\n".join(f"  --color-{k.replace('_', '-')}: {v};"
-                     for k, v in PALETTE.items())
-
-
-GLOBAL_CSS = f"""
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-
-<style>
-:root {{
-{_css_vars()}
-}}
-
+# Regras CSS (sem tag <style> — montada em `apply_theme_css`).
+# Prefixo `f` converte `{{` → `{` herdado do template original.
+GLOBAL_CSS_STATIC = f"""
 /* ----- base ----- */
 html, body, .stApp, [class*="css"] {{
   font-family: "Inter", system-ui, -apple-system, sans-serif !important;
@@ -1089,5 +1136,4 @@ section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a[aria-current="pa
   color: var(--color-gold-bright) !important;
   border-left: 3px solid var(--color-gold);
 }}
-</style>
 """

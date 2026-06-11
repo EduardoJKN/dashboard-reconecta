@@ -534,6 +534,101 @@ def prevendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def prevendas_auditoria_agendamentos_bruto_dia(
+    df_det_norm: pd.DataFrame,
+    dia,
+) -> pd.DataFrame:
+    """Auditoria temporária — base bruta de agendamentos em um dia.
+
+    Espelha `prevendas_overview_diario.sql` / `agendamentos_diario`:
+      - Consulta/Indicação, `status_reuniao` preenchido;
+      - `start_datetime::date` (= data_agendamento) = `dia`;
+      - 1 row por `activity_id`.
+    Indica o que entra no **bruto** e no **exibido** (bruto − vencidas).
+    """
+    dia_ts = pd.Timestamp(dia).normalize()
+    vazio = pd.DataFrame(columns=[
+        "Data/hora da reunião", "Nome do deal", "SDR", "Tipo SDR",
+        "Status original", "Status normalizado", "É vencido", "É cancelado",
+        "Entra no card (exibido)", "Motivo", "ID da activity", "ID do deal",
+    ])
+    if df_det_norm is None or df_det_norm.empty:
+        return vazio
+
+    df = df_det_norm.copy()
+    is_ativ = df["tipo_registro_base_filtro"] == "Atividade"
+    if "activity_type" in df.columns:
+        is_ativ &= df["activity_type"].isin(["Consulta", "Indicação"])
+    tem_status = (
+        df["status_filtro"].notna()
+        & (df["status_filtro"].astype(str).str.strip() != "")
+        & (df["status_filtro"] != "Sem status")
+    )
+    em_reuniao = (
+        df["data_agendamento"].notna()
+        & (pd.to_datetime(df["data_agendamento"]).dt.normalize() == dia_ts)
+    )
+    base = df.loc[is_ativ & tem_status & em_reuniao].copy()
+    if base.empty:
+        return vazio
+    if "activity_id" in base.columns:
+        base = base.drop_duplicates(subset=["activity_id"], keep="first")
+
+    def _motivo(row) -> str:
+        partes = [
+            f"Bruto: reunião em {dia_ts.strftime('%d/%m/%Y')} "
+            f"· status preenchido",
+        ]
+        if row["_vencido"]:
+            partes.append("Exibido: removido (status Vencida)")
+        else:
+            partes.append("Exibido: mantido (não vencida)")
+        if row["_cancelado"]:
+            partes.append(
+                "Cancelada no CRM — permanece no exibido na regra atual"
+            )
+        return " · ".join(partes)
+
+    base["_vencido"] = base["status_filtro"] == "Vencida"
+    base["_cancelado"] = base["status_filtro"].isin(["Cancelada", "Cancelado"])
+    base["_exibido"] = ~base["_vencido"]
+
+    if "start_datetime" in base.columns:
+        dt_reuniao = pd.to_datetime(base["start_datetime"], errors="coerce")
+    else:
+        dt_reuniao = pd.to_datetime(base["data_agendamento"], errors="coerce")
+
+    nome_deal = base.get("nome_deal", pd.Series("", index=base.index))
+    if "nome_cliente_view" in base.columns:
+        nome = base["nome_cliente_view"].where(
+            base["nome_cliente_view"].astype(str).str.strip() != "",
+            nome_deal.fillna("").astype(str).str.strip(),
+        )
+    else:
+        nome = nome_deal.fillna("").astype(str).str.strip()
+
+    out = pd.DataFrame({
+        "Data/hora da reunião": dt_reuniao.dt.strftime("%d/%m/%Y %H:%M").fillna("—"),
+        "Nome do deal": nome,
+        "SDR": base["sdr_filtro"],
+        "Tipo SDR": base["sdr_filtro"].apply(classify_sdr),
+        "Status original": base.get(
+            "status_reuniao", base["status_filtro"],
+        ).fillna("").astype(str),
+        "Status normalizado": base["status_filtro"],
+        "É vencido": base["_vencido"].map({True: "Sim", False: "Não"}),
+        "É cancelado": base["_cancelado"].map({True: "Sim", False: "Não"}),
+        "Entra no card (exibido)": base["_exibido"].map({True: "Sim", False: "Não"}),
+        "Motivo": base.apply(_motivo, axis=1),
+        "ID da activity": base.get("activity_id", ""),
+        "ID do deal": base.get("deal_id", ""),
+    })
+    return out.sort_values(
+        ["É vencido", "É cancelado", "Status normalizado", "SDR"],
+        ascending=[True, True, True, True],
+    ).reset_index(drop=True)
+
+
 def prevendas_anotar_tipo_sdr_detalhe(df_det_norm: pd.DataFrame) -> pd.DataFrame:
     """Adiciona `tipo_sdr_filtro` (Pré-vendas / Social Seller / SDR não
     classificado / Sem SDR) ao detalhe normalizado. Usa a classificação
@@ -628,7 +723,6 @@ def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
     map_compar12  = _conta(is_ativ & em_agend & is_concluido & flag_12,     "data_agendamento", "activity_id")
     map_venc      = _conta(is_ativ & em_agend & (df["status_filtro"] == "Vencida"),
                            "data_agendamento", "activity_id")
-
     # Vendas: dedup por deal_id, somar montante/receita
     vendas_sub = df.loc[is_vnd & em_vnd_p].drop_duplicates(subset=["deal_id"])
     if vendas_sub.empty:

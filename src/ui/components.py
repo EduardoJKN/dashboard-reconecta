@@ -8,7 +8,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from .theme import GLOBAL_CSS
+from .app_theme import apply_app_theme
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ def ranking_column_config(
 
 def apply_dark_theme() -> None:
     """Injeta fontes + CSS global. Chamar uma vez por página, após set_page_config."""
-    st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+    apply_app_theme()
 
 
 def sidebar_brand(subtitle: str = "Inteligência Comercial") -> None:

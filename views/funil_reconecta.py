@@ -39,15 +39,15 @@ from src.funil_benchmark import (
     resolve_historical_window,
     scenario_field_value,
 )
-from src.funil_meta_store import (
-    PERIODO_TIPO_PADRAO,
-    load_funil_meta,
-    metas_dict_from_scenario,
-    save_funil_meta,
+from src.funil_historico import (
+    historico_row_by_index,
+    historico_rows_to_display_df,
+    load_funil_historico_referencias,
 )
 from src.one_page_funnel import (
     FunnelSnapshot,
     load_one_page_funnel,
+    project_receita_from_montante,
     snapshot_calc_display,
     snapshot_to_scenario_dict,
 )
@@ -113,7 +113,12 @@ ETAPAS = [
 # Cálculos
 # =============================================================================
 
-def calcular_funil(s: Scenario, periodo: str) -> dict:
+def calcular_funil(
+    s: Scenario,
+    periodo: str,
+    *,
+    pct_recebimento: float = 0.0,
+) -> dict:
     """Cascata do funil para o período escolhido (valores contínuos internos)."""
     div = PERIODOS[periodo]["divisor"]
     investimento = s.investimento / div
@@ -122,7 +127,8 @@ def calcular_funil(s: Scenario, periodo: str) -> dict:
     agendamentos = aplicacoes * s.pct_a_ag
     comparecimento = agendamentos * s.pct_ag_c
     vendas = comparecimento * s.pct_c_v
-    faturamento = vendas * s.ticket
+    montante = vendas * s.ticket
+    receita = project_receita_from_montante(montante, pct_recebimento)
     return {
         "investimento":   investimento,
         "leads":          leads,
@@ -130,22 +136,31 @@ def calcular_funil(s: Scenario, periodo: str) -> dict:
         "agendamentos":   agendamentos,
         "comparecimento": comparecimento,
         "vendas":         vendas,
-        "faturamento":    faturamento,
+        "montante":       montante,
+        "receita":        receita,
     }
 
 
-def calcular_funil_exibicao(s: Scenario, periodo: str) -> dict:
+def calcular_funil_exibicao(
+    s: Scenario,
+    periodo: str,
+    *,
+    pct_recebimento: float = 0.0,
+) -> dict:
     """Volumes para tela/export (Simulador e Meta).
 
-    Vendas são arredondadas para inteiro; faturamento usa o mesmo inteiro
-    × ticket — evita «Vendas = 0» com faturamento > 0 por fração decimal.
+    Vendas são arredondadas para inteiro; montante usa o mesmo inteiro
+    × ticket — evita «Vendas = 0» com montante > 0 por fração decimal.
+    Receita projetada aplica o % recebimento do período (regra visão geral).
     """
-    calc = calcular_funil(s, periodo)
+    calc = calcular_funil(s, periodo, pct_recebimento=pct_recebimento)
     vendas_int = int(round(calc["vendas"]))
+    montante = float(vendas_int) * float(s.ticket)
     return {
         **calc,
         "vendas": float(vendas_int),
-        "faturamento": float(vendas_int) * float(s.ticket),
+        "montante": montante,
+        "receita": project_receita_from_montante(montante, pct_recebimento),
     }
 
 
@@ -154,7 +169,7 @@ def _calc_atual_para_tela(
     atual_s: Scenario,
     periodo: str,
 ) -> dict:
-    """Atual na escala da visualização; vendas inteiras; faturamento real (montante)."""
+    """Atual na escala da visualização; vendas inteiras; montante e receita reais."""
     if snapshot is not None:
         calc = snapshot_calc_display(snapshot, periodo, PERIODOS)
         vendas_int = int(round(calc["vendas"]))
@@ -189,6 +204,7 @@ _DEFAULT_SIM_EDIT_MODES: dict[str, str] = {
     "ag_c": "taxa",
     "c_v": "taxa",
 }
+_DEFAULT_META_EDIT_MODES: dict[str, str] = dict(_DEFAULT_SIM_EDIT_MODES)
 
 
 def _sim_mode_options(stage: str) -> tuple[tuple[str, ...], str]:
@@ -211,6 +227,14 @@ def _coerce_sim_mode_value(stage: str, value: object) -> str:
 
 def _sim_mode_widget_key(key_prefix: str, stage: str) -> str:
     return f"{key_prefix}_edit_mode_select_{stage}"
+
+
+def _modes_key_for_prefix(key_prefix: str) -> str:
+    return (
+        "funil_meta_edit_modes"
+        if key_prefix == "meta_cfg"
+        else "funil_sim_edit_modes"
+    )
 
 
 def _purge_legacy_sim_mode_widget_keys() -> None:
@@ -236,6 +260,14 @@ def _sanitize_sim_edit_modes() -> None:
         modes[stage] = _coerce_sim_mode_value(stage, modes.get(stage))
 
 
+def _sanitize_edit_modes(modes_key: str, default: dict[str, str]) -> None:
+    if modes_key not in st.session_state:
+        st.session_state[modes_key] = dict(default)
+    modes = st.session_state[modes_key]
+    for stage in _SIM_EDIT_STAGES:
+        modes[stage] = _coerce_sim_mode_value(stage, modes.get(stage))
+
+
 def _ensure_sim_edit_modes() -> dict[str, str]:
     """Chamar uma vez no topo do rerun, antes de widgets do simulador."""
     _purge_legacy_sim_mode_widget_keys()
@@ -243,16 +275,29 @@ def _ensure_sim_edit_modes() -> dict[str, str]:
     return st.session_state["funil_sim_edit_modes"]
 
 
+def _ensure_meta_edit_modes() -> dict[str, str]:
+    _sanitize_edit_modes("funil_meta_edit_modes", _DEFAULT_META_EDIT_MODES)
+    return st.session_state["funil_meta_edit_modes"]
+
+
 def _sim_edit_mode_for_stage(
     stage: str,
     key_prefix: str = "simulador",
+    *,
+    modes_key: str = "funil_sim_edit_modes",
+    default_modes: dict[str, str] | None = None,
 ) -> str:
     """Modo ativo da etapa (lê widget se já existir no session_state)."""
     options, fallback = _sim_mode_options(stage)
     wkey = _sim_mode_widget_key(key_prefix, stage)
     if wkey in st.session_state:
         return _coerce_sim_mode_value(stage, st.session_state[wkey])
-    modes = st.session_state.get("funil_sim_edit_modes", _DEFAULT_SIM_EDIT_MODES)
+    base = default_modes or (
+        _DEFAULT_META_EDIT_MODES
+        if modes_key == "funil_meta_edit_modes"
+        else _DEFAULT_SIM_EDIT_MODES
+    )
+    modes = st.session_state.get(modes_key, base)
     return _coerce_sim_mode_value(stage, modes.get(stage, fallback))
 
 
@@ -284,39 +329,46 @@ def _apply_sim_volume_mensal(stage: str, volume_mensal: float, state: dict) -> N
     state[pct_key] = _safe_ratio(vol, upstream)
 
 
-def _apply_simulator_from_session(
-    sim_state: dict,
+def _apply_scenario_edits_from_session(
+    state: dict,
     periodo: str,
     div: int,
     key_prefix: str,
+    *,
+    modes_key: str = "funil_sim_edit_modes",
+    default_modes: dict[str, str] | None = None,
 ) -> None:
-    """Lê widgets do rerun anterior e atualiza `funil_simulador` sem conflito."""
+    """Lê widgets do rerun anterior e atualiza o cenário em session_state."""
     rows = _vitrine_row_specs(periodo)
 
     for spec in rows:
-        rid = spec["id"]
         if spec.get("sim_stage") is None and spec.get("sim_editable"):
             wkey = _sim_widget_key(spec, key_prefix)
             if wkey in st.session_state:
                 _apply_sim_editable(
-                    spec, sim_state, float(st.session_state[wkey]), div=div,
+                    spec, state, float(st.session_state[wkey]), div=div,
                 )
 
     for stage in _SIM_EDIT_STAGES:
-        smode = _sim_edit_mode_for_stage(stage, key_prefix)
+        smode = _sim_edit_mode_for_stage(
+            stage,
+            key_prefix,
+            modes_key=modes_key,
+            default_modes=default_modes,
+        )
         if stage == "leads":
             if smode == "volume":
                 wkey = f"{key_prefix}_vol_{stage}"
                 if wkey in st.session_state:
                     _apply_sim_volume_mensal(
-                        stage, float(st.session_state[wkey]) * div, sim_state,
+                        stage, float(st.session_state[wkey]) * div, state,
                     )
             continue
         if smode == "volume":
             wkey = f"{key_prefix}_vol_{stage}"
             if wkey in st.session_state:
                 _apply_sim_volume_mensal(
-                    stage, float(st.session_state[wkey]) * div, sim_state,
+                    stage, float(st.session_state[wkey]) * div, state,
                 )
         elif smode == "taxa":
             pct_spec_id = {
@@ -330,17 +382,39 @@ def _apply_simulator_from_session(
                 if wkey in st.session_state:
                     raw = float(st.session_state[wkey])
                     field = _SIM_STAGE_PCT_FIELD[stage]
-                    sim_state[field] = raw / 100.0
+                    state[field] = raw / 100.0
 
 
-def identificar_gargalos(atual: Scenario, meta: Scenario) -> list[dict]:
-    """Etapas ordenadas pelo ganho em faturamento projetado (base mensal).
+def _apply_simulator_from_session(
+    sim_state: dict,
+    periodo: str,
+    div: int,
+    key_prefix: str,
+) -> None:
+    _apply_scenario_edits_from_session(
+        sim_state, periodo, div, key_prefix,
+    )
+
+
+def _pct_recebimento_snapshot(snapshot: FunnelSnapshot | None) -> float:
+    if snapshot is None:
+        return 0.0
+    return float(snapshot.pct_recebimento)
+
+
+def identificar_gargalos(
+    atual: Scenario,
+    meta: Scenario,
+    *,
+    pct_recebimento: float = 0.0,
+) -> list[dict]:
+    """Etapas ordenadas pelo ganho em montante projetado (base mensal).
 
     Para cada etapa abaixo da meta, simula só aquela taxa no nível da meta
-    (demais parâmetros do Atual iguais) e mede Δ faturamento no mês inteiro.
+    (demais parâmetros do Atual iguais) e mede Δ montante no mês inteiro.
     A UI escala esse valor pela visualização (÷ 4 / ÷ 28).
     """
-    base_fat = calcular_funil(atual, "mes")["faturamento"]
+    base_fat = calcular_funil(atual, "mes", pct_recebimento=pct_recebimento)["montante"]
     impactos: list[dict] = []
 
     for key, label in ETAPAS:
@@ -353,7 +427,7 @@ def identificar_gargalos(atual: Scenario, meta: Scenario) -> list[dict]:
             })
             continue
         hipo = Scenario(**{**asdict(atual), key: meta_val})
-        novo = calcular_funil(hipo, "mes")["faturamento"]
+        novo = calcular_funil(hipo, "mes", pct_recebimento=pct_recebimento)["montante"]
         impactos.append({
             "key": key, "label": label, "impacto": novo - base_fat,
             "atual": atual_val, "meta": meta_val, "is_money": False,
@@ -361,7 +435,7 @@ def identificar_gargalos(atual: Scenario, meta: Scenario) -> list[dict]:
 
     if atual.custo_lead > meta.custo_lead:
         hipo = Scenario(**{**asdict(atual), "custo_lead": meta.custo_lead})
-        novo = calcular_funil(hipo, "mes")["faturamento"]
+        novo = calcular_funil(hipo, "mes", pct_recebimento=pct_recebimento)["montante"]
         impactos.append({
             "key": "custo_lead", "label": "Custo por Lead",
             "impacto": novo - base_fat,
@@ -370,7 +444,7 @@ def identificar_gargalos(atual: Scenario, meta: Scenario) -> list[dict]:
         })
     if atual.ticket < meta.ticket:
         hipo = Scenario(**{**asdict(atual), "ticket": meta.ticket})
-        novo = calcular_funil(hipo, "mes")["faturamento"]
+        novo = calcular_funil(hipo, "mes", pct_recebimento=pct_recebimento)["montante"]
         impactos.append({
             "key": "ticket", "label": "Ticket Médio",
             "impacto": novo - base_fat,
@@ -390,8 +464,27 @@ def brl(v: float, casas: int = 2) -> str:
 
 
 def pct_fmt(v: float, casas: int = 2) -> str:
-    """Taxa em fração (0–1+) → exibição com % e duas casas."""
-    return f"{v * 100:.{casas}f}%".replace(".", ",")
+    """Taxa em fração (0–1+) → exibição com % e duas casas (pt-BR)."""
+    pct_val = v * 100
+    s = f"{pct_val:,.{casas}f}%".replace(",", "X").replace(".", ",").replace("X", ".")
+    return s
+
+
+def _pct_ratio_txt(numerator: float, denominator: float) -> str | None:
+    """Quociente num/den formatado em % (2 casas), ou None se den ≤ 0."""
+    den = float(denominator or 0)
+    if den <= 0:
+        return None
+    return pct_fmt(float(numerator or 0) / den)
+
+
+def _fatu_chips_html(chips: list[str]) -> str:
+    """Área fixa de chips — mantém altura mesmo sem informação complementar."""
+    inner = "".join(
+        f'<span class="fr-fatu-chip">{html.escape(text)}</span>'
+        for text in chips
+    )
+    return f'<div class="fr-fatu-chips">{inner}</div>'
 
 
 def format_display_value(
@@ -538,7 +631,7 @@ def _render_benchmark_historico(
                 f'({bm.get("worst_period", "—")})'
             ),
             "Atual": _format_benchmark_value(kind, atual_val),
-            "Meta oficial": _format_benchmark_value(kind, meta_val),
+            "Meta da tela": _format_benchmark_value(kind, meta_val),
         })
 
     st.dataframe(
@@ -731,11 +824,12 @@ _FUNIL_CSS = """
         rgba(168, 140, 78, 0.66) 100%
     );
     color: var(--color-wine);
-    padding: 12px 14px;
-    min-height: 4.1rem;
+    padding: 11px 13px 10px;
+    min-height: 6.35rem;
+    height: 6.35rem;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     box-sizing: border-box;
     border-radius: 7px;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -743,6 +837,11 @@ _FUNIL_CSS = """
         inset 0 1px 0 rgba(255, 255, 255, 0.2),
         0 2px 8px rgba(0, 0, 0, 0.12);
 }
+.fr-fatu--receita {
+    min-height: 7.85rem;
+    height: 7.85rem;
+}
+.fr-fatu-main { flex: 0 0 auto; }
 .fr-fatu .lbl {
     font-size: 0.6rem;
     font-weight: 700;
@@ -752,19 +851,57 @@ _FUNIL_CSS = """
 }
 .fr-fatu .val {
     font-family: ui-monospace, "IBM Plex Mono", monospace;
-    font-size: 1.36rem;
+    font-size: 1.28rem;
     font-weight: 700;
     margin-top: 3px;
     color: rgba(48, 20, 30, 0.9);
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.015em;
+    line-height: 1.15;
 }
-.fr-fatu-hint {
-    font-size: 0.65rem;
-    line-height: 1.35;
-    margin-top: 6px;
-    color: rgba(48, 20, 30, 0.62);
-    max-width: 240px;
+.fr-fatu-chips {
+    flex: 1 1 auto;
+    min-height: 1.85rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-end;
+    align-content: flex-end;
+    margin-top: auto;
+    padding-top: 5px;
+}
+.fr-fatu--receita .fr-fatu-chips { min-height: 2.95rem; }
+.fr-fatu-chip {
+    display: inline-block;
+    font-size: 0.82rem;
+    font-weight: 700;
+    line-height: 1.1;
+    padding: 0.28rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(48, 20, 30, 0.16);
+    color: rgba(38, 14, 24, 0.94);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.fr-fatu-stack { display: flex; flex-direction: column; gap: 8px; }
+.fr-fatu.receita {
+    background: linear-gradient(
+        155deg,
+        rgba(92, 0, 30, 0.72) 0%,
+        rgba(108, 18, 42, 0.66) 50%,
+        rgba(124, 32, 54, 0.7) 100%
+    );
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.1);
+}
+.fr-fatu.receita .lbl { color: rgba(255, 255, 255, 0.72); }
+.fr-fatu.receita .val { color: #ffffff; }
+.fr-fatu.receita .fr-fatu-chip {
+    background: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 /* Alerta de gargalo */
@@ -1317,7 +1454,7 @@ def _clear_funil_widget_keys(*, sim_only: bool = False) -> None:
     for k in list(st.session_state.keys()):
         if not isinstance(k, str):
             continue
-        if k.startswith("meta_ed_"):
+        if k.startswith("meta_ed_") or k.startswith("meta_cfg_"):
             if not sim_only:
                 del st.session_state[k]
             continue
@@ -1330,61 +1467,62 @@ def _clear_funil_widget_keys(*, sim_only: bool = False) -> None:
             continue
         if k.endswith(_WIDGET_SUFFIXES):
             del st.session_state[k]
-    if "funil_sim_edit_modes" in st.session_state:
+    if sim_only and "funil_sim_edit_modes" in st.session_state:
         del st.session_state["funil_sim_edit_modes"]
 
 
 def _clear_meta_editor_widget_keys() -> None:
     for k in list(st.session_state.keys()):
-        if isinstance(k, str) and k.startswith("meta_ed_"):
+        if isinstance(k, str) and (
+            k.startswith("meta_ed_") or k.startswith("meta_cfg_")
+        ):
             del st.session_state[k]
+    if "funil_meta_edit_modes" in st.session_state:
+        del st.session_state["funil_meta_edit_modes"]
 
 
 def _funil_period_storage_key(data_ini: date, data_fim: date) -> str:
     return f"{data_ini.isoformat()}_{data_fim.isoformat()}"
 
 
-def _sync_official_meta_for_period(
+def _init_meta_session_for_period(
     data_ini: date,
     data_fim: date,
-    *,
-    force: bool = False,
+    snapshot: FunnelSnapshot | None,
 ) -> None:
-    """Carrega metas oficiais do banco quando o filtro global muda."""
+    """Inicializa meta da tela localmente quando o filtro global muda."""
     key = _funil_period_storage_key(data_ini, data_fim)
-    if not force and st.session_state.get("funil_meta_period_key") == key:
+    if st.session_state.get("funil_meta_period_key") == key:
         return
     st.session_state["funil_meta_period_key"] = key
-    try:
-        loaded = load_funil_meta(PERIODO_TIPO_PADRAO, data_ini, data_fim)
-    except Exception:
-        loaded = None
-    official = loaded if loaded is not None else asdict(_BASE_META)
-    st.session_state["funil_meta_oficial"] = official
-    st.session_state["funil_meta_draft"] = dict(official)
+    pct_padrao = float(snapshot.pct_recebimento) if snapshot is not None else 0.0
+    st.session_state["funil_meta_tela"] = asdict(_BASE_META)
+    st.session_state["funil_meta_pct_recebimento"] = pct_padrao
+    st.session_state["funil_meta_pct_recebimento_padrao"] = pct_padrao
     _clear_meta_editor_widget_keys()
 
 
-def _get_meta_oficial() -> Scenario:
+def _get_meta_tela() -> Scenario:
     return Scenario(
-        **st.session_state.get("funil_meta_oficial", asdict(_BASE_META)),
+        **st.session_state.get("funil_meta_tela", asdict(_BASE_META)),
     )
 
 
-def _meta_draft_differs_from_official() -> bool:
-    """True se o rascunho do editor difere da meta oficial em vigor."""
-    draft = st.session_state.get("funil_meta_draft")
-    official = st.session_state.get("funil_meta_oficial")
-    if draft is None or official is None:
-        return False
-    keys = (
-        "investimento", "custo_lead", "pct_la", "pct_a_ag",
-        "pct_ag_c", "pct_c_v", "ticket",
+def _get_meta_pct_recebimento() -> float:
+    return float(st.session_state.get("funil_meta_pct_recebimento", 0.0))
+
+
+def _apply_historico_row_to_sim(row: dict[str, Any]) -> None:
+    st.session_state["funil_simulador"] = dict(row["scenario"])
+    _clear_funil_widget_keys(sim_only=True)
+
+
+def _apply_historico_row_to_meta(row: dict[str, Any]) -> None:
+    st.session_state["funil_meta_tela"] = dict(row["scenario"])
+    st.session_state["funil_meta_pct_recebimento"] = float(
+        row.get("pct_recebimento") or 0,
     )
-    for k in keys:
-        if abs(float(draft.get(k, 0)) - float(official.get(k, 0))) > 1e-9:
-            return True
-    return False
+    _clear_meta_editor_widget_keys()
 
 
 def _build_export_bundle(
@@ -1577,10 +1715,13 @@ def _sim_mode_select(stage: str, key_prefix: str) -> str:
     """Selectbox compacto: leads → Auto|Nº; demais → %|Nº."""
     options, fallback = _sim_mode_options(stage)
     wkey = _sim_mode_widget_key(key_prefix, stage)
-
-    modes = st.session_state.setdefault(
-        "funil_sim_edit_modes", dict(_DEFAULT_SIM_EDIT_MODES),
+    modes_key = _modes_key_for_prefix(key_prefix)
+    default = (
+        _DEFAULT_META_EDIT_MODES
+        if modes_key == "funil_meta_edit_modes"
+        else _DEFAULT_SIM_EDIT_MODES
     )
+    modes = st.session_state.setdefault(modes_key, dict(default))
     current = _coerce_sim_mode_value(stage, modes.get(stage, fallback))
 
     if wkey in st.session_state and st.session_state[wkey] not in options:
@@ -1645,7 +1786,11 @@ def _render_sim_inline_row(
             unsafe_allow_html=True,
         )
 
-    smode = _sim_edit_mode_for_stage(stage, key_prefix)
+    smode = _sim_edit_mode_for_stage(
+        stage,
+        key_prefix,
+        modes_key=_modes_key_for_prefix(key_prefix),
+    )
     if mode_col is not None:
         with mode_col:
             st.markdown(
@@ -1725,7 +1870,11 @@ def _render_sim_vitrine_row(
         )
         return
 
-    smode = _sim_edit_mode_for_stage(stage, key_prefix)
+    smode = _sim_edit_mode_for_stage(
+        stage,
+        key_prefix,
+        modes_key=_modes_key_for_prefix(key_prefix),
+    )
 
     if role == "pct":
         if smode == "taxa":
@@ -1975,6 +2124,8 @@ def _render_vitrine_comparison(
     atual_s: Scenario,
     snapshot: FunnelSnapshot | None,
     benchmark_metrics: dict[str, dict[str, Any]] | None = None,
+    pct_recebimento: float = 0.0,
+    meta_pct_recebimento: float | None = None,
 ) -> tuple[Scenario, Scenario, Scenario]:
     """Comparativo em grade: uma linha horizontal por indicador (Atual | Sim | Meta)."""
     st.markdown('<div class="fr-vitrine-sync">', unsafe_allow_html=True)
@@ -1984,6 +2135,11 @@ def _render_vitrine_comparison(
     rows = _vitrine_row_specs(periodo)
     n_rows = len(rows)
     calc_atual_display = _calc_atual_para_tela(snapshot, atual_s, periodo)
+    meta_pct = (
+        float(meta_pct_recebimento)
+        if meta_pct_recebimento is not None
+        else _get_meta_pct_recebimento()
+    )
 
     h_atual, h_sim, h_meta = st.columns(3, gap="medium")
     with h_atual:
@@ -2009,13 +2165,17 @@ def _render_vitrine_comparison(
         )
 
     sim_state = _ensure_scenario("funil_simulador", atual_s)
-    meta_s = _get_meta_oficial()
+    meta_s = _get_meta_tela()
     _apply_simulator_from_session(sim_state, periodo, div, key_prefix)
 
     for idx, spec in enumerate(rows):
         sim_s = Scenario(**sim_state)
-        calc_s = calcular_funil_exibicao(sim_s, periodo)
-        calc_m = calcular_funil_exibicao(meta_s, periodo)
+        calc_s = calcular_funil_exibicao(
+            sim_s, periodo, pct_recebimento=pct_recebimento,
+        )
+        calc_m = calcular_funil_exibicao(
+            meta_s, periodo, pct_recebimento=meta_pct,
+        )
 
         label = spec["label"]
         is_first = idx == 0
@@ -2084,8 +2244,12 @@ def _render_vitrine_comparison(
     st.session_state["funil_simulador"] = sim_state
 
     sim_s = Scenario(**sim_state)
-    calc_s = calcular_funil_exibicao(sim_s, periodo)
-    calc_m = calcular_funil_exibicao(meta_s, periodo)
+    calc_s = calcular_funil_exibicao(
+        sim_s, periodo, pct_recebimento=pct_recebimento,
+    )
+    calc_m = calcular_funil_exibicao(
+        meta_s, periodo, pct_recebimento=meta_pct,
+    )
 
     f_atual, f_sim, f_meta = st.columns(3, gap="medium")
     with f_atual:
@@ -2093,21 +2257,29 @@ def _render_vitrine_comparison(
             '<div class="fr-vitrine-fatu-shell col-atual">',
             unsafe_allow_html=True,
         )
-        _render_faturamento_block(calc_atual_display, modo="real")
+        _render_valor_blocks(calc_atual_display, bloco="atual")
         st.markdown("</div></div>", unsafe_allow_html=True)
     with f_sim:
         st.markdown(
             '<div class="fr-vitrine-fatu-shell col-sim">',
             unsafe_allow_html=True,
         )
-        _render_faturamento_block(calc_s, modo="projetado")
+        _render_valor_blocks(
+            calc_s,
+            bloco="simulador",
+            ref_atual=calc_atual_display,
+        )
         st.markdown("</div></div>", unsafe_allow_html=True)
     with f_meta:
         st.markdown(
             '<div class="fr-vitrine-fatu-shell col-meta">',
             unsafe_allow_html=True,
         )
-        _render_faturamento_block(calc_m, modo="projetado")
+        _render_valor_blocks(
+            calc_m,
+            bloco="meta",
+            ref_sim=calc_s,
+        )
         st.markdown("</div></div>", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -2133,20 +2305,72 @@ def _render_scenario_header(titulo: str, periodo: str, accent: str, *,
     )
 
 
-def _render_faturamento_block(calc: dict, *, modo: str = "projetado") -> None:
-    """modo: 'real' (Atual/montante) | 'projetado' (vendas × ticket)."""
-    if modo == "real":
-        titulo = "Faturamento (real)"
-        hint = "Montante de vendas no período — dado real, não é vendas × ticket."
+def _render_valor_blocks(
+    calc: dict,
+    *,
+    bloco: str = "simulador",
+    ref_atual: dict | None = None,
+    ref_sim: dict | None = None,
+) -> None:
+    """bloco: 'atual' | 'simulador' | 'meta'."""
+    if bloco == "atual":
+        titulo_montante = "Montante vendido"
+        titulo_receita = "Receita"
     else:
-        titulo = "Faturamento projetado"
-        hint = "Vendas estimadas (inteiro) × ticket médio do cenário."
+        titulo_montante = "Montante projetado"
+        titulo_receita = "Receita projetada"
+
+    montante_val = float(calc.get("montante") or 0)
+    receita_val = float(calc.get("receita") or 0)
+    receita_txt = (
+        brl(receita_val)
+        if receita_val > 0 or bloco == "atual"
+        else "—"
+    )
+
+    chips_montante: list[str] = []
+    chips_receita: list[str] = []
+
+    pct_rec_mont = _pct_ratio_txt(receita_val, montante_val)
+    if pct_rec_mont:
+        chips_receita.append(f"{pct_rec_mont} do montante")
+
+    if bloco == "simulador" and ref_atual is not None:
+        ref_m = float(ref_atual.get("montante") or 0)
+        ref_r = float(ref_atual.get("receita") or 0)
+        pct_m = _pct_ratio_txt(montante_val, ref_m)
+        pct_r = _pct_ratio_txt(receita_val, ref_r)
+        if pct_m:
+            chips_montante.append(f"{pct_m} do atual")
+        if pct_r:
+            chips_receita.append(f"{pct_r} do atual")
+    elif bloco == "meta" and ref_sim is not None:
+        ref_m = float(ref_sim.get("montante") or 0)
+        ref_r = float(ref_sim.get("receita") or 0)
+        pct_m = _pct_ratio_txt(montante_val, ref_m)
+        pct_r = _pct_ratio_txt(receita_val, ref_r)
+        if pct_m:
+            chips_montante.append(f"{pct_m} do simulado")
+        if pct_r:
+            chips_receita.append(f"{pct_r} do simulado")
+
     st.markdown(
         f'<div class="fr-card fr-fatu-card">'
-        f'  <div class="fr-fatu">'
-        f'    <div class="lbl">{html.escape(titulo)}</div>'
-        f'    <div class="val">{html.escape(brl(calc["faturamento"]))}</div>'
-        f'    <div class="fr-fatu-hint">{html.escape(hint)}</div>'
+        f'  <div class="fr-fatu-stack">'
+        f'    <div class="fr-fatu">'
+        f'      <div class="fr-fatu-main">'
+        f'        <div class="lbl">{html.escape(titulo_montante)}</div>'
+        f'        <div class="val">{html.escape(brl(montante_val))}</div>'
+        f'      </div>'
+        f'      {_fatu_chips_html(chips_montante)}'
+        f'    </div>'
+        f'    <div class="fr-fatu fr-fatu--receita receita">'
+        f'      <div class="fr-fatu-main">'
+        f'        <div class="lbl">{html.escape(titulo_receita)}</div>'
+        f'        <div class="val">{html.escape(receita_txt)}</div>'
+        f'      </div>'
+        f'      {_fatu_chips_html(chips_receita)}'
+        f'    </div>'
         f'  </div>'
         f'</div>',
         unsafe_allow_html=True,
@@ -2230,97 +2454,184 @@ def _render_scenario_fields_editor(
     return Scenario(**state)
 
 
-def _render_meta_editor(
-    periodo: str,
+def _render_historico_referencias(
     *,
     data_ini: date,
     data_fim: date,
-) -> Scenario:
-    """Editor de rascunho — metas oficiais só persistem ao clicar em Aplicar."""
+    excluir_testes: bool,
+) -> list[dict[str, Any]]:
+    """Histórico de períodos reais — referência para Simulador e Meta (local)."""
     section_title(
-        "Editor de metas",
-        "objetivos oficiais do período — a coluna Meta usa o que estiver salvo",
+        "Histórico de metas/referências",
+        "períodos anteriores com as mesmas regras do bloco Atual",
+    )
+    rows = load_funil_historico_referencias(
+        data_fim.isoformat(),
+        data_ini.isoformat(),
+        data_fim.isoformat(),
+        excluir_testes,
+    )
+    st.session_state["funil_historico_rows"] = rows
+
+    if not rows:
+        st.info("Sem dados históricos disponíveis para os períodos de referência.")
+        return rows
+
+    df_show = historico_rows_to_display_df(rows)
+    st.dataframe(
+        df_show,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Período": st.column_config.TextColumn(width="medium"),
+            "Investimento": st.column_config.NumberColumn(format="R$ %.2f"),
+            "CPL": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Leads": st.column_config.NumberColumn(format="%.0f"),
+            "% L→Apl": st.column_config.NumberColumn(format="%.2f%%"),
+            "Aplicações": st.column_config.NumberColumn(format="%.0f"),
+            "% Apl→Ag": st.column_config.NumberColumn(format="%.2f%%"),
+            "Agendamentos": st.column_config.NumberColumn(format="%.0f"),
+            "% Ag→Comp": st.column_config.NumberColumn(format="%.2f%%"),
+            "Comparecimentos": st.column_config.NumberColumn(format="%.0f"),
+            "% Comp→Vda": st.column_config.NumberColumn(format="%.2f%%"),
+            "Vendas": st.column_config.NumberColumn(format="%.0f"),
+            "Ticket": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Montante": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Receita": st.column_config.NumberColumn(format="R$ %.2f"),
+            "% Rec/Mont": st.column_config.NumberColumn(format="%.2f%%"),
+        },
+    )
+
+    labels = [r["periodo"] for r in rows]
+    sel_idx = st.selectbox(
+        "Período de referência",
+        options=range(len(labels)),
+        format_func=lambda i: labels[i],
+        key="funil_historico_sel_idx",
+    )
+    row = historico_row_by_index(rows, int(sel_idx))
+    if row is None:
+        return rows
+
+    st.caption(
+        f'Referência: {row["data_ini"].strftime("%d/%m/%Y")} – '
+        f'{row["data_fim"].strftime("%d/%m/%Y")} · somente leitura no histórico; '
+        "use os botões para carregar na sessão."
+    )
+    b_sim, b_meta, _ = st.columns([2, 2, 3], gap="small")
+    with b_sim:
+        if st.button("Carregar no Simulador", use_container_width=True):
+            _apply_historico_row_to_sim(row)
+            st.rerun()
+    with b_meta:
+        if st.button("Usar como Meta da tela", use_container_width=True):
+            _apply_historico_row_to_meta(row)
+            st.rerun()
+    return rows
+
+
+def _render_meta_cenario_editor(periodo: str) -> None:
+    """Ajuste local da Meta — número ou % por etapa, sem persistência no banco."""
+    section_title(
+        "Ajuste de cenário de meta",
+        "edite a coluna Meta da tela — tudo fica em memória nesta sessão",
     )
     st.markdown(
         '<div class="fr-editor-wrap meta">'
         '<p class="fr-editor-hint">'
-        "Ajuste investimento, custo por lead, taxas e ticket alvo. "
-        "As alterações abaixo são um <strong>rascunho</strong> até você aplicar. "
-        "A coluna <strong>Meta</strong>, o gargalo e os exports usam as metas "
-        "<strong>oficiais</strong> já salvas para este período."
+        "Defina a meta por valor absoluto (<strong>Nº</strong>) ou taxa "
+        "(<strong>%</strong>), como no Simulador. "
+        "A coluna <strong>Meta</strong>, o gargalo e os gaps usam estes valores "
+        "enquanto a página estiver aberta."
         "</p>",
         unsafe_allow_html=True,
     )
-    if "funil_meta_draft" not in st.session_state:
-        st.session_state["funil_meta_draft"] = dict(
-            st.session_state.get("funil_meta_oficial", asdict(_BASE_META)),
-        )
-    draft = _render_scenario_fields_editor(
+
+    _ensure_meta_edit_modes()
+    meta_state = _ensure_scenario("funil_meta_tela", _get_meta_tela())
+    div = PERIODOS[periodo]["divisor"]
+    _apply_scenario_edits_from_session(
+        meta_state,
         periodo,
-        "funil_meta_draft",
-        _get_meta_oficial(),
-        "meta_ed",
+        div,
+        "meta_cfg",
+        modes_key="funil_meta_edit_modes",
+        default_modes=_DEFAULT_META_EDIT_MODES,
     )
-    st.session_state["funil_meta_draft"] = asdict(draft)
 
-    if _meta_draft_differs_from_official():
-        st.warning(
-            "Há alterações no rascunho que ainda não foram aplicadas. "
-            "A coluna Meta, o gargalo, os gaps e os exports continuam usando "
-            "a meta oficial salva até você clicar em «Aplicar metas oficiais»."
+    meta_pct = _get_meta_pct_recebimento()
+    meta_s = Scenario(**meta_state)
+    calc_m = calcular_funil_exibicao(
+        meta_s, periodo, pct_recebimento=meta_pct,
+    )
+    rows = _vitrine_row_specs(periodo)
+
+    for spec in rows:
+        label = spec["label"]
+        if spec.get("sim_editable") or spec.get("sim_stage"):
+            _render_sim_vitrine_row(
+                spec,
+                label,
+                sim_state=meta_state,
+                calc_s=calc_m,
+                sim_s=meta_s,
+                div=div,
+                cell_class="fr-editor-cell",
+                key_prefix="meta_cfg",
+                benchmark_metrics=None,
+            )
+        else:
+            val_m, comp_m, hi_m = _vitrine_readonly_value(spec, meta_s, calc_m)
+            _render_scenario_row_readonly(
+                label, val_m, computed=comp_m, highlight=hi_m,
+                cell_class="fr-editor-cell",
+            )
+
+    st.session_state["funil_meta_tela"] = meta_state
+
+    c_pct, c_rec = st.columns(2, gap="medium")
+    with c_pct:
+        st.session_state["funil_meta_pct_recebimento"] = float(st.number_input(
+            "% Receita sobre Montante",
+            value=float(meta_pct),
+            min_value=0.0,
+            max_value=200.0,
+            step=0.1,
+            format="%.2f",
+            key="meta_cfg_pct_recebimento",
+            help="Receita projetada = Montante × este percentual.",
+        ))
+    with c_rec:
+        rec_proj = project_receita_from_montante(
+            calc_m["montante"] * div,
+            st.session_state["funil_meta_pct_recebimento"],
+        )
+        st.metric(
+            "Receita projetada (mês)",
+            brl(rec_proj),
+            help="Calculada a partir das vendas × ticket e % recebimento.",
         )
 
-    st.warning(
-        "Você está prestes a alterar as metas oficiais do período selecionado "
-        f"({data_ini.strftime('%d/%m/%Y')}–{data_fim.strftime('%d/%m/%Y')}). "
-        "Confirme abaixo antes de aplicar.",
-    )
-    confirmado = st.checkbox(
-        "Confirmo que quero aplicar essas metas como oficiais",
-        key="funil_meta_confirm_apply",
-    )
-    b_apply, b_restore = st.columns(2)
-    with b_apply:
-        aplicar = st.button(
-            "Aplicar metas oficiais",
-            type="primary",
-            use_container_width=True,
-            disabled=not confirmado,
-        )
-    with b_restore:
-        if st.button("Restaurar metas padrão", use_container_width=True):
-            st.session_state["funil_meta_draft"] = asdict(_BASE_META)
+    b_sim, b_reset, _ = st.columns([2, 2, 3], gap="small")
+    with b_sim:
+        if st.button("Carregar no Simulador", key="meta_cfg_to_sim", use_container_width=True):
+            st.session_state["funil_simulador"] = dict(meta_state)
+            _clear_funil_widget_keys(sim_only=True)
+            st.rerun()
+    with b_reset:
+        if st.button("Restaurar cenário padrão", use_container_width=True):
+            st.session_state["funil_meta_tela"] = asdict(_BASE_META)
+            st.session_state["funil_meta_pct_recebimento"] = float(
+                st.session_state.get("funil_meta_pct_recebimento_padrao", 0.0),
+            )
             _clear_meta_editor_widget_keys()
-            st.info(
-                "Rascunho restaurado aos valores padrão. "
-                "Clique em «Aplicar metas oficiais» para gravar no banco."
-            )
             st.rerun()
-
-    if aplicar:
-        try:
-            save_funil_meta(
-                PERIODO_TIPO_PADRAO,
-                data_ini,
-                data_fim,
-                metas_dict_from_scenario(st.session_state["funil_meta_draft"]),
-                criado_por="dashboard",
-            )
-            st.session_state["funil_meta_oficial"] = dict(
-                st.session_state["funil_meta_draft"],
-            )
-            st.session_state["funil_meta_confirm_apply"] = False
-            st.success("Metas aplicadas com sucesso.")
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Não foi possível salvar as metas: {exc}")
 
     st.markdown("</div>", unsafe_allow_html=True)
-    return draft
 
 
 def _render_alerta_gargalo(impactos: list[dict], periodo: str) -> None:
-    """Alerta — meta oficial; ganho em faturamento projetado (base mensal)."""
+    """Alerta — meta da tela; ganho em montante projetado (base mensal)."""
     top = impactos[0] if impactos else None
     p_label = PERIODOS[periodo]["label"].lower()
 
@@ -2328,8 +2639,8 @@ def _render_alerta_gargalo(impactos: list[dict], periodo: str) -> None:
         st.markdown(
             '<div class="fr-alert healthy">'
             '  <div class="kicker">↑ Funil saudável</div>'
-            '  <h4>Cenário acima ou alinhado com a meta oficial</h4>'
-            '  <p class="note">Comparado à meta salva para este período, o '
+            '  <h4>Cenário acima ou alinhado com a meta da tela</h4>'
+            '  <p class="note">Comparado à meta ativa nesta sessão, o '
             'Atual está em dia em todas as etapas. Não há gargalo crítico.</p>'
             '</div>',
             unsafe_allow_html=True,
@@ -2374,15 +2685,15 @@ def _render_alerta_gargalo(impactos: list[dict], periodo: str) -> None:
         f'  <h4>{html.escape(top["label"])}</h4>'
         f'  <div class="grid">'
         f'    <div><div class="k">Atual</div><div class="v">{html.escape(fmt_atual)}</div></div>'
-        f'    <div><div class="k">Meta oficial</div><div class="v">{html.escape(fmt_meta)}</div></div>'
+        f'    <div><div class="k">Meta da tela</div><div class="v">{html.escape(fmt_meta)}</div></div>'
         f'    <div>'
         f'      <div class="k">{html.escape(ganho_k)}</div>'
         f'      <div class="v accent">+ {html.escape(brl(ganho_view))}</div>'
         f'    </div>'
         f'  </div>'
-        f'  <p class="note">Simulação: só esta etapa sobe até a meta oficial; '
+        f'  <p class="note">Simulação: só esta etapa sobe até a meta da tela; '
         f'demais parâmetros do Atual permanecem iguais. Ganho em '
-        f'<strong>faturamento projetado</strong> (vendas × ticket). '
+        f'<strong>montante projetado</strong> (vendas × ticket). '
         f'Base mensal: + {html.escape(brl(ganho_mes))}/mês.</p>'
         f'  {pri_block}'
         f'</div>',
@@ -2392,7 +2703,7 @@ def _render_alerta_gargalo(impactos: list[dict], periodo: str) -> None:
 
 def _render_gap_card(label: str, atual: float, meta: float,
                      periodo: str, is_money: bool = False) -> None:
-    """Gap Atual → meta oficial na escala da visualização (entrada já mensal)."""
+    """Gap Atual → meta da tela na escala da visualização (entrada já mensal)."""
     div = PERIODOS[periodo]["divisor"]
     gap = meta - atual
     positivo = gap > 0
@@ -2423,13 +2734,38 @@ def _render_gap_card(label: str, atual: float, meta: float,
 
 
 def _render_compare(calc_atual: dict, calc_sim: dict, calc_meta: dict) -> None:
-    delta = calc_sim["faturamento"] - calc_atual["faturamento"]
-    if delta > 0:
-        title_html = f'<h3 class="up">+ {html.escape(brl(delta))}</h3>'
-    elif delta < 0:
-        title_html = f'<h3 class="down">- {html.escape(brl(abs(delta)))}</h3>'
+    delta_m = calc_sim["montante"] - calc_atual["montante"]
+    if delta_m > 0:
+        title_html = (
+            f'<h3 class="up">+ {html.escape(brl(delta_m))}</h3>'
+            f'<div class="kicker" style="margin-top:4px;">Montante</div>'
+        )
+    elif delta_m < 0:
+        title_html = (
+            f'<h3 class="down">- {html.escape(brl(abs(delta_m)))}</h3>'
+            f'<div class="kicker" style="margin-top:4px;">Montante</div>'
+        )
     else:
-        title_html = '<h3>Igual ao Atual</h3>'
+        title_html = (
+            '<h3>Igual ao Atual</h3>'
+            '<div class="kicker" style="margin-top:4px;">Montante</div>'
+        )
+
+    rec_atual = float(calc_atual.get("receita") or 0)
+    rec_sim = float(calc_sim.get("receita") or 0)
+    rec_meta = float(calc_meta.get("receita") or 0)
+    rec_rows = ""
+    if rec_atual > 0 or rec_sim > 0 or rec_meta > 0:
+        rec_rows = (
+            f'    <div class="right" style="margin-top:10px;">'
+            f'      <div class="col"><div class="k">Receita atual</div>'
+            f'        <div class="v">{html.escape(brl(rec_atual))}</div></div>'
+            f'      <div class="col"><div class="k">Receita sim.</div>'
+            f'        <div class="v gold">{html.escape(brl(rec_sim))}</div></div>'
+            f'      <div class="col"><div class="k">Receita meta</div>'
+            f'        <div class="v green">{html.escape(brl(rec_meta))}</div></div>'
+            f'    </div>'
+        )
 
     st.markdown(
         f'<div class="fr-compare">'
@@ -2438,18 +2774,20 @@ def _render_compare(calc_atual: dict, calc_sim: dict, calc_meta: dict) -> None:
         f'    <div>'
         f'      <div class="kicker">Simulador vs Atual</div>'
         f'      {title_html}'
-        f'      <p class="note">Diferença de faturamento projetado '
-        f'(vendas × ticket) entre Simulador e Atual real.</p>'
+        f'      <p class="note">Diferença de montante entre Simulador '
+        f'(vendas × ticket) e Atual real. Receita projetada usa o '
+        f'% recebimento do período.</p>'
         f'    </div>'
         f'    <div class="right">'
-        f'      <div class="col"><div class="k">Atual</div>'
-        f'        <div class="v">{html.escape(brl(calc_atual["faturamento"]))}</div></div>'
-        f'      <div class="col"><div class="k">Simulado</div>'
-        f'        <div class="v gold">{html.escape(brl(calc_sim["faturamento"]))}</div></div>'
-        f'      <div class="col"><div class="k">Meta</div>'
-        f'        <div class="v green">{html.escape(brl(calc_meta["faturamento"]))}</div></div>'
+        f'      <div class="col"><div class="k">Montante atual</div>'
+        f'        <div class="v">{html.escape(brl(calc_atual["montante"]))}</div></div>'
+        f'      <div class="col"><div class="k">Montante sim.</div>'
+        f'        <div class="v gold">{html.escape(brl(calc_sim["montante"]))}</div></div>'
+        f'      <div class="col"><div class="k">Montante meta</div>'
+        f'        <div class="v green">{html.escape(brl(calc_meta["montante"]))}</div></div>'
         f'    </div>'
         f'  </div>'
+        f'{rec_rows}'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -2522,10 +2860,11 @@ except Exception as e:
 if "funil_simulador" not in st.session_state and _funnel_snapshot is not None:
     st.session_state["funil_simulador"] = snapshot_to_scenario_dict(_funnel_snapshot)
 
-_sync_official_meta_for_period(ctx.data_ini, ctx.data_fim)
+_init_meta_session_for_period(ctx.data_ini, ctx.data_fim, _funnel_snapshot)
 
 atual_s = Scenario(**st.session_state["funil_atual"])
-meta_oficial_s = _get_meta_oficial()
+meta_tela_s = _get_meta_tela()
+_meta_pct_rec = _get_meta_pct_recebimento()
 
 # Visualização (Mês / Semana / Dia) + ações globais (reset / exportar).
 c_periodo, c_reset, c_export = st.columns([4, 2, 2], gap="medium")
@@ -2548,18 +2887,21 @@ with c_export:
     _export_top_slot = st.empty()
 
 # Alerta de gargalo (Atual real vs Meta oficial salva).
-impactos = identificar_gargalos(atual_s, meta_oficial_s)
+_pct_rec = _pct_recebimento_snapshot(_funnel_snapshot)
+impactos = identificar_gargalos(
+    atual_s, meta_tela_s, pct_recebimento=_pct_rec,
+)
 _render_alerta_gargalo(impactos, periodo)
 st.caption(
-    "Gargalo e gaps comparam o Atual (dados reais) com a **meta oficial** "
-    "salva para este período — não o rascunho do editor até você aplicar."
+    "Gargalo e gaps comparam o Atual (dados reais) com a **meta da tela** "
+    "(padrão, editada localmente ou carregada de um histórico)."
 )
 
 _render_benchmark_historico(
     _benchmark_raw,
     snapshot=_funnel_snapshot,
     atual_s=atual_s,
-    meta_s=meta_oficial_s,
+    meta_s=meta_tela_s,
 )
 
 section_title(
@@ -2572,18 +2914,24 @@ atual_s, sim_s, meta_s = _render_vitrine_comparison(
     atual_s=atual_s,
     snapshot=_funnel_snapshot,
     benchmark_metrics=_benchmark_metrics,
+    pct_recebimento=_pct_rec,
+    meta_pct_recebimento=_meta_pct_rec,
 )
 
 calc_atual = _calc_atual_para_tela(_funnel_snapshot, atual_s, periodo)
-calc_sim = calcular_funil_exibicao(sim_s, periodo)
-calc_meta = calcular_funil_exibicao(meta_oficial_s, periodo)
+calc_sim = calcular_funil_exibicao(
+    sim_s, periodo, pct_recebimento=_pct_rec,
+)
+calc_meta = calcular_funil_exibicao(
+    meta_s, periodo, pct_recebimento=_meta_pct_rec,
+)
 
-# Gap até a meta — 4 cards lado a lado.
+# Gap até a meta — volumes e financeiro.
 section_title(
     "Gap até a meta",
-    "quanto falta do Atual até a meta oficial — valores na escala da visualização",
+    "quanto falta do Atual até a meta da tela — escala da visualização",
 )
-g1, g2, g3, g4 = st.columns(4, gap="small")
+g1, g2, g3, g4, g5 = st.columns(5, gap="small")
 with g1:
     _render_gap_card("Leads a mais",
                      calc_atual["leads"] * PERIODOS[periodo]["divisor"],
@@ -2600,9 +2948,14 @@ with g3:
                      calc_meta["vendas"]  * PERIODOS[periodo]["divisor"],
                      periodo)
 with g4:
-    _render_gap_card("Faturamento a mais",
-                     calc_atual["faturamento"] * PERIODOS[periodo]["divisor"],
-                     calc_meta["faturamento"]  * PERIODOS[periodo]["divisor"],
+    _render_gap_card("Montante a mais",
+                     calc_atual["montante"] * PERIODOS[periodo]["divisor"],
+                     calc_meta["montante"]  * PERIODOS[periodo]["divisor"],
+                     periodo, is_money=True)
+with g5:
+    _render_gap_card("Receita a mais",
+                     calc_atual["receita"] * PERIODOS[periodo]["divisor"],
+                     calc_meta["receita"]  * PERIODOS[periodo]["divisor"],
                      periodo, is_money=True)
 
 # Comparativo Simulador vs Atual (faixa destaque).
@@ -2616,7 +2969,7 @@ _export_bundle = _build_export_bundle(
     excluir_testes=excluir_testes_aplicacoes,
     atual=atual_s,
     simulador=sim_s,
-    meta=meta_oficial_s,
+    meta=meta_s,
     calc_atual=calc_atual,
     calc_sim=calc_sim,
     calc_meta=calc_meta,
@@ -2626,16 +2979,20 @@ with _export_top_slot.container():
     with st.popover("Exportar relatório", use_container_width=True):
         _render_export_actions(_export_bundle)
 
-# Editor de metas — rascunho; oficial só ao aplicar.
-_render_meta_editor(periodo, data_ini=ctx.data_ini, data_fim=ctx.data_fim)
+_render_historico_referencias(
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    excluir_testes=excluir_testes_aplicacoes,
+)
+_render_meta_cenario_editor(periodo)
 
 st.markdown(
     '<div class="fr-footer-note">'
     f'Atual: dados reais do período ({ctx.data_ini.strftime("%d/%m/%Y")}'
     f'–{ctx.data_fim.strftime("%d/%m/%Y")}), mesmas regras da One Page. '
     'Semana e Dia são aproximações proporcionais (÷ 4 e ÷ 28). '
-    'Simulador: projeção com vendas inteiras e faturamento = vendas × ticket. '
-    'Atual: faturamento real (montante). Metas oficiais no editor abaixo.'
+    'Simulador e Meta: montante = vendas × ticket; receita usa % recebimento. '
+    'Cenários e metas ficam apenas em memória — sem gravação no banco.'
     '</div>',
     unsafe_allow_html=True,
 )

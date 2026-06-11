@@ -7,18 +7,19 @@ import plotly.graph_objects as go
 
 from .theme import PALETTE, int_br, pct
 
-# Paleta sequencial curada: dourados + vinhos + secundárias
-_SEQ = [
-    PALETTE["gold"],
-    PALETTE["wine_light"],
-    PALETTE["gold_bright"],
-    PALETTE["wine"],
-    PALETTE["blue"],
-    PALETTE["green"],
-    PALETTE["yellow"],
-    PALETTE["red"],
-    PALETTE["gold_soft"],
-]
+def _seq_colors() -> list[str]:
+    """Paleta sequencial curada: dourados + vinhos + secundárias."""
+    return [
+        PALETTE["gold"],
+        PALETTE["wine_light"],
+        PALETTE["gold_bright"],
+        PALETTE["wine"],
+        PALETTE["blue"],
+        PALETTE["green"],
+        PALETTE["yellow"],
+        PALETTE["red"],
+        PALETTE["gold_soft"],
+    ]
 
 
 def _base_layout(height: int = 320, unified: bool = False) -> dict:
@@ -32,7 +33,7 @@ def _base_layout(height: int = 320, unified: bool = False) -> dict:
             family="Inter, system-ui, sans-serif",
             size=12,
         ),
-        colorway=_SEQ,
+        colorway=_seq_colors(),
         legend=dict(
             orientation="h",
             yanchor="bottom", y=-0.22,
@@ -555,7 +556,7 @@ def donut(df: pd.DataFrame, names: str, values: str,
         labels=df[names],
         values=df[values],
         hole=0.62,
-        marker=dict(colors=_SEQ, line=dict(color=PALETTE["bg"], width=2)),
+        marker=dict(colors=_seq_colors(), line=dict(color=PALETTE["bg"], width=2)),
         textfont=dict(color="#1a1410", size=11, family="Inter"),
         texttemplate="<b>%{percent}</b>",
         textposition="inside",

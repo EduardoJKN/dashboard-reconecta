@@ -6,6 +6,7 @@ página, compartilhando o período via `st.session_state`)."""
 import streamlit as st
 
 from src.auth import require_auth
+from src.ui.app_theme import render_theme_selector
 from src.ui.components import apply_dark_theme
 
 # -----------------------------------------------------------------------------
@@ -35,6 +36,7 @@ with st.sidebar:
         '</div>',
         unsafe_allow_html=True,
     )
+    render_theme_selector()
 
 # -----------------------------------------------------------------------------
 # Navegação — agrupada por área seguindo a lógica do funil:
