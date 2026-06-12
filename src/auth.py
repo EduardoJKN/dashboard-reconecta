@@ -200,6 +200,7 @@ def auth_cookie_expiry_days() -> float:
 _AUTH_CM_INSTANCE_KEY = "_reconecta_auth_cm_instance"
 _COOKIES_SNAPSHOT_KEY = "_reconecta_cookies_snapshot"
 _COOKIES_RUN_ID_KEY = "_reconecta_cookies_run_id"
+_COOKIES_READY_KEY = "_reconecta_cookies_component_ready"
 
 
 def _script_run_id() -> object | None:
@@ -226,15 +227,30 @@ def _invalidate_cookies_snapshot() -> None:
     st.session_state.pop(_COOKIES_SNAPSHOT_KEY, None)
 
 
+def bootstrap_auth_cookies() -> None:
+    """Inicializa o CookieManager e aguarda a leitura dos cookies do navegador."""
+    _ensure_cookies_loaded()
+
+
 def _ensure_cookies_loaded() -> dict:
-    """Uma chamada a `get_all()` por execução do script."""
+    """Lê cookies do navegador (uma chamada `get_all()` por execução do script).
+
+    O componente do CookieManager costuma devolver `{}` no primeiro paint após
+    F5 ou nova aba; nesse caso paramos uma vez para o iframe sincronizar.
+    """
+    cm = _auth_cookie_manager()
+    cookies = cm.get_all() or {}
+
+    if not st.session_state.get(_COOKIES_READY_KEY):
+        st.session_state[_COOKIES_READY_KEY] = True
+        if not cookies and not st.session_state.get(_AUTHED_KEY):
+            st.stop()
+
     run_id = _script_run_id()
     if st.session_state.get(_COOKIES_RUN_ID_KEY) != run_id:
         st.session_state[_COOKIES_RUN_ID_KEY] = run_id
-        st.session_state[_COOKIES_SNAPSHOT_KEY] = (
-            _auth_cookie_manager().get_all() or {}
-        )
-    return st.session_state.get(_COOKIES_SNAPSHOT_KEY, {})
+        st.session_state[_COOKIES_SNAPSHOT_KEY] = cookies
+    return st.session_state.get(_COOKIES_SNAPSHOT_KEY, cookies)
 
 
 def get_cookie(name: str) -> str | None:
@@ -252,10 +268,12 @@ def set_cookie(
 ) -> None:
     """Grava cookie via o CookieManager único do app."""
     cm = _auth_cookie_manager()
+    max_age = max(0, int((expires_at - datetime.now()).total_seconds()))
     cm.set(
         name,
         value,
         expires_at=expires_at,
+        max_age=max_age,
         path="/",
         same_site="lax",
         key=widget_key or f"reconecta_cookie_set_{name}",
@@ -294,6 +312,7 @@ def _persist_dashboard_login(cookie_key: str, days: float) -> None:
 def logout_dashboard() -> None:
     """Encerra login geral e editor de metas; volta para a tela de login."""
     st.session_state.pop(_AUTHED_KEY, None)
+    st.session_state.pop(_COOKIES_READY_KEY, None)
     delete_cookie(_COOKIE_NAME, widget_key="reconecta_auth_logout")
 
     from src.metas_auth import logout_metas_editor

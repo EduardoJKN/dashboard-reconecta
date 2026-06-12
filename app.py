@@ -9,7 +9,7 @@ load_dotenv()
 
 import streamlit as st
 
-from src.auth import require_auth
+from src.auth import bootstrap_auth_cookies, require_auth
 from src.ui.sidebar_user import render_sidebar_user_block
 from src.metas_auth import sync_metas_editor_session
 from src.ui.app_theme import render_theme_selector
@@ -29,6 +29,7 @@ apply_dark_theme()
 # -----------------------------------------------------------------------------
 # Gate de autenticação — bloqueia tudo abaixo até inserir a senha correta
 # -----------------------------------------------------------------------------
+bootstrap_auth_cookies()
 require_auth()
 sync_metas_editor_session()
 

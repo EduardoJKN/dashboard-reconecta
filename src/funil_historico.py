@@ -1,13 +1,14 @@
 """Histórico de referência do Funil da Reconecta — somente leitura (sem banco)."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
 from src.funil_meta_store import pct_to_display_percent
+from src.ui.theme import brl, int_br
 from src.one_page_funnel import (
     FunnelSnapshot,
     load_one_page_funnel,
@@ -156,6 +157,85 @@ def load_funil_historico_referencias(
             continue
 
     return rows
+
+
+def _is_empty_display_val(v: Any) -> bool:
+    if v is None:
+        return True
+    try:
+        return bool(pd.isna(v))
+    except Exception:
+        return False
+
+
+def _fmt_referencia_money_br(v: Any) -> str:
+    if _is_empty_display_val(v):
+        return "—"
+    return brl(float(v), casas=2)
+
+
+def _fmt_referencia_pct_br(v: Any) -> str:
+    """Percentual em pontos (0–100) → `80,00%`."""
+    if _is_empty_display_val(v):
+        return "—"
+    n = float(v)
+    s = f"{n:,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".")
+    return s
+
+
+def _fmt_referencia_int_br(v: Any) -> str:
+    if _is_empty_display_val(v):
+        return "—"
+    return int_br(float(v))
+
+
+def _fmt_referencia_datetime_br(v: Any) -> str:
+    if _is_empty_display_val(v):
+        return "—"
+    if isinstance(v, str):
+        return v or "—"
+    if isinstance(v, datetime):
+        return v.strftime("%d/%m/%Y %H:%M")
+    if hasattr(v, "strftime"):
+        return v.strftime("%d/%m/%Y %H:%M")
+    return str(v)
+
+
+_REFERENCIA_COL_RENAMES: dict[str, str] = {
+    "Agendamentos": "Agend.",
+    "Comparecimentos": "Comp.",
+}
+
+
+def format_referencia_funil_df_br(df: pd.DataFrame) -> pd.DataFrame:
+    """Formata colunas da Base para definição de meta em padrão BR."""
+    if df.empty:
+        return df
+    out = df.copy()
+    money_cols = ("Investimento", "CPL", "Ticket", "Montante", "Receita")
+    pct_cols = ("% L→Apl", "% Apl→Ag", "% Ag→Comp", "% Comp→Vda", "% Rec/Mont")
+    int_cols = ("Leads", "Aplicações", "Agendamentos", "Comparecimentos", "Vendas")
+
+    for col in money_cols:
+        if col in out.columns:
+            out[col] = out[col].map(_fmt_referencia_money_br)
+    for col in pct_cols:
+        if col in out.columns:
+            out[col] = out[col].map(_fmt_referencia_pct_br)
+    for col in int_cols:
+        if col in out.columns:
+            out[col] = out[col].map(_fmt_referencia_int_br)
+    if "Atualizado" in out.columns:
+        out["Atualizado"] = out["Atualizado"].map(_fmt_referencia_datetime_br)
+    for col in ("Por", "Observação", "Período"):
+        if col in out.columns:
+            out[col] = out[col].fillna("—").replace({None: "—"})
+    return out.rename(columns=_REFERENCIA_COL_RENAMES)
+
+
+def prepare_referencia_funil_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Formata em BR e aplica rótulos compactos de coluna."""
+    return format_referencia_funil_df_br(df)
 
 
 def historico_rows_to_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:

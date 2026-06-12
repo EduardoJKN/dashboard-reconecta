@@ -18,13 +18,29 @@ HISTORICO_PERIODOS: dict[str, dict[str, Any]] = {
     "365": {"label": "Últimos 12 meses", "days": 365},
 }
 
-BENCHMARK_METRIC_SPECS: tuple[tuple[str, str, bool, str], ...] = (
+# Métricas do benchmark, tags históricas e tabela (mesma base / mesma média).
+BENCHMARK_TAG_SPECS: tuple[tuple[str, str, bool, str], ...] = (
+    ("investimento", "Investimento", True, "money"),
     ("custo_lead", "Custo por Lead", False, "money"),
+    ("leads", "Leads", True, "count"),
     ("pct_la", "% Lead → Aplicação", True, "pct"),
+    ("aplicacoes", "Aplicações", True, "count"),
     ("pct_a_ag", "% Aplicação → Agendamento", True, "pct"),
+    ("agendamentos", "Agendamentos", True, "count"),
     ("pct_ag_c", "% Agendamento → Comparecimento", True, "pct"),
+    ("comparecimento", "Comparecimentos", True, "count"),
     ("pct_c_v", "% Comparecimento → Venda", True, "pct"),
+    ("vendas", "Vendas", True, "count"),
     ("ticket", "Ticket Médio", True, "money"),
+    ("pct_recebimento", "% Receita sobre Montante", True, "pct100"),
+)
+
+# Cenários automáticos no Simulador (apenas taxas + CPL + ticket).
+BENCHMARK_METRIC_SPECS: tuple[tuple[str, str, bool, str], ...] = tuple(
+    row for row in BENCHMARK_TAG_SPECS
+    if row[0] in {
+        "custo_lead", "pct_la", "pct_a_ag", "pct_ag_c", "pct_c_v", "ticket",
+    }
 )
 
 
@@ -140,11 +156,12 @@ def compute_funil_benchmark(
             continue
 
     metrics: dict[str, dict[str, Any]] = {}
-    for key, _label, higher_is_better, _kind in BENCHMARK_METRIC_SPECS:
+    for key, _label, higher_is_better, kind in BENCHMARK_TAG_SPECS:
         vals = [_metric_from_snapshot(s, key) for s in snapshots]
         agg = _aggregate_values(vals, labels, higher_is_better=higher_is_better)
         if agg:
             agg["higher_is_better"] = higher_is_better
+            agg["kind"] = kind
             metrics[key] = agg
 
     return {

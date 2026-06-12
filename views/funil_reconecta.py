@@ -18,6 +18,7 @@ Períodos de visualização: semana = total ÷ 4; dia = total ÷ 28.
 from __future__ import annotations
 
 import html
+import os
 from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
@@ -33,6 +34,7 @@ from src.funil_export import (
 )
 from src.funil_benchmark import (
     BENCHMARK_METRIC_SPECS,
+    BENCHMARK_TAG_SPECS,
     HISTORICO_PERIODOS,
     classify_realism,
     compute_funil_benchmark,
@@ -43,18 +45,25 @@ from src.funil_historico import (
     historico_row_by_index,
     historico_rows_to_display_df,
     load_funil_historico_referencias,
+    prepare_referencia_funil_display_df,
 )
 from src.funil_meta_store import (
     PERIODO_TIPO_PADRAO,
     MetasDatabaseNotConfiguredError,
+    build_funil_meta_save_payload,
     is_metas_database_configured,
     load_funil_meta,
     load_metas_funil_historico,
     metas_dict_from_scenario,
     metas_dict_to_scenario,
+    meta_payload_from_reference_volumes,
+    normalize_reference_pct_recebimento,
+    normalize_reference_to_meta_payload,
+    normalize_reference_volumes,
+    pct_recebimento_from_reference_volumes,
     pct_to_display_percent,
     save_funil_meta,
-    soft_delete_meta_funil,
+    delete_meta_funil,
 )
 from src.metas_auth import (
     METAS_VIEW_ONLY_MESSAGE,
@@ -108,6 +117,9 @@ _BASE_META = Scenario(
     ticket=25000.0,
 )
 
+
+# Aplicações sempre sem e-mails/domínios de teste (mesma regra da checkbox antiga).
+_EXCLUIR_TESTES_APLICACOES = True
 
 # Períodos — divisores aplicados sobre os valores mensais.
 PERIODOS = {
@@ -222,6 +234,15 @@ _DEFAULT_SIM_EDIT_MODES: dict[str, str] = {
     "c_v": "taxa",
 }
 _DEFAULT_META_EDIT_MODES: dict[str, str] = dict(_DEFAULT_SIM_EDIT_MODES)
+
+# Ao carregar referência histórica no editor: preservar volumes absolutos (modo Nº).
+_META_REFERENCE_LOAD_MODES: dict[str, str] = {
+    "leads": "derivado",
+    "la": "volume",
+    "a_ag": "volume",
+    "ag_c": "volume",
+    "c_v": "volume",
+}
 
 
 def _sim_mode_options(stage: str) -> tuple[tuple[str, ...], str]:
@@ -504,6 +525,63 @@ def _fatu_chips_html(chips: list[str]) -> str:
     return f'<div class="fr-fatu-chips">{inner}</div>'
 
 
+def _meta_editor_proj_chips_html(chips: list[str]) -> str:
+    """Área de chips — mesma altura nos dois cards do par."""
+    inner = "".join(
+        f'<span class="fr-meta-editor-proj-chip">{html.escape(text)}</span>'
+        for text in chips
+    )
+    return f'<div class="fr-meta-editor-proj-chips">{inner}</div>'
+
+
+def _meta_editor_proj_card_html(
+    title: str,
+    value: str,
+    chips: list[str],
+    *,
+    theme: str,
+) -> str:
+    """Card do par Montante/Receita — estrutura idêntica, tema distinto."""
+    return (
+        f'<div class="fr-meta-editor-proj-card fr-meta-editor-proj-card--{theme}">'
+        f'  <div class="fr-meta-editor-proj-main">'
+        f'    <div class="fr-meta-editor-proj-lbl">{html.escape(title)}</div>'
+        f'    <div class="fr-meta-editor-proj-val">{html.escape(value)}</div>'
+        f'  </div>'
+        f'  {_meta_editor_proj_chips_html(chips)}'
+        f'</div>'
+    )
+
+
+def _render_meta_editor_projecao_cards(
+    mont_proj: float,
+    rec_proj: float,
+) -> None:
+    """Montante e receita projetados (mês) no rodapé do Ajuste de meta."""
+    chips_rec: list[str] = []
+    pct_rec_mont = _pct_ratio_txt(rec_proj, mont_proj)
+    if pct_rec_mont:
+        chips_rec.append(f"{pct_rec_mont} do montante")
+
+    st.markdown(
+        '<div class="fr-meta-editor-proj-grid">'
+        + _meta_editor_proj_card_html(
+            "Montante projetado (mês)",
+            brl(mont_proj),
+            [],
+            theme="montante",
+        )
+        + _meta_editor_proj_card_html(
+            "Receita projetada (mês)",
+            brl(rec_proj),
+            chips_rec,
+            theme="receita",
+        )
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def format_display_value(
     value: float,
     *,
@@ -528,12 +606,19 @@ def _format_vitrine_value(rid: str, value: float) -> str:
 
 
 _SPEC_ID_TO_BENCHMARK_KEY: dict[str, str] = {
+    "inv": "investimento",
     "cl": "custo_lead",
+    "leads": "leads",
     "pct_la": "pct_la",
+    "aplicacoes": "aplicacoes",
     "pct_a_ag": "pct_a_ag",
+    "agendamentos": "agendamentos",
     "pct_ag_c": "pct_ag_c",
+    "comparecimento": "comparecimento",
     "pct_c_v": "pct_c_v",
+    "vendas": "vendas",
     "ticket": "ticket",
+    "pct_recebimento": "pct_recebimento",
 }
 
 
@@ -541,40 +626,187 @@ def _format_benchmark_value(kind: str, value: float | None) -> str:
     if value is None:
         return "—"
     if kind == "money":
-        return brl(float(value))
-    return pct_fmt(float(value))
+        return brl(float(value), casas=2)
+    if kind == "pct":
+        return pct_fmt(float(value))
+    if kind == "pct100":
+        v = float(value)
+        return (
+            f"{v:,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".")
+        )
+    if kind == "count":
+        return int_br(float(value))
+    return str(value)
+
+
+def _benchmark_row_value(
+    key: str,
+    *,
+    snapshot: FunnelSnapshot | None,
+    scenario: Scenario,
+    calc_mes: dict | None,
+    pct_recebimento: float | None = None,
+) -> float | None:
+    """Valor mensal para colunas Atual / Meta da tabela Benchmark histórico."""
+    if snapshot is not None:
+        return float(getattr(snapshot, key))
+    if key == "investimento":
+        return float(scenario.investimento)
+    if key in ("custo_lead", "ticket", "pct_la", "pct_a_ag", "pct_ag_c", "pct_c_v"):
+        return float(getattr(scenario, key))
+    if key == "pct_recebimento":
+        if pct_recebimento is not None:
+            return float(pct_recebimento)
+        return 0.0
+    if calc_mes is not None and key in calc_mes:
+        return float(calc_mes[key])
+    return None
 
 
 def _scenario_metric_value(s: Scenario, key: str) -> float:
     return float(getattr(s, key))
 
 
-def _label_with_realism_badge(
+def _badge_value_for_spec(
+    spec: dict,
+    *,
+    smode: str,
+    sim_state: dict | None,
+    calc_s: dict | None,
+    sim_s: Scenario | None,
+    div: int,
+) -> tuple[str | None, float | None]:
+    """Valor para tag histórica conforme modo (% / Nº / Auto)."""
+    rid = spec.get("id")
+    if not rid or rid not in _SPEC_ID_TO_BENCHMARK_KEY:
+        return None, None
+
+    bkey = _SPEC_ID_TO_BENCHMARK_KEY[rid]
+    stage = spec.get("sim_stage")
+    role = spec.get("sim_role")
+
+    if rid == "inv":
+        if sim_state is None:
+            return None, None
+        return rid, float(sim_state["investimento"])
+
+    if rid in ("cl", "ticket"):
+        if sim_s is None:
+            return None, None
+        return rid, _scenario_metric_value(sim_s, bkey)
+
+    if rid == "pct_recebimento":
+        return rid, float(st.session_state.get("funil_meta_pct_recebimento", 0.0))
+
+    if rid.startswith("pct_") and sim_state is not None and stage:
+        pct_field = _SIM_STAGE_PCT_FIELD.get(stage)
+        if pct_field:
+            return rid, float(sim_state[pct_field])
+        if sim_s is not None:
+            return rid, _scenario_metric_value(sim_s, bkey)
+
+    if role == "volume" and stage and calc_s is not None:
+        vol_field = _SIM_STAGE_VOLUME_FIELD[stage]
+        return rid, float(calc_s.get(vol_field, 0)) * div
+
+    if rid == "leads" and calc_s is not None:
+        return rid, float(calc_s.get("leads", 0)) * div
+
+    return None, None
+
+
+def _build_metric_label_history_html(
     label: str,
     *,
-    spec_id: str | None,
-    value: float,
-    benchmark_metrics: dict[str, dict[str, Any]] | None,
+    spec_id: str | None = None,
+    value: float | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> str:
-    """Label com badge de realismo (Simulador) quando há benchmark."""
-    base = html.escape(label)
-    if not spec_id or not benchmark_metrics:
-        return base
-    bkey = _SPEC_ID_TO_BENCHMARK_KEY.get(spec_id)
-    if not bkey or bkey not in benchmark_metrics:
-        return base
-    bm = benchmark_metrics[bkey]
-    text, cls = classify_realism(
-        value,
-        float(bm["mean"]),
-        higher_is_better=bool(bm["higher_is_better"]),
-    )
-    if cls == "neutral":
-        return base
+    """HTML do label + tag histórica + média (somente divs internos válidos)."""
+    parts = [f'<div class="fr-metric-label">{html.escape(label)}</div>']
+    mean_line = ""
+
+    if spec_id and benchmark_metrics:
+        bkey = _SPEC_ID_TO_BENCHMARK_KEY.get(spec_id)
+        if bkey and bkey in benchmark_metrics:
+            bm = benchmark_metrics[bkey]
+            kind = str(bm.get("kind", "pct"))
+            mean_raw = bm.get("mean")
+            mean_f = float(mean_raw) if mean_raw is not None else None
+            mean_display = _format_benchmark_value(
+                kind,
+                mean_f if mean_f is not None and mean_f > 0 else None,
+            )
+            text, cls = classify_realism(
+                float(value or 0),
+                float(bm["mean"]),
+                higher_is_better=bool(bm["higher_is_better"]),
+            )
+            if cls != "neutral":
+                parts.append(
+                    f'<div class="fr-realism fr-realism-{html.escape(cls)}" '
+                    f'title="{html.escape(text)}">{html.escape(text)}</div>'
+                )
+            mean_line = (
+                f'<div class="fr-history-mean">'
+                f'Média histórica: {html.escape(mean_display)}</div>'
+            )
+
     return (
-        f'{base}<span class="fr-realism fr-realism-{html.escape(cls)}" '
-        f'title="{html.escape(text)}">{html.escape(text)}</span>'
+        f'<div class="fr-metric-label-row">{"".join(parts)}</div>'
+        f'{mean_line}'
     )
+
+
+def _build_vitrine_label_block(
+    label: str,
+    *,
+    spec_id: str | None = None,
+    value: float | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
+    marker_class: str = "",
+    wrap_class: str = "lbl bold lbl-chip",
+) -> str:
+    """Bloco de label isolado — raiz em div, sem span envolvendo div."""
+    inner = _build_metric_label_history_html(
+        label,
+        spec_id=spec_id,
+        value=value,
+        benchmark_metrics=benchmark_metrics,
+    )
+    marker = ""
+    if marker_class:
+        marker = (
+            f'<div class="fr-vitrine-editable-row {html.escape(marker_class)}" '
+            f'aria-hidden="true"></div>'
+        )
+    return (
+        f'<div class="fr-vitrine-label-host">'
+        f'{marker}'
+        f'<div class="{html.escape(wrap_class)}">{inner}</div>'
+        f'</div>'
+    )
+
+
+def _render_metric_label_history(
+    label: str,
+    *,
+    spec_id: str | None = None,
+    value: float | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
+    marker_class: str = "",
+    wrap_class: str = "lbl bold lbl-chip",
+) -> None:
+    """Label + tag + média em st.markdown separado (nunca no label do widget)."""
+    block = _build_vitrine_label_block(
+        label,
+        spec_id=spec_id,
+        value=value,
+        benchmark_metrics=benchmark_metrics,
+        marker_class=marker_class,
+        wrap_class=wrap_class,
+    )
+    st.markdown(block, unsafe_allow_html=True)
 
 
 def _apply_benchmark_scenario_to_sim(
@@ -599,6 +831,7 @@ def _render_benchmark_historico(
     snapshot: FunnelSnapshot | None,
     atual_s: Scenario,
     meta_s: Scenario,
+    meta_pct_recebimento: float,
 ) -> None:
     """Seção Benchmark histórico + botões de cenário."""
     section_title(
@@ -617,26 +850,54 @@ def _render_benchmark_historico(
 
     hist_ini = date.fromisoformat(benchmark_raw["hist_ini"])
     hist_fim = date.fromisoformat(benchmark_raw["hist_fim"])
+    days_key = str(benchmark_raw.get("days_key", ""))
+    hist_label = HISTORICO_PERIODOS.get(days_key, {}).get("label", "histórico")
     st.caption(
+        f'Base: {hist_label}. '
         f'Janela: {hist_ini.strftime("%d/%m/%Y")} – {hist_fim.strftime("%d/%m/%Y")} '
         f'({benchmark_raw.get("monthly_count", 0)} mês(es) com dados). '
-        "Mesmas regras da One Page e do Atual."
+        "Mesmas regras da One Page e do Atual. "
+        "Tags do Simulador e do Ajuste de meta usam a coluna Média histórica."
+    )
+
+    calc_atual_mes = calcular_funil_exibicao(
+        atual_s,
+        "mes",
+        pct_recebimento=float(snapshot.pct_recebimento) if snapshot else 0.0,
+    )
+    calc_meta_mes = calcular_funil_exibicao(
+        meta_s,
+        "mes",
+        pct_recebimento=meta_pct_recebimento,
     )
 
     rows: list[dict[str, str]] = []
-    for key, label, _hib, kind in BENCHMARK_METRIC_SPECS:
+    for key, label, _hib, kind in BENCHMARK_TAG_SPECS:
         bm = metrics.get(key, {})
-        atual_val = (
-            _scenario_metric_value(
-                Scenario(**snapshot_to_scenario_dict(snapshot)), key,
-            )
-            if snapshot is not None
-            else _scenario_metric_value(atual_s, key)
+        mean_raw = bm.get("mean")
+        mean_f = float(mean_raw) if mean_raw is not None else None
+        atual_val = _benchmark_row_value(
+            key,
+            snapshot=snapshot,
+            scenario=atual_s,
+            calc_mes=calc_atual_mes,
+            pct_recebimento=(
+                float(snapshot.pct_recebimento) if snapshot else None
+            ),
         )
-        meta_val = _scenario_metric_value(meta_s, key)
+        meta_val = _benchmark_row_value(
+            key,
+            snapshot=None,
+            scenario=meta_s,
+            calc_mes=calc_meta_mes,
+            pct_recebimento=meta_pct_recebimento,
+        )
         rows.append({
             "Métrica": label,
-            "Média histórica": _format_benchmark_value(kind, bm.get("mean")),
+            "Média histórica": _format_benchmark_value(
+                kind,
+                mean_f if mean_f is not None and mean_f > 0 else None,
+            ),
             "Mediana": _format_benchmark_value(kind, bm.get("median")),
             "P75": _format_benchmark_value(kind, bm.get("p75")),
             "Melhor período": (
@@ -1415,9 +1676,187 @@ _FUNIL_CSS = """
     margin: 0 0 12px 0;
     line-height: 1.45;
 }
+span.fr-referencia-funil-table-anchor {
+    display: none;
+}
+span.fr-referencia-funil-table-anchor + div [data-testid="stDataFrame"] {
+    overflow-x: auto;
+    max-width: 100%;
+}
+span.fr-referencia-funil-table-anchor + div [data-testid="stDataFrame"] [data-testid="glideDataEditor"] {
+    font-size: 0.82rem;
+}
+span.fr-referencia-funil-table-anchor + div [data-testid="stDataFrame"] [role="columnheader"] {
+    white-space: nowrap;
+}
+span.fr-referencia-funil-table-anchor + div [data-testid="stDataFrame"] [role="gridcell"] {
+    white-space: nowrap;
+}
+.fr-meta-editor-proj-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: stretch;
+    width: 100%;
+    margin: 10px 0 6px;
+}
+@media (max-width: 700px) {
+    .fr-meta-editor-proj-grid {
+        grid-template-columns: 1fr;
+    }
+}
+.fr-meta-editor-proj-card {
+    height: 100%;
+    min-height: 7.85rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    box-sizing: border-box;
+    padding: 11px 13px 10px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.2),
+        0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.fr-meta-editor-proj-card--montante {
+    background: linear-gradient(
+        155deg,
+        rgba(198, 172, 112, 0.68) 0%,
+        rgba(186, 158, 92, 0.62) 50%,
+        rgba(168, 140, 78, 0.66) 100%
+    );
+    color: var(--color-wine);
+}
+.fr-meta-editor-proj-card--receita {
+    background: linear-gradient(
+        155deg,
+        rgba(92, 0, 30, 0.72) 0%,
+        rgba(108, 18, 42, 0.66) 50%,
+        rgba(124, 32, 54, 0.7) 100%
+    );
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.1);
+}
+.fr-meta-editor-proj-main { flex: 0 0 auto; }
+.fr-meta-editor-proj-lbl {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: rgba(58, 24, 32, 0.58);
+}
+.fr-meta-editor-proj-card--receita .fr-meta-editor-proj-lbl {
+    color: rgba(255, 255, 255, 0.72);
+}
+.fr-meta-editor-proj-val {
+    font-family: ui-monospace, "IBM Plex Mono", monospace;
+    font-size: 1.28rem;
+    font-weight: 700;
+    margin-top: 3px;
+    color: rgba(48, 20, 30, 0.9);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+}
+.fr-meta-editor-proj-card--receita .fr-meta-editor-proj-val {
+    color: #ffffff;
+}
+.fr-meta-editor-proj-chips {
+    flex: 1 1 auto;
+    min-height: 2.95rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-end;
+    align-content: flex-end;
+    margin-top: auto;
+    padding-top: 5px;
+}
+.fr-meta-editor-proj-chip {
+    display: inline-block;
+    font-size: 0.82rem;
+    font-weight: 700;
+    line-height: 1.1;
+    padding: 0.28rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(48, 20, 30, 0.16);
+    color: rgba(38, 14, 24, 0.94);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.fr-meta-editor-proj-card--receita .fr-meta-editor-proj-chip {
+    background: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+.fr-vitrine-label-host {
+    display: block;
+    width: 100%;
+    min-width: 0;
+}
+.fr-vitrine-row-shell {
+    width: 100%;
+}
+.fr-vitrine-readonly-val {
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-start;
+    width: 100%;
+    min-height: 32px;
+    padding-top: 3px;
+}
+.fr-metric-label-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 2px;
+    line-height: 1.25;
+}
+.fr-metric-label {
+    font-weight: inherit;
+    color: inherit;
+}
+.fr-history-mean {
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: rgba(244, 230, 194, 0.58);
+    margin-top: -1px;
+    margin-bottom: 2px;
+    line-height: 1.1;
+    white-space: normal;
+}
+.fr-vitrine-row .lbl-chip:has(.fr-metric-label-row),
+.fr-vitrine-sync .lbl-chip:has(.fr-history-mean) {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+    max-width: 72%;
+    height: auto;
+    min-height: 32px;
+    max-height: none;
+    padding-top: 3px;
+    padding-bottom: 3px;
+}
+.fr-vitrine-body .fr-card-row:has(.fr-history-mean),
+.fr-vitrine-row:has(.fr-history-mean) {
+    height: auto;
+    min-height: 32px;
+    max-height: none;
+    align-items: flex-start;
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
 .fr-realism {
     display: inline-block;
-    margin-left: 6px;
+    margin-left: 0;
     padding: 1px 5px;
     border-radius: 3px;
     font-size: 0.58rem;
@@ -1425,9 +1864,8 @@ _FUNIL_CSS = """
     line-height: 1.2;
     vertical-align: middle;
     white-space: nowrap;
-    max-width: 9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex-shrink: 0;
+    width: fit-content;
 }
 .fr-realism-ok { background: rgba(4, 120, 87, 0.35); color: #a7f3d0; }
 .fr-realism-good { background: rgba(4, 120, 87, 0.45); color: #d1fae5; }
@@ -1498,6 +1936,43 @@ def _clear_meta_editor_widget_keys() -> None:
         del st.session_state["funil_meta_edit_modes"]
 
 
+def _seed_meta_editor_widget_keys(
+    payload: dict[str, float],
+    *,
+    periodo: str,
+    pct_recebimento: float,
+    volumes: dict[str, float] | None = None,
+    modes: dict[str, str] | None = None,
+) -> None:
+    """Preenche keys dos widgets do Ajuste de meta após carregar referência."""
+    prefix = "meta_cfg"
+    div = PERIODOS[periodo]["divisor"]
+    edit_modes = modes or _DEFAULT_META_EDIT_MODES
+
+    st.session_state[f"{prefix}_inv"] = float(payload["investimento"]) / div
+    st.session_state[f"{prefix}_cl"] = float(payload["custo_lead"])
+    st.session_state[f"{prefix}_pla"] = pct_to_display_percent(payload["pct_la"])
+    st.session_state[f"{prefix}_paag"] = pct_to_display_percent(payload["pct_a_ag"])
+    st.session_state[f"{prefix}_pagc"] = pct_to_display_percent(payload["pct_ag_c"])
+    st.session_state[f"{prefix}_pcv"] = pct_to_display_percent(payload["pct_c_v"])
+    st.session_state[f"{prefix}_tk"] = float(payload["ticket"])
+    st.session_state[f"{prefix}_pct_recebimento"] = float(pct_recebimento)
+
+    st.session_state["funil_meta_edit_modes"] = dict(edit_modes)
+    for stage, mode in edit_modes.items():
+        st.session_state[_sim_mode_widget_key(prefix, stage)] = mode
+
+    if volumes:
+        for stage in _SIM_EDIT_STAGES:
+            if edit_modes.get(stage) != "volume":
+                continue
+            vol_field = _SIM_STAGE_VOLUME_FIELD[stage]
+            if vol_field in volumes:
+                st.session_state[f"{prefix}_vol_{stage}"] = (
+                    float(volumes[vol_field]) / div
+                )
+
+
 def _funil_period_storage_key(data_ini: date, data_fim: date) -> str:
     return f"{data_ini.isoformat()}_{data_fim.isoformat()}"
 
@@ -1540,16 +2015,59 @@ def _get_meta_pct_recebimento() -> float:
 
 
 def _apply_historico_row_to_sim(row: dict[str, Any]) -> None:
-    st.session_state["funil_simulador"] = dict(row["scenario"])
+    st.session_state["funil_simulador"] = dict(
+        normalize_reference_to_meta_payload(row),
+    )
     _clear_funil_widget_keys(sim_only=True)
 
 
 def _apply_historico_row_to_meta(row: dict[str, Any]) -> None:
-    st.session_state["funil_meta_tela"] = dict(row["scenario"])
-    st.session_state["funil_meta_pct_recebimento"] = float(
-        row.get("pct_recebimento") or 0,
-    )
+    payload = normalize_reference_to_meta_payload(row)
+    pct_rec = normalize_reference_pct_recebimento(row)
     _clear_meta_editor_widget_keys()
+    st.session_state["funil_meta_tela"] = dict(payload)
+    st.session_state["funil_meta_pct_recebimento"] = pct_rec
+
+
+def _apply_historico_row_to_meta_editor(row: dict[str, Any]) -> None:
+    """Preenche o Ajuste de cenário de meta preservando volumes da referência."""
+    volumes = normalize_reference_volumes(row)
+    if volumes:
+        payload = meta_payload_from_reference_volumes(row, volumes)
+        pct_rec = pct_recebimento_from_reference_volumes(row, volumes)
+        modes = dict(_META_REFERENCE_LOAD_MODES)
+    else:
+        payload = normalize_reference_to_meta_payload(row)
+        pct_rec = normalize_reference_pct_recebimento(row)
+        modes = dict(_DEFAULT_META_EDIT_MODES)
+        volumes = None
+
+    _clear_meta_editor_widget_keys()
+    st.session_state["funil_meta_tela"] = dict(payload)
+    st.session_state["funil_meta_pct_recebimento"] = pct_rec
+    periodo = st.session_state.get("funil_periodo", "mes") or "mes"
+    _seed_meta_editor_widget_keys(
+        payload,
+        periodo=periodo,
+        pct_recebimento=pct_rec,
+        volumes=volumes,
+        modes=modes,
+    )
+    if os.environ.get("FUNIL_DEBUG"):
+        st.session_state["_meta_editor_debug_payload"] = dict(payload)
+        st.session_state["_meta_editor_debug_volumes"] = dict(volumes or {})
+        st.session_state["_meta_editor_debug_modes"] = dict(modes)
+        st.session_state["_meta_editor_debug_pct_recebimento"] = pct_rec
+        print(
+            "FUNIL_DEBUG payload carregado no ajuste:",
+            payload,
+            "volumes:",
+            volumes,
+            "modes:",
+            modes,
+            "pct_recebimento:",
+            pct_rec,
+        )
 
 
 def _build_export_bundle(
@@ -1634,7 +2152,10 @@ def _value_row_html(label: str, valor: str, *, computed: bool = False,
         row_cls += " highlight"
     return (
         f'<div class="{row_cls}">'
-        f'<span class="lbl bold lbl-chip">{html.escape(label)}</span>'
+        f'<div class="lbl bold lbl-chip">'
+        f'<div class="fr-metric-label-row">'
+        f'<div class="fr-metric-label">{html.escape(label)}</div>'
+        f'</div></div>'
         f'<span class="val {val_cls}">{html.escape(valor)}</span>'
         f'</div>'
     )
@@ -1670,14 +2191,38 @@ def _render_scenario_row_readonly(
     computed: bool = False,
     highlight: bool = False,
     cell_class: str = "",
+    spec_id: str | None = None,
+    realism_value: float | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> None:
-    """Linha somente leitura — label à esquerda, valor à direita."""
+    """Linha somente leitura — label e valor em markdowns separados."""
+    val_cls = "computed" if computed else "static"
+    row_cls = "fr-card-row fr-vitrine-row"
+    if highlight:
+        row_cls += " highlight"
+    shell_cls = f"{cell_class} fr-vitrine-row-shell".strip()
     st.markdown(
-        f'<div class="{html.escape(cell_class)}">'
-        f'{_value_row_html(label, value, computed=computed, highlight=highlight)}'
-        f'</div>',
+        f'<div class="{html.escape(shell_cls)}">',
         unsafe_allow_html=True,
     )
+    col_l, col_r = st.columns(
+        [1.55, 1], gap="small", vertical_alignment="center",
+    )
+    with col_l:
+        _render_metric_label_history(
+            label,
+            spec_id=spec_id if realism_value is not None else None,
+            value=float(realism_value or 0),
+            benchmark_metrics=benchmark_metrics,
+        )
+    with col_r:
+        st.markdown(
+            f'<div class="{row_cls} fr-vitrine-readonly-val">'
+            f'<span class="val {val_cls}">{html.escape(value)}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _editable_pct_max(value_pct: float) -> float:
@@ -1703,18 +2248,13 @@ def _render_scenario_row_editable(
     col_l, col_r = st.columns(
         [1.55, 1], gap="small", vertical_alignment="center",
     )
-    lbl_html = _label_with_realism_badge(
-        label,
-        spec_id=spec_id,
-        value=realism_value if realism_value is not None else value,
-        benchmark_metrics=benchmark_metrics,
-    )
     with col_l:
-        st.markdown(
-            f'<span class="fr-vitrine-editable-row {html.escape(cell_class)}" '
-            f'aria-hidden="true"></span>'
-            f'<span class="lbl bold lbl-chip">{lbl_html}</span>',
-            unsafe_allow_html=True,
+        _render_metric_label_history(
+            label,
+            spec_id=spec_id,
+            value=realism_value if realism_value is not None else value,
+            benchmark_metrics=benchmark_metrics,
+            marker_class=cell_class,
         )
     with col_r:
         valor_inicial = float(value or 0)
@@ -1776,6 +2316,7 @@ def _render_sim_inline_row(
     key_prefix: str,
     show_toggle: bool,
     widget: str,
+    div: int,
     sim_state: dict | None = None,
     calc_s: dict | None = None,
     spec: dict | None = None,
@@ -1795,33 +2336,37 @@ def _render_sim_inline_row(
         )
         mode_col = None
 
-    spec_id = spec["id"] if spec else None
-    realism_val: float | None = None
-    if sim_s is not None and spec_id in _SPEC_ID_TO_BENCHMARK_KEY:
-        realism_val = _scenario_metric_value(sim_s, _SPEC_ID_TO_BENCHMARK_KEY[spec_id])
-    lbl_html = _label_with_realism_badge(
-        label,
-        spec_id=spec_id,
-        value=realism_val if realism_val is not None else 0.0,
-        benchmark_metrics=benchmark_metrics,
-    )
-    with col_l:
-        st.markdown(
-            f'<span class="fr-vitrine-editable-row {html.escape(row_marker)}" '
-            f'aria-hidden="true"></span>'
-            f'<span class="lbl bold lbl-chip">{lbl_html}</span>',
-            unsafe_allow_html=True,
-        )
-
     smode = _sim_edit_mode_for_stage(
         stage,
         key_prefix,
         modes_key=_modes_key_for_prefix(key_prefix),
     )
+    badge_spec = spec or {
+        "id": "leads",
+        "sim_stage": stage,
+        "sim_role": "volume",
+    }
+    spec_id, realism_val = _badge_value_for_spec(
+        badge_spec,
+        smode=smode,
+        sim_state=sim_state,
+        calc_s=calc_s,
+        sim_s=sim_s,
+        div=div,
+    )
+    with col_l:
+        _render_metric_label_history(
+            label,
+            spec_id=spec_id,
+            value=realism_val if realism_val is not None else 0.0,
+            benchmark_metrics=benchmark_metrics,
+            marker_class=row_marker,
+        )
+
     if mode_col is not None:
         with mode_col:
             st.markdown(
-                '<span class="fr-sim-mode-select-wrap" aria-hidden="true"></span>',
+                '<div class="fr-sim-mode-select-wrap" aria-hidden="true"></div>',
                 unsafe_allow_html=True,
             )
             smode = _sim_mode_select(stage, key_prefix)
@@ -1882,6 +2427,14 @@ def _render_sim_vitrine_row(
         inp = spec["input"]
         step = 100.0 if inp == "inv_period" else (0.5 if inp == "pct" else 1.0)
         rid = spec["id"]
+        badge_spec_id, badge_val = _badge_value_for_spec(
+            spec,
+            smode="taxa",
+            sim_state=sim_state,
+            calc_s=calc_s,
+            sim_s=sim_s,
+            div=div,
+        )
         _render_scenario_row_editable(
             label,
             _sim_widget_key(spec, key_prefix),
@@ -1889,10 +2442,8 @@ def _render_sim_vitrine_row(
             cell_class=cell_class,
             step=step,
             is_percent=(inp == "pct"),
-            spec_id=rid if rid in _SPEC_ID_TO_BENCHMARK_KEY else None,
-            realism_value=_scenario_metric_value(
-                sim_s, _SPEC_ID_TO_BENCHMARK_KEY[rid],
-            ) if rid in _SPEC_ID_TO_BENCHMARK_KEY else None,
+            spec_id=badge_spec_id,
+            realism_value=badge_val,
             benchmark_metrics=benchmark_metrics,
         )
         return
@@ -1904,6 +2455,7 @@ def _render_sim_vitrine_row(
     )
 
     if role == "pct":
+        pct_field = _SIM_STAGE_PCT_FIELD[stage]
         if smode == "taxa":
             _render_sim_inline_row(
                 label,
@@ -1912,19 +2464,31 @@ def _render_sim_vitrine_row(
                 key_prefix=key_prefix,
                 show_toggle=True,
                 widget="pct",
+                div=div,
                 sim_state=sim_state,
                 spec=spec,
                 sim_s=sim_s,
                 benchmark_metrics=benchmark_metrics,
             )
         else:
+            _badge_id, badge_val = _badge_value_for_spec(
+                spec,
+                smode=smode,
+                sim_state=sim_state,
+                calc_s=calc_s,
+                sim_s=sim_s,
+                div=div,
+            )
             _render_scenario_row_readonly(
                 label,
                 _format_vitrine_value(
-                    rid, float(sim_state[_SIM_STAGE_PCT_FIELD[stage]]),
+                    rid, float(sim_state[pct_field]),
                 ),
                 computed=False,
                 cell_class=cell_class,
+                spec_id=_badge_id,
+                realism_value=badge_val,
+                benchmark_metrics=benchmark_metrics,
             )
         return
 
@@ -1939,7 +2503,9 @@ def _render_sim_vitrine_row(
                     key_prefix=key_prefix,
                     show_toggle=True,
                     widget="vol",
+                    div=div,
                     calc_s=calc_s,
+                    spec=spec,
                     sim_s=sim_s,
                     benchmark_metrics=benchmark_metrics,
                 )
@@ -1951,7 +2517,10 @@ def _render_sim_vitrine_row(
                     key_prefix=key_prefix,
                     show_toggle=True,
                     widget="readonly",
+                    div=div,
                     readonly_text=_format_vitrine_value("leads", calc_s["leads"]),
+                    calc_s=calc_s,
+                    spec=spec,
                     sim_s=sim_s,
                     benchmark_metrics=benchmark_metrics,
                 )
@@ -1964,16 +2533,29 @@ def _render_sim_vitrine_row(
                 key_prefix=key_prefix,
                 show_toggle=True,
                 widget="vol",
+                div=div,
                 calc_s=calc_s,
+                spec=spec,
                 sim_s=sim_s,
                 benchmark_metrics=benchmark_metrics,
             )
         else:
+            _badge_id, badge_val = _badge_value_for_spec(
+                spec,
+                smode=smode,
+                sim_state=sim_state,
+                calc_s=calc_s,
+                sim_s=sim_s,
+                div=div,
+            )
             _render_scenario_row_readonly(
                 label,
                 _format_vitrine_value(vol_field, calc_s[vol_field]),
                 computed=True,
                 cell_class=cell_class,
+                spec_id=_badge_id,
+                realism_value=badge_val,
+                benchmark_metrics=benchmark_metrics,
             )
         return
 
@@ -2484,31 +3066,51 @@ def _render_scenario_fields_editor(
 _ORIGEM_DADOS_REAIS = "Dados reais históricos"
 _ORIGEM_METAS_SALVAS = "Metas oficiais salvas"
 
-_REFERENCIA_FUNIL_COL_CONFIG = {
-    "Período": st.column_config.TextColumn(width="medium"),
-    "Investimento": st.column_config.NumberColumn(format="R$ %.2f"),
-    "CPL": st.column_config.NumberColumn(format="R$ %.2f"),
-    "Leads": st.column_config.NumberColumn(format="%.0f"),
-    "% L→Apl": st.column_config.NumberColumn(format="%.2f%%"),
-    "Aplicações": st.column_config.NumberColumn(format="%.0f"),
-    "% Apl→Ag": st.column_config.NumberColumn(format="%.2f%%"),
-    "Agendamentos": st.column_config.NumberColumn(format="%.0f"),
-    "% Ag→Comp": st.column_config.NumberColumn(format="%.2f%%"),
-    "Comparecimentos": st.column_config.NumberColumn(format="%.0f"),
-    "% Comp→Vda": st.column_config.NumberColumn(format="%.2f%%"),
-    "Vendas": st.column_config.NumberColumn(format="%.0f"),
-    "Ticket": st.column_config.NumberColumn(format="R$ %.2f"),
-    "Montante": st.column_config.NumberColumn(format="R$ %.2f"),
-    "Receita": st.column_config.NumberColumn(format="R$ %.2f"),
-    "% Rec/Mont": st.column_config.NumberColumn(format="%.2f%%"),
-    "Atualizado": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
-    "Por": st.column_config.TextColumn(width="small"),
-    "Observação": st.column_config.TextColumn(width="medium"),
-}
+def _referencia_funil_col_config() -> dict[str, st.column_config.TextColumn]:
+    """Larguras em px — scroll horizontal quando a soma excede o container."""
+    specs: dict[str, tuple[int, str]] = {
+        "Período": (320, "Período / versão da meta"),
+        "Investimento": (138, "Investimento"),
+        "CPL": (108, "Custo por lead"),
+        "Leads": (88, "Leads"),
+        "% L→Apl": (96, "% Lead → Aplicação"),
+        "Aplicações": (108, "Aplicações"),
+        "% Apl→Ag": (100, "% Aplicação → Agendamento"),
+        "Agend.": (96, "Agendamentos"),
+        "% Ag→Comp": (108, "% Agendamento → Comparecimento"),
+        "Comp.": (96, "Comparecimentos"),
+        "% Comp→Vda": (108, "% Comparecimento → Venda"),
+        "Vendas": (80, "Vendas"),
+        "Ticket": (128, "Ticket médio"),
+        "Montante": (148, "Montante"),
+        "Receita": (138, "Receita"),
+        "% Rec/Mont": (108, "% Receita sobre montante"),
+        "Atualizado": (148, "Última atualização"),
+        "Por": (120, "Criado por"),
+        "Observação": (220, "Observação"),
+    }
+    return {
+        col: st.column_config.TextColumn(help=help, width=width)
+        for col, (width, help) in specs.items()
+    }
+
+
+def _render_referencia_funil_table(df: pd.DataFrame) -> None:
+    """Tabela da Base para definição de meta — BR, colunas largas, scroll horizontal."""
+    st.markdown(
+        '<span class="fr-referencia-funil-table-anchor" aria-hidden="true"></span>',
+        unsafe_allow_html=True,
+    )
+    st.dataframe(
+        prepare_referencia_funil_display_df(df),
+        hide_index=True,
+        use_container_width=False,
+        column_config=_referencia_funil_col_config(),
+    )
 
 
 def _metas_oficiais_to_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
-    """Tabela de metas salvas com volumes calculados e % sem duplicar escala."""
+    """Tabela de metas salvas — prioriza valores persistidos no banco."""
     records: list[dict[str, Any]] = []
     for r in rows:
         s = Scenario(**r["scenario"])
@@ -2518,18 +3120,18 @@ def _metas_oficiais_to_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
             "Período": r["periodo"],
             "Investimento": r["investimento"],
             "CPL": r["custo_lead"],
-            "Leads": calc["leads"],
+            "Leads": r.get("leads", calc["leads"]),
             "% L→Apl": pct_to_display_percent(r["pct_la"]),
-            "Aplicações": calc["aplicacoes"],
+            "Aplicações": r.get("aplicacoes", calc["aplicacoes"]),
             "% Apl→Ag": pct_to_display_percent(r["pct_a_ag"]),
-            "Agendamentos": calc["agendamentos"],
+            "Agendamentos": r.get("agendamentos", calc["agendamentos"]),
             "% Ag→Comp": pct_to_display_percent(r["pct_ag_c"]),
-            "Comparecimentos": calc["comparecimento"],
+            "Comparecimentos": r.get("comparecimento", calc["comparecimento"]),
             "% Comp→Vda": pct_to_display_percent(r["pct_c_v"]),
-            "Vendas": calc["vendas"],
+            "Vendas": r.get("vendas", calc["vendas"]),
             "Ticket": r["ticket"],
-            "Montante": calc["montante"],
-            "Receita": calc["receita"],
+            "Montante": r.get("montante", calc["montante"]),
+            "Receita": r.get("receita", calc["receita"]),
             "% Rec/Mont": pct_rec,
             "Atualizado": r.get("atualizado_em"),
             "Por": r.get("criado_por") or "—",
@@ -2543,23 +3145,41 @@ def _render_referencia_acoes(
     *,
     can_edit_meta: bool,
     sim_key: str,
+    editor_key: str,
     meta_key: str,
     show_delete: bool = False,
 ) -> None:
     """Botões comuns abaixo da referência selecionada."""
-    b_sim, b_meta, _ = st.columns([2, 2, 3], gap="small")
-    with b_sim:
-        if st.button("Carregar no Simulador", key=sim_key, use_container_width=True):
-            _apply_historico_row_to_sim(row)
-            st.rerun()
-    with b_meta:
-        if can_edit_meta:
+    if can_edit_meta:
+        b_sim, b_edit, b_meta = st.columns([2, 2, 2], gap="small")
+        with b_sim:
+            if st.button("Carregar no Simulador", key=sim_key, use_container_width=True):
+                _apply_historico_row_to_sim(row)
+                st.rerun()
+        with b_edit:
+            if st.button(
+                "Carregar no Ajuste de meta",
+                key=editor_key,
+                use_container_width=True,
+            ):
+                _apply_historico_row_to_meta_editor(row)
+                st.session_state["_meta_editor_ref_loaded_msg"] = True
+                st.rerun()
+        with b_meta:
             if st.button("Usar como Meta da tela", key=meta_key, use_container_width=True):
                 _apply_historico_row_to_meta(row)
                 st.session_state["funil_meta_loaded_db_id"] = row.get("meta_db_id")
                 st.rerun()
-        else:
-            st.caption(METAS_VIEW_ONLY_MESSAGE)
+    else:
+        b_sim, _ = st.columns([2, 4], gap="small")
+        with b_sim:
+            if st.button("Carregar no Simulador", key=sim_key, use_container_width=True):
+                _apply_historico_row_to_sim(row)
+                st.rerun()
+        st.caption(
+            "Entre como editor de metas para carregar referências no "
+            "Ajuste de cenário de meta ou aplicar como Meta da tela."
+        )
 
     if show_delete and can_edit_meta:
         st.markdown("---")
@@ -2577,23 +3197,32 @@ def _render_referencia_acoes(
                 st.error("Registro sem identificador — não foi possível excluir.")
                 return
             try:
-                soft_delete_meta_funil(int(meta_id), excluido_por="editor")
-            except Exception as exc:
+                deleted = delete_meta_funil(int(meta_id))
+            except MetasDatabaseNotConfiguredError:
                 st.error(
-                    f"Não foi possível excluir a meta: {exc}. "
-                    "Verifique se as colunas de soft delete existem no banco "
-                    "(`sql/metas_funil_soft_delete.sql`)."
+                    "Configure `METAS_DATABASE_URL` no `.env` ou nos Secrets "
+                    "do Streamlit para excluir metas oficiais."
                 )
+                return
+            except Exception as exc:
+                err = str(exc).lower()
+                if "permission" in err or "privilege" in err or "42501" in err:
+                    st.error(
+                        "Não foi possível excluir a meta. Verifique se o usuário "
+                        "de metas tem permissão de DELETE na tabela "
+                        "`bi.metas_funil_reconecta`."
+                    )
+                else:
+                    st.error("Não foi possível excluir a meta. Tente novamente.")
+                return
+            if deleted <= 0:
+                st.warning("Meta não encontrada ou já foi excluída.")
                 return
             if st.session_state.get("funil_meta_loaded_db_id") == meta_id:
                 st.session_state.pop("funil_meta_loaded_db_id", None)
-                st.info(
-                    "O registro foi removido do histórico. "
-                    "A Meta da tela permanece na sessão atual até você alterá-la."
-                )
             st.session_state.pop("funil_meta_delete_confirm", None)
             st.session_state.pop("funil_metas_db_sel_idx", None)
-            st.success("Meta oficial excluída do histórico.")
+            st.success("Meta excluída com sucesso.")
             st.rerun()
 
 
@@ -2616,12 +3245,7 @@ def _render_referencia_dados_reais(
         st.info("Sem dados históricos disponíveis para os períodos de referência.")
         return rows
 
-    st.dataframe(
-        historico_rows_to_display_df(rows),
-        hide_index=True,
-        use_container_width=True,
-        column_config=_REFERENCIA_FUNIL_COL_CONFIG,
-    )
+    _render_referencia_funil_table(historico_rows_to_display_df(rows))
 
     labels = [r["periodo"] for r in rows]
     sel_idx = st.selectbox(
@@ -2643,6 +3267,7 @@ def _render_referencia_dados_reais(
         row,
         can_edit_meta=can_edit_meta,
         sim_key="funil_ref_real_sim",
+        editor_key="funil_ref_real_editor",
         meta_key="funil_ref_real_meta",
     )
     return rows
@@ -2668,12 +3293,7 @@ def _render_referencia_metas_oficiais(*, can_edit_meta: bool) -> None:
         st.info("Nenhuma meta oficial salva ainda para este ambiente.")
         return
 
-    st.dataframe(
-        _metas_oficiais_to_display_df(rows),
-        hide_index=True,
-        use_container_width=True,
-        column_config=_REFERENCIA_FUNIL_COL_CONFIG,
-    )
+    _render_referencia_funil_table(_metas_oficiais_to_display_df(rows))
 
     labels = [r["periodo"] for r in rows]
     sel_idx = st.selectbox(
@@ -2695,6 +3315,7 @@ def _render_referencia_metas_oficiais(*, can_edit_meta: bool) -> None:
         row,
         can_edit_meta=can_edit_meta,
         sim_key="funil_ref_db_sim",
+        editor_key="funil_ref_db_editor",
         meta_key="funil_ref_db_meta",
         show_delete=True,
     )
@@ -2748,6 +3369,7 @@ def _render_meta_cenario_editor(
     data_ini: date,
     data_fim: date,
     can_edit_meta: bool,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Ajuste da Meta — edição local com opção de salvar meta oficial."""
     section_title(
@@ -2757,6 +3379,25 @@ def _render_meta_cenario_editor(
     if not can_edit_meta:
         st.caption(METAS_VIEW_ONLY_MESSAGE)
         return
+    if st.session_state.pop("_meta_editor_ref_loaded_msg", False):
+        st.success("Referência carregada no Ajuste de cenário de meta.")
+    if os.environ.get("FUNIL_DEBUG") and "_meta_editor_debug_payload" in st.session_state:
+        st.write(
+            "Payload carregado no ajuste:",
+            st.session_state["_meta_editor_debug_payload"],
+        )
+        st.write(
+            "Volumes:",
+            st.session_state.get("_meta_editor_debug_volumes"),
+        )
+        st.write(
+            "Modos:",
+            st.session_state.get("_meta_editor_debug_modes"),
+        )
+        st.write(
+            "% recebimento:",
+            st.session_state.get("_meta_editor_debug_pct_recebimento"),
+        )
     st.markdown(
         '<div class="fr-editor-wrap meta">'
         '<p class="fr-editor-hint">'
@@ -2799,7 +3440,7 @@ def _render_meta_cenario_editor(
                 div=div,
                 cell_class="fr-editor-cell",
                 key_prefix="meta_cfg",
-                benchmark_metrics=None,
+                benchmark_metrics=benchmark_metrics,
             )
         else:
             val_m, comp_m, hi_m = _vitrine_readonly_value(spec, meta_s, calc_m)
@@ -2810,8 +3451,17 @@ def _render_meta_cenario_editor(
 
     st.session_state["funil_meta_tela"] = meta_state
 
-    c_pct, c_rec = st.columns(2, gap="medium")
-    with c_pct:
+    c_pct_lbl, c_pct_inp = st.columns(
+        [1.55, 1], gap="small", vertical_alignment="center",
+    )
+    with c_pct_lbl:
+        _render_metric_label_history(
+            "% Receita sobre Montante",
+            spec_id="pct_recebimento",
+            value=float(meta_pct),
+            benchmark_metrics=benchmark_metrics,
+        )
+    with c_pct_inp:
         st.session_state["funil_meta_pct_recebimento"] = float(st.number_input(
             "% Receita sobre Montante",
             value=float(meta_pct),
@@ -2820,18 +3470,15 @@ def _render_meta_cenario_editor(
             step=0.1,
             format="%.2f",
             key="meta_cfg_pct_recebimento",
+            label_visibility="collapsed",
             help="Receita projetada = Montante × este percentual.",
         ))
-    with c_rec:
-        rec_proj = project_receita_from_montante(
-            calc_m["montante"] * div,
-            st.session_state["funil_meta_pct_recebimento"],
-        )
-        st.metric(
-            "Receita projetada (mês)",
-            brl(rec_proj),
-            help="Calculada a partir das vendas × ticket e % recebimento.",
-        )
+    mont_proj = float(calc_m["montante"]) * div
+    rec_proj = project_receita_from_montante(
+        mont_proj,
+        st.session_state["funil_meta_pct_recebimento"],
+    )
+    _render_meta_editor_projecao_cards(mont_proj, rec_proj)
 
     b_sim, b_save, b_reset, _ = st.columns([2, 2, 2, 2], gap="small")
     with b_sim:
@@ -2848,16 +3495,20 @@ def _render_meta_cenario_editor(
                 )
             else:
                 try:
-                    save_funil_meta(
+                    saved = save_funil_meta(
                         PERIODO_TIPO_PADRAO,
                         data_ini,
                         data_fim,
-                        metas_dict_from_scenario(meta_state),
+                        build_funil_meta_save_payload(
+                            meta_state,
+                            calc_m,
+                            pct_recebimento=float(
+                                st.session_state["funil_meta_pct_recebimento"],
+                            ),
+                        ),
                     )
                     st.success(
-                        f"Meta oficial salva para "
-                        f"{data_ini.strftime('%d/%m/%Y')} – "
-                        f"{data_fim.strftime('%d/%m/%Y')}."
+                        f"Meta oficial salva: {saved['periodo_label']}."
                     )
                 except Exception as exc:
                     st.error(f"Não foi possível salvar a meta oficial: {exc}")
@@ -3049,15 +3700,7 @@ ctx = start_page(
 
 st.markdown(_FUNIL_CSS, unsafe_allow_html=True)
 
-excluir_testes_aplicacoes = st.checkbox(
-    "Excluir testes nas aplicações",
-    value=bool(st.session_state.get("onepage_excluir_testes_aplicacoes", False)),
-    key="onepage_excluir_testes_aplicacoes",
-    help=(
-        "Remove e-mails de teste das aplicações (Typeform). "
-        "Mesma regra da One Page — afeta Atual, % Aplicação → Agendamento e exports."
-    ),
-)
+excluir_testes_aplicacoes = _EXCLUIR_TESTES_APLICACOES
 
 st.session_state.setdefault("funil_hist_base", "90")
 hist_base_key = st.selectbox(
@@ -3067,7 +3710,8 @@ hist_base_key = st.selectbox(
     key="funil_hist_base",
     help=(
         "Não altera o período principal da página. "
-        "Usa o intervalo imediatamente anterior ao filtro global."
+        "Usa o intervalo imediatamente anterior ao filtro global. "
+        "Define a referência das tags históricas e da tabela Benchmark."
     ),
 )
 _hist_days = int(HISTORICO_PERIODOS[hist_base_key]["days"])
@@ -3145,6 +3789,7 @@ _render_benchmark_historico(
     snapshot=_funnel_snapshot,
     atual_s=atual_s,
     meta_s=meta_tela_s,
+    meta_pct_recebimento=_meta_pct_rec,
 )
 
 section_title(
@@ -3234,6 +3879,7 @@ _render_meta_cenario_editor(
     data_ini=ctx.data_ini,
     data_fim=ctx.data_fim,
     can_edit_meta=_can_edit_meta,
+    benchmark_metrics=_benchmark_metrics,
 )
 
 st.markdown(

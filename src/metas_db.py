@@ -66,3 +66,10 @@ def run_metas_sql(sql: str, params: dict | None = None) -> pd.DataFrame:
 def execute_metas_sql(sql: str, params: dict | None = None) -> None:
     with get_metas_engine().begin() as conn:
         conn.execute(text(sql), params or {})
+
+
+def execute_metas_sql_rowcount(sql: str, params: dict | None = None) -> int:
+    """Executa DML e retorna linhas afetadas (`METAS_DATABASE_URL`)."""
+    with get_metas_engine().begin() as conn:
+        result = conn.execute(text(sql), params or {})
+        return int(result.rowcount or 0)
