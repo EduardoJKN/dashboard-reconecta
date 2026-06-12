@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from src.funil_meta_store import pct_to_display_percent
 from src.one_page_funnel import (
     FunnelSnapshot,
     load_one_page_funnel,
@@ -168,13 +169,13 @@ def historico_rows_to_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
             "Investimento": r["investimento"],
             "CPL": r["custo_lead"],
             "Leads": r["leads"],
-            "% L→Apl": r["pct_la"] * 100,
+            "% L→Apl": pct_to_display_percent(r["pct_la"]),
             "Aplicações": r["aplicacoes"],
-            "% Apl→Ag": r["pct_a_ag"] * 100,
+            "% Apl→Ag": pct_to_display_percent(r["pct_a_ag"]),
             "Agendamentos": r["agendamentos"],
-            "% Ag→Comp": r["pct_ag_c"] * 100,
+            "% Ag→Comp": pct_to_display_percent(r["pct_ag_c"]),
             "Comparecimentos": r["comparecimento"],
-            "% Comp→Vda": r["pct_c_v"] * 100,
+            "% Comp→Vda": pct_to_display_percent(r["pct_c_v"]),
             "Vendas": r["vendas"],
             "Ticket": r["ticket"],
             "Montante": r["montante"],

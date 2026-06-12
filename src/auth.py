@@ -1,8 +1,11 @@
 """Gate de autenticação por senha compartilhada com persistência via cookie.
 
-Lê a senha esperada de:
-1. `st.secrets["auth"]["password"]`  (produção, Streamlit Cloud)
-2. variável de ambiente `AUTH_PASSWORD`  (local via .env)
+Senhas aceitas na tela inicial:
+1. `AUTH_PASSWORD` — acesso ao dashboard em modo visualização.
+2. `METAS_EDITOR_PASSWORD` — acesso ao dashboard já como editor de metas.
+
+`AUTH_PASSWORD` vem de `st.secrets["auth"]["password"]` ou env `AUTH_PASSWORD`.
+`METAS_EDITOR_PASSWORD` é resolvida em `src.metas_auth`.
 
 Persistência via cookie `reconecta_auth` que carrega um JWT assinado com
 HMAC-SHA256. A chave de assinatura vem de:
@@ -21,8 +24,11 @@ Comparação da senha usa `hmac.compare_digest` (timing-safe). Se nenhuma
 fonte tiver senha definida, o app é bloqueado em modo failsafe (evita
 publicar acidentalmente sem proteção).
 
-API pública: `require_auth()` — única função exposta. Chame uma vez no
-topo do `app.py`, logo após `apply_dark_theme()`.
+API pública:
+  - `require_auth()` — gate de login geral (chamar no topo do `app.py`).
+  - `get_cookie` / `set_cookie` / `delete_cookie` — único CookieManager do app.
+  - `logout_dashboard()` — encerra login geral e editor de metas.
+  - `render_sidebar_user_block()` — usuário logado + «Trocar acesso» na sidebar.
 """
 from __future__ import annotations
 
@@ -34,9 +40,13 @@ from datetime import datetime, timedelta, timezone
 import extra_streamlit_components as stx
 import jwt
 import streamlit as st
+from dotenv import load_dotenv
+
+_dotenv_loaded = False
 
 _AUTHED_KEY = "_reconecta_authed"
 _COOKIE_NAME = "reconecta_auth"
+_COOKIE_MANAGER_KEY = "reconecta_auth_cm"
 _DEFAULT_EXPIRY_DAYS = 7
 _JWT_ALGO = "HS256"
 
@@ -44,18 +54,51 @@ _JWT_ALGO = "HS256"
 # ---------------------------------------------------------------------------
 # Resolução de configuração — secrets.toml > env, sem hardcode
 # ---------------------------------------------------------------------------
+def _ensure_dotenv_loaded() -> None:
+    """Carrega `.env` local uma vez antes de ler variáveis de ambiente."""
+    global _dotenv_loaded
+    if not _dotenv_loaded:
+        load_dotenv()
+        _dotenv_loaded = True
+
+
 def _from_secrets_or_env(secret_path: tuple[str, str],
                          env_name: str) -> str | None:
     """Lê de st.secrets[section][key] (preferido) com fallback pra env var."""
+    _ensure_dotenv_loaded()
     section, key = secret_path
     try:
         if section in st.secrets and key in st.secrets[section]:
             val = st.secrets[section][key]
-            if val:
-                return str(val)
+            if val not in (None, ""):
+                return str(val).strip()
     except Exception:
         pass
-    return os.getenv(env_name) or None
+    raw = (os.getenv(env_name) or "").strip()
+    return raw or None
+
+
+def resolve_env_or_secret(
+    env_name: str,
+    secrets_path: tuple[str, str] | None = None,
+    *,
+    top_level_secret_key: str | None = None,
+) -> str | None:
+    """Resolve credencial: `[section].key` → top-level secret → `os.getenv`."""
+    _ensure_dotenv_loaded()
+    if secrets_path:
+        val = _from_secrets_or_env(secrets_path, env_name)
+        if val:
+            return val
+    if top_level_secret_key:
+        try:
+            val = st.secrets.get(top_level_secret_key)
+            if val not in (None, ""):
+                return str(val).strip()
+        except Exception:
+            pass
+    raw = (os.getenv(env_name) or "").strip()
+    return raw or None
 
 
 def _expected_password() -> str | None:
@@ -144,6 +187,136 @@ def _dbg(label: str, value) -> None:
         st.caption(f"🔧 [auth-debug] {label}: `{value}`")
 
 
+def auth_cookie_key() -> str | None:
+    """Chave HMAC compartilhada para cookies JWT (login geral e editor de metas)."""
+    return _cookie_key()
+
+
+def auth_cookie_expiry_days() -> float:
+    """Validade padrão dos cookies de sessão (dias)."""
+    return _expiry_days()
+
+
+_AUTH_CM_INSTANCE_KEY = "_reconecta_auth_cm_instance"
+_COOKIES_SNAPSHOT_KEY = "_reconecta_cookies_snapshot"
+_COOKIES_RUN_ID_KEY = "_reconecta_cookies_run_id"
+
+
+def _script_run_id() -> object | None:
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        return ctx.script_run_id if ctx else None
+    except Exception:
+        return None
+
+
+def _auth_cookie_manager() -> stx.CookieManager:
+    """Uma instância do CookieManager por sessão (widget não pode ir em cache)."""
+    if _AUTH_CM_INSTANCE_KEY not in st.session_state:
+        st.session_state[_AUTH_CM_INSTANCE_KEY] = stx.CookieManager(
+            key=_COOKIE_MANAGER_KEY
+        )
+    return st.session_state[_AUTH_CM_INSTANCE_KEY]
+
+
+def _invalidate_cookies_snapshot() -> None:
+    st.session_state.pop(_COOKIES_RUN_ID_KEY, None)
+    st.session_state.pop(_COOKIES_SNAPSHOT_KEY, None)
+
+
+def _ensure_cookies_loaded() -> dict:
+    """Uma chamada a `get_all()` por execução do script."""
+    run_id = _script_run_id()
+    if st.session_state.get(_COOKIES_RUN_ID_KEY) != run_id:
+        st.session_state[_COOKIES_RUN_ID_KEY] = run_id
+        st.session_state[_COOKIES_SNAPSHOT_KEY] = (
+            _auth_cookie_manager().get_all() or {}
+        )
+    return st.session_state.get(_COOKIES_SNAPSHOT_KEY, {})
+
+
+def get_cookie(name: str) -> str | None:
+    """Lê um cookie pelo nome (snapshot da execução atual)."""
+    val = _ensure_cookies_loaded().get(name)
+    return str(val) if val is not None else None
+
+
+def set_cookie(
+    name: str,
+    value: str,
+    *,
+    expires_at: datetime,
+    widget_key: str | None = None,
+) -> None:
+    """Grava cookie via o CookieManager único do app."""
+    cm = _auth_cookie_manager()
+    cm.set(
+        name,
+        value,
+        expires_at=expires_at,
+        path="/",
+        same_site="lax",
+        key=widget_key or f"reconecta_cookie_set_{name}",
+    )
+    _invalidate_cookies_snapshot()
+
+
+def delete_cookie(name: str, *, widget_key: str | None = None) -> None:
+    """Remove cookie via o CookieManager único do app."""
+    cm = _auth_cookie_manager()
+    try:
+        cm.delete(name, key=widget_key or f"reconecta_cookie_del_{name}")
+    except Exception:
+        pass
+    _invalidate_cookies_snapshot()
+
+
+def is_dashboard_authenticated() -> bool:
+    return bool(st.session_state.get(_AUTHED_KEY))
+
+
+def _persist_dashboard_login(cookie_key: str, days: float) -> None:
+    """Grava cookie do dashboard e marca sessão autenticada."""
+    new_token = _issue_token(cookie_key, days)
+    expires_at = datetime.now() + timedelta(days=days)
+    _dbg("expires_at", expires_at.isoformat())
+    set_cookie(
+        _COOKIE_NAME,
+        new_token,
+        expires_at=expires_at,
+        widget_key="reconecta_auth_set",
+    )
+    st.session_state[_AUTHED_KEY] = True
+
+
+def logout_dashboard() -> None:
+    """Encerra login geral e editor de metas; volta para a tela de login."""
+    st.session_state.pop(_AUTHED_KEY, None)
+    delete_cookie(_COOKIE_NAME, widget_key="reconecta_auth_logout")
+
+    from src.metas_auth import logout_metas_editor
+    from src.ui.sidebar_user import clear_user_profile_state
+
+    logout_metas_editor()
+    clear_user_profile_state()
+    time.sleep(0.6)
+    st.rerun()
+
+
+def render_sidebar_user_block() -> None:
+    """Bloco de usuário logado no topo da sidebar (delegado a `sidebar_user`)."""
+    from src.ui.sidebar_user import render_sidebar_user_block as _render
+
+    _render()
+
+
+def render_sidebar_logout_button() -> None:
+    """Compatibilidade — preferir `render_sidebar_user_block`."""
+    render_sidebar_user_block()
+
+
 def require_auth() -> None:
     """Bloqueia a renderização da página até a autenticação ser válida.
 
@@ -179,12 +352,7 @@ def require_auth() -> None:
         )
         st.stop()
 
-    # CookieManager — `key` fixa identifica o componente entre reruns.
-    cm = stx.CookieManager(key="reconecta_auth_cm")
-    # `get_all()` força hidratação do componente. Sem isso, `get()` pode
-    # devolver None na 1ª passada de uma sessão nova.
-    cookies = cm.get_all() or {}
-
+    cookies = _ensure_cookies_loaded()
     _dbg("cookies_visiveis", list(cookies.keys()))
     _dbg("tem_reconecta_auth", _COOKIE_NAME in cookies)
 
@@ -197,39 +365,31 @@ def require_auth() -> None:
             st.session_state[_AUTHED_KEY] = True
             return
 
-    # 3) Form de login
+    # 3) Form de login — AUTH_PASSWORD (visualização) ou METAS_EDITOR_PASSWORD
+    from src.metas_auth import (
+        activate_metas_editor,
+        expected_metas_editor_password,
+        logout_metas_editor,
+    )
+
+    metas_password = expected_metas_editor_password()
+    _dbg("auth_password_configured", bool(expected))
+    _dbg("metas_editor_password_configured", bool(metas_password))
     pwd, submitted = _login_form()
     if submitted:
-        if hmac.compare_digest(str(pwd), str(expected)):
-            days = _expiry_days()
-            new_token = _issue_token(cookie_key, days)
-            # IMPORTANTE: usar datetime NAIVE (sem tz). O CookieManager
-            # serializa via `.isoformat()` e o frontend JS espera o
-            # formato ISO sem offset de tz (como o default do pacote, que
-            # usa `datetime.datetime.now()`). Datetime tz-aware vira
-            # `2026-05-14T20:22+00:00` que alguns parsers JS rejeitam.
-            expires_at = datetime.now() + timedelta(days=days)
-            _dbg("expires_at", expires_at.isoformat())
-            # Parâmetros explícitos:
-            #   - same_site="lax" (default do pacote é "strict", que pode
-            #     impedir cookies de voltar em refreshes vindos de iframe;
-            #     "lax" é o equivalente prático para sessão).
-            #   - path="/" (default já é "/", explícito por clareza).
-            #   - secure=None (default) → não força Secure flag,
-            #     compatível com http://localhost.
-            cm.set(
-                _COOKIE_NAME, new_token,
-                expires_at=expires_at,
-                path="/",
-                same_site="lax",
-                key="reconecta_auth_set",
-            )
-            st.session_state[_AUTHED_KEY] = True
-            # CRÍTICO: dar tempo do JS escrever o cookie ANTES do rerun.
-            # `st.rerun()` descarta o output do run atual; sem este sleep,
-            # o componente JS do `cm.set` pode não chegar ao browser e o
-            # cookie nunca é gravado. ~0.5s é suficiente em LAN local;
-            # Streamlit Cloud pode precisar de um pouco mais.
+        days = _expiry_days()
+        pwd_cmp = str(pwd).strip()
+        if hmac.compare_digest(pwd_cmp, str(expected).strip()):
+            logout_metas_editor()
+            _persist_dashboard_login(cookie_key, days)
+            time.sleep(0.6)
+            st.rerun()
+        elif metas_password and hmac.compare_digest(
+            pwd_cmp, str(metas_password).strip()
+        ):
+            _persist_dashboard_login(cookie_key, days)
+            activate_metas_editor(persist_cookie=True)
+            st.session_state["_metas_editor_just_activated"] = True
             time.sleep(0.6)
             st.rerun()
         else:

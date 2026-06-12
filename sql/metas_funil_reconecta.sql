@@ -1,7 +1,7 @@
 -- Metas oficiais do Funil da Reconecta (por intervalo do filtro global).
 -- Executar manualmente no Postgres (Railway) se preferir criar antes do app.
 
-CREATE TABLE IF NOT EXISTS metas_funil_reconecta (
+CREATE TABLE IF NOT EXISTS bi.metas_funil_reconecta (
     id SERIAL PRIMARY KEY,
     periodo_tipo TEXT NOT NULL,
     periodo_inicio DATE NOT NULL,

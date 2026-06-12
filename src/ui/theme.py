@@ -365,6 +365,198 @@ section[data-testid="stSidebar"] label {{
   letter-spacing: 2px;
 }}
 
+/* ----- sidebar user card (avatar | content | gear) ----- */
+.sidebar-user-card-marker,
+.sidebar-user-switch-marker {{
+  display: none;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] {{
+  border: 1px solid rgba(211, 176, 79, 0.16);
+  border-radius: 12px;
+  background: rgba(22, 17, 14, 0.72);
+  padding: 8px 9px;
+  margin-bottom: 10px;
+  align-items: center !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div {{
+  gap: 0.5rem !important;
+  align-items: center !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:first-child {{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:nth-child(2) {{
+  min-width: 0;
+  flex: 1 1 auto;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:nth-child(2) [data-testid="stVerticalBlock"] {{
+  gap: 0.06rem !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:nth-child(2) [data-testid="stMarkdown"] p {{
+  margin: 0 !important;
+  line-height: 1 !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:nth-child(3) {{
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto;
+  align-self: center !important;
+}}
+.sidebar-user-avatar-col {{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}}
+.sidebar-user-avatar {{
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--color-wine, #5c2e2e);
+  color: var(--color-gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}}
+.sidebar-user-avatar-img {{
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  display: block;
+}}
+.sidebar-user-name {{
+  color: var(--color-text);
+  font-weight: 800;
+  font-size: 0.86rem;
+  line-height: 1.05;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}}
+.sidebar-user-role-wrap {{
+  display: block;
+  width: fit-content;
+  margin: 2px 0 0;
+  line-height: 1;
+}}
+.sidebar-user-role-wrap p {{
+  margin: 0 !important;
+  line-height: 1 !important;
+}}
+.sidebar-user-badge {{
+  display: inline-flex;
+  width: fit-content;
+  max-width: max-content;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+}}
+.sidebar-user-badge--editor {{
+  color: #d3b04f;
+  background: rgba(211, 176, 79, 0.14);
+  border: 1px solid rgba(211, 176, 79, 0.38);
+}}
+.sidebar-user-badge--viewer {{
+  color: var(--color-text-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border);
+}}
+[data-testid="stSidebar"] .sidebar-user-switch-marker + div .stButton {{
+  margin: -1px 0 0 !important;
+  padding: 0 !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-switch-marker + div .stButton > button {{
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: rgba(244, 230, 194, 0.82) !important;
+  font-size: 0.67rem !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  min-height: 0.8rem !important;
+  height: auto !important;
+  width: fit-content !important;
+  max-width: fit-content !important;
+  justify-content: flex-start !important;
+  text-decoration: none !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-switch-marker + div .stButton > button:hover {{
+  color: #ffffff !important;
+  background: transparent !important;
+  text-decoration: underline !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:nth-child(3) [data-testid="stPopover"] {{
+  margin: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:nth-child(3) [data-testid="stPopover"] > div > button {{
+  width: 36px !important;
+  min-width: 36px !important;
+  max-width: 36px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 10px !important;
+  border: 1px solid rgba(211, 176, 79, 0.28) !important;
+  background: rgba(255, 255, 255, 0.045) !important;
+  box-shadow: none !important;
+  color: #f4e6c2 !important;
+  font-size: 0.95rem !important;
+  line-height: 1 !important;
+  text-align: center !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:nth-child(3) [data-testid="stPopover"] > div > button:hover {{
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.07) !important;
+  border-color: rgba(211, 176, 79, 0.45) !important;
+}}
+[data-testid="stSidebar"] .sidebar-user-card-marker + div[data-testid="stHorizontalBlock"] > div > [data-testid="column"]:nth-child(3) [data-testid="stPopover"] > div > button > *:not(:first-child) {{
+  display: none !important;
+}}
+.sidebar-account-section {{
+  color: var(--color-text-subtle);
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 6px 0 2px;
+}}
+[data-testid="stPopoverBody"]:has(.sidebar-account-section) {{
+  min-width: 210px;
+  padding: 8px 10px !important;
+  border: 1px solid rgba(211, 176, 79, 0.22) !important;
+  border-radius: 10px !important;
+  background: rgba(18, 14, 11, 0.96) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+}}
+[data-testid="stPopoverBody"]:has(.sidebar-account-section) .stButton > button {{
+  font-size: 0.8rem !important;
+  min-height: 1.75rem !important;
+  padding-top: 0.12rem !important;
+  padding-bottom: 0.12rem !important;
+}}
+
 /* ----- tabs ----- */
 .stTabs [data-baseweb="tab-list"] {{
   gap: 4px;

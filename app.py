@@ -3,9 +3,15 @@
 Este arquivo é apenas o roteador de navegação — cada página real vive em
 `views/`. A sidebar mostra só a navegação (os filtros vão no topo de cada
 página, compartilhando o período via `st.session_state`)."""
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import streamlit as st
 
 from src.auth import require_auth
+from src.ui.sidebar_user import render_sidebar_user_block
+from src.metas_auth import sync_metas_editor_session
 from src.ui.app_theme import render_theme_selector
 from src.ui.components import apply_dark_theme
 
@@ -24,6 +30,7 @@ apply_dark_theme()
 # Gate de autenticação — bloqueia tudo abaixo até inserir a senha correta
 # -----------------------------------------------------------------------------
 require_auth()
+sync_metas_editor_session()
 
 # -----------------------------------------------------------------------------
 # Marca na sidebar (acima da lista de páginas)
@@ -36,6 +43,7 @@ with st.sidebar:
         '</div>',
         unsafe_allow_html=True,
     )
+    render_sidebar_user_block()
     render_theme_selector()
 
 # -----------------------------------------------------------------------------

@@ -44,6 +44,23 @@ from src.funil_historico import (
     historico_rows_to_display_df,
     load_funil_historico_referencias,
 )
+from src.funil_meta_store import (
+    PERIODO_TIPO_PADRAO,
+    MetasDatabaseNotConfiguredError,
+    is_metas_database_configured,
+    load_funil_meta,
+    load_metas_funil_historico,
+    metas_dict_from_scenario,
+    metas_dict_to_scenario,
+    pct_to_display_percent,
+    save_funil_meta,
+    soft_delete_meta_funil,
+)
+from src.metas_auth import (
+    METAS_VIEW_ONLY_MESSAGE,
+    is_metas_editor_authenticated,
+    render_metas_editor_gate,
+)
 from src.one_page_funnel import (
     FunnelSnapshot,
     load_one_page_funnel,
@@ -1490,13 +1507,23 @@ def _init_meta_session_for_period(
     data_fim: date,
     snapshot: FunnelSnapshot | None,
 ) -> None:
-    """Inicializa meta da tela localmente quando o filtro global muda."""
+    """Inicializa meta da tela quando o filtro global muda (banco de metas → padrão)."""
     key = _funil_period_storage_key(data_ini, data_fim)
     if st.session_state.get("funil_meta_period_key") == key:
         return
     st.session_state["funil_meta_period_key"] = key
     pct_padrao = float(snapshot.pct_recebimento) if snapshot is not None else 0.0
-    st.session_state["funil_meta_tela"] = asdict(_BASE_META)
+
+    meta_tela = asdict(_BASE_META)
+    if is_metas_database_configured():
+        try:
+            loaded = load_funil_meta(PERIODO_TIPO_PADRAO, data_ini, data_fim)
+            if loaded is not None:
+                meta_tela = metas_dict_to_scenario(loaded)
+        except Exception:
+            pass
+
+    st.session_state["funil_meta_tela"] = meta_tela
     st.session_state["funil_meta_pct_recebimento"] = pct_padrao
     st.session_state["funil_meta_pct_recebimento_padrao"] = pct_padrao
     _clear_meta_editor_widget_keys()
@@ -2454,17 +2481,129 @@ def _render_scenario_fields_editor(
     return Scenario(**state)
 
 
-def _render_historico_referencias(
+_ORIGEM_DADOS_REAIS = "Dados reais históricos"
+_ORIGEM_METAS_SALVAS = "Metas oficiais salvas"
+
+_REFERENCIA_FUNIL_COL_CONFIG = {
+    "Período": st.column_config.TextColumn(width="medium"),
+    "Investimento": st.column_config.NumberColumn(format="R$ %.2f"),
+    "CPL": st.column_config.NumberColumn(format="R$ %.2f"),
+    "Leads": st.column_config.NumberColumn(format="%.0f"),
+    "% L→Apl": st.column_config.NumberColumn(format="%.2f%%"),
+    "Aplicações": st.column_config.NumberColumn(format="%.0f"),
+    "% Apl→Ag": st.column_config.NumberColumn(format="%.2f%%"),
+    "Agendamentos": st.column_config.NumberColumn(format="%.0f"),
+    "% Ag→Comp": st.column_config.NumberColumn(format="%.2f%%"),
+    "Comparecimentos": st.column_config.NumberColumn(format="%.0f"),
+    "% Comp→Vda": st.column_config.NumberColumn(format="%.2f%%"),
+    "Vendas": st.column_config.NumberColumn(format="%.0f"),
+    "Ticket": st.column_config.NumberColumn(format="R$ %.2f"),
+    "Montante": st.column_config.NumberColumn(format="R$ %.2f"),
+    "Receita": st.column_config.NumberColumn(format="R$ %.2f"),
+    "% Rec/Mont": st.column_config.NumberColumn(format="%.2f%%"),
+    "Atualizado": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+    "Por": st.column_config.TextColumn(width="small"),
+    "Observação": st.column_config.TextColumn(width="medium"),
+}
+
+
+def _metas_oficiais_to_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Tabela de metas salvas com volumes calculados e % sem duplicar escala."""
+    records: list[dict[str, Any]] = []
+    for r in rows:
+        s = Scenario(**r["scenario"])
+        pct_rec = float(r.get("pct_recebimento") or 0)
+        calc = calcular_funil_exibicao(s, "mes", pct_recebimento=pct_rec)
+        records.append({
+            "Período": r["periodo"],
+            "Investimento": r["investimento"],
+            "CPL": r["custo_lead"],
+            "Leads": calc["leads"],
+            "% L→Apl": pct_to_display_percent(r["pct_la"]),
+            "Aplicações": calc["aplicacoes"],
+            "% Apl→Ag": pct_to_display_percent(r["pct_a_ag"]),
+            "Agendamentos": calc["agendamentos"],
+            "% Ag→Comp": pct_to_display_percent(r["pct_ag_c"]),
+            "Comparecimentos": calc["comparecimento"],
+            "% Comp→Vda": pct_to_display_percent(r["pct_c_v"]),
+            "Vendas": calc["vendas"],
+            "Ticket": r["ticket"],
+            "Montante": calc["montante"],
+            "Receita": calc["receita"],
+            "% Rec/Mont": pct_rec,
+            "Atualizado": r.get("atualizado_em"),
+            "Por": r.get("criado_por") or "—",
+            "Observação": r.get("observacao") or "—",
+        })
+    return pd.DataFrame(records)
+
+
+def _render_referencia_acoes(
+    row: dict[str, Any],
+    *,
+    can_edit_meta: bool,
+    sim_key: str,
+    meta_key: str,
+    show_delete: bool = False,
+) -> None:
+    """Botões comuns abaixo da referência selecionada."""
+    b_sim, b_meta, _ = st.columns([2, 2, 3], gap="small")
+    with b_sim:
+        if st.button("Carregar no Simulador", key=sim_key, use_container_width=True):
+            _apply_historico_row_to_sim(row)
+            st.rerun()
+    with b_meta:
+        if can_edit_meta:
+            if st.button("Usar como Meta da tela", key=meta_key, use_container_width=True):
+                _apply_historico_row_to_meta(row)
+                st.session_state["funil_meta_loaded_db_id"] = row.get("meta_db_id")
+                st.rerun()
+        else:
+            st.caption(METAS_VIEW_ONLY_MESSAGE)
+
+    if show_delete and can_edit_meta:
+        st.markdown("---")
+        st.caption("Exclusão disponível apenas para metas oficiais salvas no banco.")
+        confirm = st.checkbox(
+            "Confirmo que quero excluir esta meta salva",
+            key="funil_meta_delete_confirm",
+        )
+        if st.button("Excluir meta salva", key="funil_meta_delete_btn"):
+            if not confirm:
+                st.warning("Marque a confirmação antes de excluir.")
+                return
+            meta_id = row.get("meta_db_id")
+            if meta_id is None:
+                st.error("Registro sem identificador — não foi possível excluir.")
+                return
+            try:
+                soft_delete_meta_funil(int(meta_id), excluido_por="editor")
+            except Exception as exc:
+                st.error(
+                    f"Não foi possível excluir a meta: {exc}. "
+                    "Verifique se as colunas de soft delete existem no banco "
+                    "(`sql/metas_funil_soft_delete.sql`)."
+                )
+                return
+            if st.session_state.get("funil_meta_loaded_db_id") == meta_id:
+                st.session_state.pop("funil_meta_loaded_db_id", None)
+                st.info(
+                    "O registro foi removido do histórico. "
+                    "A Meta da tela permanece na sessão atual até você alterá-la."
+                )
+            st.session_state.pop("funil_meta_delete_confirm", None)
+            st.session_state.pop("funil_metas_db_sel_idx", None)
+            st.success("Meta oficial excluída do histórico.")
+            st.rerun()
+
+
+def _render_referencia_dados_reais(
     *,
     data_ini: date,
     data_fim: date,
     excluir_testes: bool,
+    can_edit_meta: bool,
 ) -> list[dict[str, Any]]:
-    """Histórico de períodos reais — referência para Simulador e Meta (local)."""
-    section_title(
-        "Histórico de metas/referências",
-        "períodos anteriores com as mesmas regras do bloco Atual",
-    )
     rows = load_funil_historico_referencias(
         data_fim.isoformat(),
         data_ini.isoformat(),
@@ -2477,34 +2616,16 @@ def _render_historico_referencias(
         st.info("Sem dados históricos disponíveis para os períodos de referência.")
         return rows
 
-    df_show = historico_rows_to_display_df(rows)
     st.dataframe(
-        df_show,
+        historico_rows_to_display_df(rows),
         hide_index=True,
         use_container_width=True,
-        column_config={
-            "Período": st.column_config.TextColumn(width="medium"),
-            "Investimento": st.column_config.NumberColumn(format="R$ %.2f"),
-            "CPL": st.column_config.NumberColumn(format="R$ %.2f"),
-            "Leads": st.column_config.NumberColumn(format="%.0f"),
-            "% L→Apl": st.column_config.NumberColumn(format="%.2f%%"),
-            "Aplicações": st.column_config.NumberColumn(format="%.0f"),
-            "% Apl→Ag": st.column_config.NumberColumn(format="%.2f%%"),
-            "Agendamentos": st.column_config.NumberColumn(format="%.0f"),
-            "% Ag→Comp": st.column_config.NumberColumn(format="%.2f%%"),
-            "Comparecimentos": st.column_config.NumberColumn(format="%.0f"),
-            "% Comp→Vda": st.column_config.NumberColumn(format="%.2f%%"),
-            "Vendas": st.column_config.NumberColumn(format="%.0f"),
-            "Ticket": st.column_config.NumberColumn(format="R$ %.2f"),
-            "Montante": st.column_config.NumberColumn(format="R$ %.2f"),
-            "Receita": st.column_config.NumberColumn(format="R$ %.2f"),
-            "% Rec/Mont": st.column_config.NumberColumn(format="%.2f%%"),
-        },
+        column_config=_REFERENCIA_FUNIL_COL_CONFIG,
     )
 
     labels = [r["periodo"] for r in rows]
     sel_idx = st.selectbox(
-        "Período de referência",
+        "Referência selecionada",
         options=range(len(labels)),
         format_func=lambda i: labels[i],
         key="funil_historico_sel_idx",
@@ -2514,28 +2635,128 @@ def _render_historico_referencias(
         return rows
 
     st.caption(
-        f'Referência: {row["data_ini"].strftime("%d/%m/%Y")} – '
-        f'{row["data_fim"].strftime("%d/%m/%Y")} · somente leitura no histórico; '
-        "use os botões para carregar na sessão."
+        f'{row["data_ini"].strftime("%d/%m/%Y")} – '
+        f'{row["data_fim"].strftime("%d/%m/%Y")} · referência calculada com dados '
+        "reais (somente leitura)."
     )
-    b_sim, b_meta, _ = st.columns([2, 2, 3], gap="small")
-    with b_sim:
-        if st.button("Carregar no Simulador", use_container_width=True):
-            _apply_historico_row_to_sim(row)
-            st.rerun()
-    with b_meta:
-        if st.button("Usar como Meta da tela", use_container_width=True):
-            _apply_historico_row_to_meta(row)
-            st.rerun()
+    _render_referencia_acoes(
+        row,
+        can_edit_meta=can_edit_meta,
+        sim_key="funil_ref_real_sim",
+        meta_key="funil_ref_real_meta",
+    )
     return rows
 
 
-def _render_meta_cenario_editor(periodo: str) -> None:
-    """Ajuste local da Meta — número ou % por etapa, sem persistência no banco."""
+def _render_referencia_metas_oficiais(*, can_edit_meta: bool) -> None:
+    if not is_metas_database_configured():
+        st.info(
+            "Configure `METAS_DATABASE_URL` no `.env` ou nos Secrets do Streamlit "
+            "para listar metas oficiais salvas."
+        )
+        return
+
+    try:
+        rows = load_metas_funil_historico(limit=100)
+    except MetasDatabaseNotConfiguredError:
+        return
+    except Exception as exc:
+        st.warning(f"Não foi possível carregar metas oficiais salvas: {exc}")
+        return
+
+    if not rows:
+        st.info("Nenhuma meta oficial salva ainda para este ambiente.")
+        return
+
+    st.dataframe(
+        _metas_oficiais_to_display_df(rows),
+        hide_index=True,
+        use_container_width=True,
+        column_config=_REFERENCIA_FUNIL_COL_CONFIG,
+    )
+
+    labels = [r["periodo"] for r in rows]
+    sel_idx = st.selectbox(
+        "Referência selecionada",
+        options=range(len(labels)),
+        format_func=lambda i: labels[i],
+        key="funil_metas_db_sel_idx",
+    )
+    row = historico_row_by_index(rows, int(sel_idx))
+    if row is None:
+        return
+
+    st.caption(
+        f'{row["data_ini"].strftime("%d/%m/%Y")} – '
+        f'{row["data_fim"].strftime("%d/%m/%Y")} · meta oficial salva em '
+        "`bi.metas_funil_reconecta`."
+    )
+    _render_referencia_acoes(
+        row,
+        can_edit_meta=can_edit_meta,
+        sim_key="funil_ref_db_sim",
+        meta_key="funil_ref_db_meta",
+        show_delete=True,
+    )
+
+
+def _render_base_meta_referencia(
+    *,
+    data_ini: date,
+    data_fim: date,
+    excluir_testes: bool,
+    can_edit_meta: bool,
+) -> None:
+    """Base única para escolher referência histórica ou meta oficial salva."""
+    section_title(
+        "Base para definição de meta",
+        "escolha a origem da referência para Simulador e Meta da tela",
+    )
+
+    opcoes = [_ORIGEM_DADOS_REAIS]
+    if is_metas_database_configured():
+        opcoes.append(_ORIGEM_METAS_SALVAS)
+
+    if len(opcoes) == 1:
+        origem = opcoes[0]
+        st.caption(
+            "Metas oficiais salvas ficam disponíveis quando `METAS_DATABASE_URL` "
+            "está configurada."
+        )
+    else:
+        origem = st.segmented_control(
+            "Origem da referência",
+            options=opcoes,
+            default=opcoes[0],
+            key="funil_meta_referencia_origem",
+        )
+
+    if origem == _ORIGEM_METAS_SALVAS:
+        _render_referencia_metas_oficiais(can_edit_meta=can_edit_meta)
+    else:
+        _render_referencia_dados_reais(
+            data_ini=data_ini,
+            data_fim=data_fim,
+            excluir_testes=excluir_testes,
+            can_edit_meta=can_edit_meta,
+        )
+
+
+def _render_meta_cenario_editor(
+    periodo: str,
+    *,
+    data_ini: date,
+    data_fim: date,
+    can_edit_meta: bool,
+) -> None:
+    """Ajuste da Meta — edição local com opção de salvar meta oficial."""
     section_title(
         "Ajuste de cenário de meta",
-        "edite a coluna Meta da tela — tudo fica em memória nesta sessão",
+        "edite a coluna Meta da tela — requer modo editor de metas",
     )
+    if not can_edit_meta:
+        st.caption(METAS_VIEW_ONLY_MESSAGE)
+        return
     st.markdown(
         '<div class="fr-editor-wrap meta">'
         '<p class="fr-editor-hint">'
@@ -2612,12 +2833,34 @@ def _render_meta_cenario_editor(periodo: str) -> None:
             help="Calculada a partir das vendas × ticket e % recebimento.",
         )
 
-    b_sim, b_reset, _ = st.columns([2, 2, 3], gap="small")
+    b_sim, b_save, b_reset, _ = st.columns([2, 2, 2, 2], gap="small")
     with b_sim:
         if st.button("Carregar no Simulador", key="meta_cfg_to_sim", use_container_width=True):
             st.session_state["funil_simulador"] = dict(meta_state)
             _clear_funil_widget_keys(sim_only=True)
             st.rerun()
+    with b_save:
+        if st.button("Salvar meta oficial", key="meta_cfg_save_db", use_container_width=True):
+            if not is_metas_database_configured():
+                st.error(
+                    "Configure `METAS_DATABASE_URL` no `.env` ou nos Secrets "
+                    "do Streamlit para salvar metas oficiais."
+                )
+            else:
+                try:
+                    save_funil_meta(
+                        PERIODO_TIPO_PADRAO,
+                        data_ini,
+                        data_fim,
+                        metas_dict_from_scenario(meta_state),
+                    )
+                    st.success(
+                        f"Meta oficial salva para "
+                        f"{data_ini.strftime('%d/%m/%Y')} – "
+                        f"{data_fim.strftime('%d/%m/%Y')}."
+                    )
+                except Exception as exc:
+                    st.error(f"Não foi possível salvar a meta oficial: {exc}")
     with b_reset:
         if st.button("Restaurar cenário padrão", use_container_width=True):
             st.session_state["funil_meta_tela"] = asdict(_BASE_META)
@@ -2979,12 +3222,19 @@ with _export_top_slot.container():
     with st.popover("Exportar relatório", use_container_width=True):
         _render_export_actions(_export_bundle)
 
-_render_historico_referencias(
+_render_base_meta_referencia(
     data_ini=ctx.data_ini,
     data_fim=ctx.data_fim,
     excluir_testes=excluir_testes_aplicacoes,
+    can_edit_meta=is_metas_editor_authenticated(),
 )
-_render_meta_cenario_editor(periodo)
+_can_edit_meta = render_metas_editor_gate()
+_render_meta_cenario_editor(
+    periodo,
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    can_edit_meta=_can_edit_meta,
+)
 
 st.markdown(
     '<div class="fr-footer-note">'
@@ -2992,7 +3242,8 @@ st.markdown(
     f'–{ctx.data_fim.strftime("%d/%m/%Y")}), mesmas regras da One Page. '
     'Semana e Dia são aproximações proporcionais (÷ 4 e ÷ 28). '
     'Simulador e Meta: montante = vendas × ticket; receita usa % recebimento. '
-    'Cenários e metas ficam apenas em memória — sem gravação no banco.'
+    'Simulador: memória local. Meta oficial: salva em `bi.metas_funil_reconecta` '
+    'quando `METAS_DATABASE_URL` está configurada.'
     '</div>',
     unsafe_allow_html=True,
 )
