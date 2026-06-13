@@ -46,7 +46,12 @@ _dotenv_loaded = False
 
 _AUTHED_KEY = "_reconecta_authed"
 _COOKIE_NAME = "reconecta_auth"
-_COOKIE_MANAGER_KEY = "reconecta_auth_cm"
+_COOKIE_MANAGER_KEY = "auth_cookie_manager_init"
+_GET_ALL_KEY = "auth_cookie_get_all"
+_AUTH_CM_INSTANCE_KEY = "_reconecta_auth_cm_instance"
+_AUTH_COOKIES_KEY = "_auth_cookies"
+_AUTH_COOKIES_LOADED_KEY = "_auth_cookies_loaded"
+_COOKIES_READY_KEY = "_reconecta_cookies_component_ready"
 _DEFAULT_EXPIRY_DAYS = 7
 _JWT_ALGO = "HS256"
 
@@ -197,18 +202,19 @@ def auth_cookie_expiry_days() -> float:
     return _expiry_days()
 
 
-_AUTH_CM_INSTANCE_KEY = "_reconecta_auth_cm_instance"
-_COOKIES_SNAPSHOT_KEY = "_reconecta_cookies_snapshot"
-_COOKIES_RUN_ID_KEY = "_reconecta_cookies_run_id"
-_COOKIES_READY_KEY = "_reconecta_cookies_component_ready"
-
-
 def _script_run_id() -> object | None:
+    """Identificador único por execução do script (muda a cada rerun).
+
+    `ScriptRunContext` não expõe `script_run_id` no Streamlit 1.56; usamos o
+    id do set `widget_ids_this_run`, recriado em `ctx.reset()` a cada run.
+    """
     try:
         from streamlit.runtime.scriptrunner import get_script_run_ctx
 
         ctx = get_script_run_ctx()
-        return ctx.script_run_id if ctx else None
+        if ctx is None:
+            return None
+        return id(ctx.widget_ids_this_run)
     except Exception:
         return None
 
@@ -222,11 +228,6 @@ def _auth_cookie_manager() -> stx.CookieManager:
     return st.session_state[_AUTH_CM_INSTANCE_KEY]
 
 
-def _invalidate_cookies_snapshot() -> None:
-    st.session_state.pop(_COOKIES_RUN_ID_KEY, None)
-    st.session_state.pop(_COOKIES_SNAPSHOT_KEY, None)
-
-
 def bootstrap_auth_cookies() -> None:
     """Inicializa o CookieManager e aguarda a leitura dos cookies do navegador."""
     _ensure_cookies_loaded()
@@ -238,19 +239,28 @@ def _ensure_cookies_loaded() -> dict:
     O componente do CookieManager costuma devolver `{}` no primeiro paint após
     F5 ou nova aba; nesse caso paramos uma vez para o iframe sincronizar.
     """
+    run_id = _script_run_id()
+    if (
+        run_id is not None
+        and _AUTH_COOKIES_LOADED_KEY in st.session_state
+        and st.session_state[_AUTH_COOKIES_LOADED_KEY] == run_id
+        and _AUTH_COOKIES_KEY in st.session_state
+    ):
+        _dbg("cookies_load", "cache_hit")
+        return st.session_state[_AUTH_COOKIES_KEY]
+
     cm = _auth_cookie_manager()
-    cookies = cm.get_all() or {}
+    _dbg("cookies_load", "get_all_called")
+    cookies = cm.get_all(key=_GET_ALL_KEY) or {}
 
     if not st.session_state.get(_COOKIES_READY_KEY):
         st.session_state[_COOKIES_READY_KEY] = True
         if not cookies and not st.session_state.get(_AUTHED_KEY):
             st.stop()
 
-    run_id = _script_run_id()
-    if st.session_state.get(_COOKIES_RUN_ID_KEY) != run_id:
-        st.session_state[_COOKIES_RUN_ID_KEY] = run_id
-        st.session_state[_COOKIES_SNAPSHOT_KEY] = cookies
-    return st.session_state.get(_COOKIES_SNAPSHOT_KEY, cookies)
+    st.session_state[_AUTH_COOKIES_KEY] = cookies
+    st.session_state[_AUTH_COOKIES_LOADED_KEY] = run_id
+    return cookies
 
 
 def get_cookie(name: str) -> str | None:
@@ -276,19 +286,21 @@ def set_cookie(
         max_age=max_age,
         path="/",
         same_site="lax",
-        key=widget_key or f"reconecta_cookie_set_{name}",
+        key=widget_key or f"auth_cookie_set_{name}",
     )
-    _invalidate_cookies_snapshot()
+    if _AUTH_COOKIES_KEY in st.session_state:
+        st.session_state[_AUTH_COOKIES_KEY][name] = value
 
 
 def delete_cookie(name: str, *, widget_key: str | None = None) -> None:
     """Remove cookie via o CookieManager único do app."""
     cm = _auth_cookie_manager()
     try:
-        cm.delete(name, key=widget_key or f"reconecta_cookie_del_{name}")
+        cm.delete(name, key=widget_key or f"auth_cookie_delete_{name}")
     except Exception:
         pass
-    _invalidate_cookies_snapshot()
+    if _AUTH_COOKIES_KEY in st.session_state:
+        st.session_state[_AUTH_COOKIES_KEY].pop(name, None)
 
 
 def is_dashboard_authenticated() -> bool:
@@ -313,6 +325,8 @@ def logout_dashboard() -> None:
     """Encerra login geral e editor de metas; volta para a tela de login."""
     st.session_state.pop(_AUTHED_KEY, None)
     st.session_state.pop(_COOKIES_READY_KEY, None)
+    st.session_state.pop(_AUTH_COOKIES_KEY, None)
+    st.session_state.pop(_AUTH_COOKIES_LOADED_KEY, None)
     delete_cookie(_COOKIE_NAME, widget_key="reconecta_auth_logout")
 
     from src.metas_auth import logout_metas_editor
