@@ -377,7 +377,7 @@ def apply_one_page_theme(theme_key: str | None = None) -> None:
         _LOOKER_COMPACT_CSS if theme_key == "looker_legacy" else ""
     )
 
-    st.markdown(
+    st.html(
         "<style>\n"
         "section[data-testid='stMain'] {\n"
         f"{vars_lines}\n"
@@ -386,7 +386,6 @@ def apply_one_page_theme(theme_key: str | None = None) -> None:
         f"{text_override}\n"
         f"{looker_extra}\n"
         "</style>",
-        unsafe_allow_html=True,
     )
 
 

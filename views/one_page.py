@@ -136,16 +136,17 @@ _OP_CARD_CSS = """
    compactos com label médio/longo (ex.: "NOVOS" + "↑ 12,3%") o badge
    atropelava o título. Solução: linha flex de cabeçalho com label e
    delta lado a lado — clearance natural, sem padding "mágico". */
-.op-card {
-    background: var(--color-card);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    padding: 8px 11px;
+.op-card,
+.onepage-card {
+    background: var(--color-card, #161311);
+    border: 1px solid var(--color-border, rgba(255, 255, 255, 0.12));
+    border-radius: 12px;
+    padding: 14px 16px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: flex-start;
-    gap: 2px;
+    gap: 4px;
     min-height: 0;
     min-width: 0;
     width: 100%;
@@ -157,6 +158,7 @@ _OP_CARD_CSS = """
     container-name: op-card;
     position: relative;
     text-align: center;
+    line-height: 1.25;
     transition: border-color 0.15s;
 }
 .op-card:hover { border-color: var(--color-border-strong); }
@@ -192,14 +194,28 @@ _OP_CARD_CSS = """
     min-width: 0;
 }
 /* ---- Tipografia cards OP — escala hero / médio / compact ---- */
-.op-label {
+.op-label,
+.onepage-card-title,
+.onepage-metric-label {
+    display: block;
     color: var(--color-text-subtle);
-    opacity: 0.9;
-    font-size: 0.68rem;
+    opacity: 0.72;
+    font-size: 0.82rem;
     font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: none;
+    line-height: 1.25;
+    margin-bottom: 4px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.op-head .op-label,
+.op-head .onepage-card-title {
+    margin-bottom: 0;
+    font-size: 0.68rem;
     letter-spacing: 1.3px;
     text-transform: uppercase;
-    min-width: 0;
+    opacity: 0.9;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -214,16 +230,26 @@ _OP_CARD_CSS = """
 }
 /* Valores KPI — tamanho base original; redução só quando o card é estreito.
    Sem ellipsis nos números. */
-.op-value {
+.op-value,
+.onepage-card-value,
+.onepage-metric-value {
+    display: block;
     color: var(--color-text);
-    font-size: 1.28rem;
+    font-size: 1rem;
     font-weight: 700;
-    line-height: 1.1;
+    line-height: 1.25;
     font-variant-numeric: tabular-nums;
-    margin-top: 2px;
+    margin-top: 0;
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+.op-card > .op-value,
+.op-card > .onepage-card-value {
+    font-size: 1.28rem;
+    margin-top: 2px;
     white-space: nowrap;
     overflow: visible;
     text-overflow: clip;
@@ -318,9 +344,7 @@ _OP_CARD_CSS = """
     min-width: 0;
 }
 .op-badge-label {
-    color: var(--color-text-subtle);
     font-size: 0.62rem;
-    font-weight: 600;
     letter-spacing: 0.55px;
     text-transform: uppercase;
     opacity: 0.88;
@@ -328,9 +352,9 @@ _OP_CARD_CSS = """
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    margin-bottom: 1px;
 }
 .op-badge-value {
-    color: var(--color-text);
     font-size: 0.96rem;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
@@ -341,6 +365,31 @@ _OP_CARD_CSS = """
     white-space: nowrap;
     overflow: visible;
     text-overflow: clip;
+    margin-bottom: 0;
+}
+.onepage-metric-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 6px;
+    min-width: 0;
+    width: 100%;
+}
+.onepage-metric-row--stacked {
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 1px;
+    margin-top: 0;
+}
+.onepage-metric-row .onepage-metric-label,
+.onepage-metric-row .onepage-metric-value {
+    margin-bottom: 0;
+}
+.onepage-metric-row:not(.onepage-metric-row--stacked) .onepage-metric-value {
+    text-align: right;
+    flex: 0 1 auto;
 }
 .op-card.hero .op-badges {
     margin-top: 4px;
@@ -390,11 +439,13 @@ _OP_CARD_CSS = """
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
     min-width: 0;
 }
-.op-badge-extra-label {
+.op-badge-extra-label,
+.onepage-metric-row .op-badge-extra-label {
+    display: block;
     color: var(--color-text-subtle);
     font-size: 0.58rem;
     font-weight: 600;
@@ -405,8 +456,12 @@ _OP_CARD_CSS = """
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+    margin-bottom: 0;
+    flex: 1 1 auto;
 }
-.op-badge-extra-value {
+.op-badge-extra-value,
+.onepage-metric-row .op-badge-extra-value {
+    display: block;
     color: var(--color-text);
     font-size: 0.86rem;
     font-weight: 600;
@@ -417,6 +472,8 @@ _OP_CARD_CSS = """
     overflow: visible;
     text-overflow: clip;
     flex: 0 1 auto;
+    text-align: right;
+    margin-bottom: 0;
 }
 @container op-card (max-width: 200px) {
     .op-badge-extra-value {
@@ -459,7 +516,8 @@ _OP_CARD_CSS = """
 
 /* Densidade — apenas blocos que contém cards OP. Charts/tabelas
    abaixo do KPI block usam seu próprio espaçamento (gap="large"). */
-[data-testid="stHorizontalBlock"]:has(.op-card) {
+[data-testid="stHorizontalBlock"]:has(.op-card),
+[data-testid="stHorizontalBlock"]:has(.onepage-card) {
     gap: 0.75rem !important;
     margin-bottom: 0;
     align-items: stretch !important;
@@ -756,6 +814,7 @@ section[data-testid="stMain"]
     min-width: 0;
 }
 .op-chip-label {
+    display: block;
     color: var(--color-text-subtle);
     font-size: 0.58rem;
     font-weight: 600;
@@ -763,8 +822,10 @@ section[data-testid="stMain"]
     text-transform: uppercase;
     opacity: 0.88;
     line-height: 1.1;
+    margin-bottom: 2px;
 }
 .op-chip-value {
+    display: block;
     color: var(--color-text);
     font-size: 0.86rem;
     font-weight: 700;
@@ -773,6 +834,7 @@ section[data-testid="stMain"]
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    overflow-wrap: anywhere;
     white-space: nowrap;
     overflow: visible;
     text-overflow: clip;
@@ -812,9 +874,9 @@ def _op_fmt_delta(delta_pct: float | None) -> tuple[str, str]:
 
 def op_section_marker(section: str) -> None:
     """Marcador invisível para CSS `:has()` — identifica coluna KPI."""
-    st.markdown(
-        f'<div class="op-section op-section-{section}" aria-hidden="true"></div>',
-        unsafe_allow_html=True,
+    st.html(
+        f'<div class="op-section op-section-{section} onepage-section" '
+        f'aria-hidden="true"></div>',
     )
 
 
@@ -829,9 +891,8 @@ def op_spacer(kind: str = "row") -> None:
     key = aliases.get(kind, kind)
     if key not in ("parent", "row"):
         key = "row"
-    st.markdown(
+    st.html(
         f'<div class="op-spacer op-spacer-{key}" aria-hidden="true"></div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -867,7 +928,7 @@ def one_page_metric_card(
     Sub-stats são usadas pra detalhar Agend. ±12 IN/SS dentro de
     Agend. INBOUND/SS (volume + % por agendamento + custo por agendamento).
     """
-    classes = ["op-card"]
+    classes = ["op-card", "onepage-card"]
     if hero:
         classes.append("hero")
     elif compact:
@@ -882,18 +943,16 @@ def one_page_metric_card(
         cls, txt = _op_fmt_delta(delta_pct)
         delta_html = f'<span class="op-delta {cls}">{html.escape(txt)}</span>'
 
-    # Cabeçalho — label e delta em flex row. Delta omitido (não só
-    # invisível) quando ausente, pra preservar centralização perfeita
-    # do label nos cards sem comparação.
     head_html = (
-        f'<div class="op-head">'
-        f'<div class="op-label">{html.escape(label)}</div>'
+        f'<div class="op-head onepage-card-header">'
+        f'<div class="op-label onepage-card-title">{html.escape(label)}</div>'
         f'{delta_html}'
         f'</div>'
     )
 
-    hint_html = (f'<div class="op-hint">{html.escape(hint)}</div>'
-                 if hint else "")
+    hint_html = (
+        f'<div class="op-hint">{html.escape(hint)}</div>' if hint else ""
+    )
 
     badges_html = ""
     if badges:
@@ -904,10 +963,10 @@ def one_page_metric_card(
             extras_html = ""
             if extras:
                 extras_items = "".join(
-                    f'<div class="op-badge-extra">'
-                    f'<span class="op-badge-extra-label">'
+                    f'<div class="op-badge-extra onepage-metric-row">'
+                    f'<span class="op-badge-extra-label onepage-metric-label">'
                     f'{html.escape(el)}</span>'
-                    f'<span class="op-badge-extra-value">'
+                    f'<span class="op-badge-extra-value onepage-metric-value">'
                     f'{html.escape(str(ev))}</span>'
                     f'</div>'
                     for el, ev in extras
@@ -920,9 +979,12 @@ def one_page_metric_card(
                 )
             items_parts.append(
                 f'<div class="op-badge">'
-                f'<span class="op-badge-label">{html.escape(b_lbl)}</span>'
-                f'<span class="op-badge-value">'
+                f'<div class="onepage-metric-row onepage-metric-row--stacked">'
+                f'<span class="op-badge-label onepage-metric-label">'
+                f'{html.escape(b_lbl)}</span>'
+                f'<span class="op-badge-value onepage-metric-value">'
                 f'{html.escape(str(b_val))}</span>'
+                f'</div>'
                 f'{extras_html}'
                 f'</div>'
             )
@@ -938,15 +1000,21 @@ def one_page_metric_card(
     if footer_chips:
         chip_items = "".join(
             f'<div class="op-chip">'
-            f'<span class="op-chip-label">{html.escape(lbl)}</span>'
-            f'<span class="op-chip-value">{html.escape(str(val))}</span>'
+            f'<span class="op-chip-label onepage-card-title">'
+            f'{html.escape(lbl)}</span>'
+            f'<span class="op-chip-value onepage-card-value">'
+            f'{html.escape(str(val))}</span>'
             f'</div>'
             for lbl, val in footer_chips
         )
         chips_html = f'<div class="op-novos-chips">{chip_items}</div>'
 
-    val_cls = "op-value accent" if accent else "op-value"
-    st.markdown(
+    val_cls = (
+        "op-value onepage-card-value accent"
+        if accent
+        else "op-value onepage-card-value"
+    )
+    st.html(
         f'<div class="{" ".join(classes)}">'
         f'{head_html}'
         f'<div class="{val_cls}">{html.escape(str(value))}</div>'
@@ -954,7 +1022,6 @@ def one_page_metric_card(
         f'{badges_html}'
         f'{chips_html}'
         f'</div>',
-        unsafe_allow_html=True,
     )
 
 
@@ -1567,11 +1634,13 @@ def _op_log_query(name: str, t0: float) -> None:
 
 
 def _ensure_op_css() -> None:
-    """Injeta CSS dos cards uma vez por sessão (evita markdown repetido)."""
-    if st.session_state.get("_op_css_injected"):
-        return
-    st.markdown(_OP_CARD_CSS, unsafe_allow_html=True)
-    st.session_state["_op_css_injected"] = True
+    """Injeta CSS dos cards a cada visita/rerun da One Page.
+
+    O guard em session_state impedia reinjetar o ``<style>`` ao voltar de
+    outra página do multipage — o DOM é recriado, mas ``_op_css_injected``
+    permanecia True, deixando labels/valores colapsados em texto inline.
+    """
+    st.html(_OP_CARD_CSS)
 
 
 def _op_clear_onepage_caches() -> None:
@@ -2552,6 +2621,7 @@ _, _th_r = st.columns([6, 1], gap="small")
 with _th_r:
     render_theme_selector()
 apply_one_page_theme()
+_ensure_op_css()
 
 # =============================================================================
 # Painel executivo — carregamento setorizado (cards antes dos gráficos)
@@ -2582,8 +2652,6 @@ with _refresh_col:
 dias_periodo = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias_periodo - 1)
-
-_ensure_op_css()
 
 col_mkt, col_prev, col_vendas = st.columns([1.0, 1.25, 1.05], gap="medium")
 
