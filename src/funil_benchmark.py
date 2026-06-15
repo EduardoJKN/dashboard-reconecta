@@ -1,6 +1,7 @@
 """Benchmark histórico do funil — mesmas fontes/regras que `load_one_page_funnel`."""
 from __future__ import annotations
 
+import json
 import statistics
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -11,11 +12,20 @@ import streamlit as st
 from src.one_page_funnel import FunnelSnapshot, load_one_page_funnel
 
 # Período histórico (independente do filtro principal da página).
+HISTORICO_CUSTOM_KEY = "custom"
+
 HISTORICO_PERIODOS: dict[str, dict[str, Any]] = {
-    "30": {"label": "Último mês", "days": 30},
-    "90": {"label": "Últimos 3 meses", "days": 90},
-    "180": {"label": "Últimos 6 meses", "days": 180},
-    "365": {"label": "Últimos 12 meses", "days": 365},
+    "30": {"label": "Último mês", "months": 1},
+    "90": {"label": "Últimos 3 meses", "months": 3},
+    "180": {"label": "Últimos 6 meses", "months": 6},
+    "365": {"label": "Últimos 12 meses", "months": 12},
+    HISTORICO_CUSTOM_KEY: {"label": "Personalizado"},
+}
+
+HISTORICO_GRANULARIDADES: dict[str, str] = {
+    "mes": "Mês",
+    "semana": "Semana",
+    "dia": "Dia",
 }
 
 # Métricas do benchmark, tags históricas e tabela (mesma base / mesma média).
@@ -52,13 +62,47 @@ def _last_day_of_month(d: date) -> date:
     return nxt - timedelta(days=1)
 
 
-def resolve_historical_window(page_data_ini: date, days: int) -> tuple[date, date] | None:
-    """Janela histórica imediatamente anterior ao período principal (sem sobreposição)."""
-    hist_end = page_data_ini - timedelta(days=1)
-    hist_start = hist_end - timedelta(days=days - 1)
-    if hist_end < hist_start:
-        return None
-    return hist_start, hist_end
+def _add_months(d: date, months: int) -> date:
+    """Desloca `d` em meses civis, ajustando o dia em meses mais curtos."""
+    y, m = d.year, d.month + months
+    while m > 12:
+        m -= 12
+        y += 1
+    while m < 1:
+        m += 12
+        y -= 1
+    last_day = _last_day_of_month(date(y, m, 1)).day
+    return date(y, m, min(d.day, last_day))
+
+
+def _fmt_br_range(ini: date, fim: date) -> str:
+    return f"{ini.strftime('%d/%m/%Y')}–{fim.strftime('%d/%m/%Y')}"
+
+
+def _period_short_label(d: date) -> str:
+    """Identificador curto do período para a tabela (MM/AA)."""
+    return f"{d.month:02d}/{d.year % 100:02d}"
+
+
+def period_windows_from_ranges(
+    ranges: list[tuple[date, date, str]],
+) -> list[dict[str, str]]:
+    """Janelas para legenda: identificador curto + intervalo completo."""
+    return [
+        {
+            "short": _period_short_label(ini),
+            "full": _fmt_br_range(ini, fim),
+        }
+        for ini, fim, _ in ranges
+    ]
+
+
+def build_fixed_preset_month_ranges(
+    anchor_ini: date,
+    n_months: int,
+) -> list[tuple[date, date, str]]:
+    """Meses civis completos fechados imediatamente anteriores ao mês de `anchor_ini`."""
+    return build_full_previous_month_ranges(anchor_ini, n_months)
 
 
 def month_ranges_in_period(start: date, end: date) -> list[tuple[date, date, str]]:
@@ -76,6 +120,179 @@ def month_ranges_in_period(start: date, end: date) -> list[tuple[date, date, str
         else:
             cur = date(cur.year, cur.month + 1, 1)
     return ranges
+
+
+def build_equivalent_month_ranges(
+    current_ini: date,
+    current_fim: date,
+    n_periods: int,
+) -> list[tuple[date, date, str]]:
+    """Mesmo recorte de dias do período atual, deslocado para N meses anteriores."""
+    if n_periods < 1 or current_ini > current_fim:
+        return []
+    ranges: list[tuple[date, date, str]] = []
+    for months_back in range(1, n_periods + 1):
+        ini = _add_months(current_ini, -months_back)
+        fim = _add_months(current_fim, -months_back)
+        if ini > fim:
+            continue
+        label = _period_short_label(ini)
+        ranges.append((ini, fim, label))
+    return ranges
+
+
+def build_full_previous_month_ranges(
+    anchor_ini: date,
+    n_periods: int,
+) -> list[tuple[date, date, str]]:
+    """N meses civis fechados imediatamente anteriores ao mês de `anchor_ini`."""
+    if n_periods < 1:
+        return []
+    ranges: list[tuple[date, date, str]] = []
+    month_start = anchor_ini.replace(day=1)
+    for _ in range(n_periods):
+        prev_end = month_start - timedelta(days=1)
+        prev_start = prev_end.replace(day=1)
+        label = f"{prev_start.month:02d}/{prev_start.year % 100:02d}"
+        ranges.insert(0, (prev_start, prev_end, label))
+        month_start = prev_start
+    return ranges
+
+
+def _custom_interval_summary(
+    current_ini: date,
+    current_fim: date,
+    n_periods: int,
+    *,
+    same_interval: bool,
+) -> str:
+    if same_interval:
+        if current_ini.day == 1 and current_fim.day < _last_day_of_month(current_fim).day:
+            return f"primeiros {current_fim.day} dias dos últimos {n_periods} meses"
+        if current_ini.day == current_fim.day:
+            return f"dia {current_ini.day} dos últimos {n_periods} meses"
+        return (
+            f"intervalo {current_ini.day}–{current_fim.day} "
+            f"dos últimos {n_periods} meses"
+        )
+    return f"últimos {n_periods} meses fechados"
+
+
+@dataclass
+class HistoricalBaseSpec:
+    ranges: list[tuple[date, date, str]]
+    hist_ini: date
+    hist_fim: date
+    base_key: str
+    base_label: str
+    summary: str
+    window_detail: str
+    requested_periods: int
+    custom_granularity: str | None = None
+    custom_same_interval: bool | None = None
+    error: str | None = None
+
+
+def resolve_historical_base(
+    page_data_ini: date,
+    page_data_fim: date,
+    *,
+    base_key: str,
+    custom_granularity: str = "mes",
+    custom_n_periods: int = 3,
+    custom_same_interval: bool = True,
+) -> HistoricalBaseSpec:
+    """Monta recortes históricos conforme preset ou modo personalizado."""
+    if base_key == HISTORICO_CUSTOM_KEY:
+        if custom_granularity != "mes":
+            return HistoricalBaseSpec(
+                ranges=[],
+                hist_ini=page_data_ini,
+                hist_fim=page_data_fim,
+                base_key=base_key,
+                base_label=HISTORICO_PERIODOS[base_key]["label"],
+                summary="",
+                window_detail="",
+                requested_periods=custom_n_periods,
+                custom_granularity=custom_granularity,
+                custom_same_interval=custom_same_interval,
+                error=(
+                    "Modo personalizado por Semana ou Dia ainda não disponível. "
+                    "Use **Mês** por enquanto."
+                ),
+            )
+        if custom_same_interval:
+            ranges = build_equivalent_month_ranges(
+                page_data_ini, page_data_fim, custom_n_periods,
+            )
+            interval_note = "mesmo intervalo do período atual"
+        else:
+            ranges = build_full_previous_month_ranges(
+                page_data_ini, custom_n_periods,
+            )
+            interval_note = "meses fechados anteriores"
+        if not ranges:
+            return HistoricalBaseSpec(
+                ranges=[],
+                hist_ini=page_data_ini,
+                hist_fim=page_data_fim,
+                base_key=base_key,
+                base_label=HISTORICO_PERIODOS[base_key]["label"],
+                summary="",
+                window_detail="",
+                requested_periods=custom_n_periods,
+                custom_granularity=custom_granularity,
+                custom_same_interval=custom_same_interval,
+                error="Não foi possível montar períodos históricos equivalentes.",
+            )
+        hist_ini = min(r[0] for r in ranges)
+        hist_fim = max(r[1] for r in ranges)
+        short = _custom_interval_summary(
+            page_data_ini,
+            page_data_fim,
+            custom_n_periods,
+            same_interval=custom_same_interval,
+        )
+        window_detail = ", ".join(_fmt_br_range(ini, fim) for ini, fim, _ in ranges)
+        return HistoricalBaseSpec(
+            ranges=ranges,
+            hist_ini=hist_ini,
+            hist_fim=hist_fim,
+            base_key=base_key,
+            base_label=HISTORICO_PERIODOS[base_key]["label"],
+            summary=short,
+            window_detail=window_detail,
+            requested_periods=custom_n_periods,
+            custom_granularity=custom_granularity,
+            custom_same_interval=custom_same_interval,
+        )
+
+    months = int(HISTORICO_PERIODOS[base_key]["months"])
+    ranges = build_fixed_preset_month_ranges(page_data_ini, months)
+    if not ranges:
+        return HistoricalBaseSpec(
+            ranges=[],
+            hist_ini=page_data_ini,
+            hist_fim=page_data_fim,
+            base_key=base_key,
+            base_label=HISTORICO_PERIODOS[base_key]["label"],
+            summary="",
+            window_detail="",
+            requested_periods=0,
+            error="Período principal sem histórico anterior suficiente.",
+        )
+    hist_ini = ranges[0][0]
+    hist_fim = ranges[-1][1]
+    return HistoricalBaseSpec(
+        ranges=ranges,
+        hist_ini=hist_ini,
+        hist_fim=hist_fim,
+        base_key=base_key,
+        base_label=HISTORICO_PERIODOS[base_key]["label"],
+        summary=HISTORICO_PERIODOS[base_key]["label"],
+        window_detail=_fmt_br_range(hist_ini, hist_fim),
+        requested_periods=len(ranges),
+    )
 
 
 def _metric_from_snapshot(snapshot: FunnelSnapshot, key: str) -> float:
@@ -134,13 +351,23 @@ def compute_funil_benchmark(
     hist_fim_iso: str,
     days_key: str,
     excluir_testes_aplicacoes: bool,
+    ranges_json: str = "",
 ) -> dict[str, Any]:
-    """Carrega snapshots mensais e agrega estatísticas (média, melhor/pior mês, p25/p75)."""
+    """Carrega snapshots por recorte e agrega estatísticas (média, melhor/pior, p25/p75)."""
     hist_ini = date.fromisoformat(hist_ini_iso)
     hist_fim = date.fromisoformat(hist_fim_iso)
-    ranges = month_ranges_in_period(hist_ini, hist_fim)
+    if ranges_json:
+        raw_ranges = json.loads(ranges_json)
+        ranges = [
+            (date.fromisoformat(ini), date.fromisoformat(fim), label)
+            for ini, fim, label in raw_ranges
+        ]
+    else:
+        ranges = month_ranges_in_period(hist_ini, hist_fim)
+
     snapshots: list[FunnelSnapshot] = []
     labels: list[str] = []
+    loaded_ranges: list[tuple[date, date, str]] = []
 
     for ini, fim, label in ranges:
         try:
@@ -151,7 +378,9 @@ def compute_funil_benchmark(
                     excluir_testes_aplicacoes=excluir_testes_aplicacoes,
                 )
             )
-            labels.append(label)
+            short_label = _period_short_label(ini)
+            labels.append(short_label)
+            loaded_ranges.append((ini, fim, short_label))
         except Exception:
             continue
 
@@ -164,14 +393,32 @@ def compute_funil_benchmark(
             agg["kind"] = kind
             metrics[key] = agg
 
+    requested = len(ranges)
+    available = len(snapshots)
+    error: str | None = None
+    if not snapshots:
+        error = "Sem dados históricos no intervalo."
+    elif available < requested:
+        error = None
+
     return {
         "hist_ini": hist_ini_iso,
         "hist_fim": hist_fim_iso,
         "days_key": days_key,
         "metrics": metrics,
-        "monthly_count": len(snapshots),
-        "error": None if snapshots else "Sem dados históricos no intervalo.",
+        "monthly_count": available,
+        "requested_period_count": requested,
+        "period_windows": period_windows_from_ranges(
+            loaded_ranges if loaded_ranges else ranges,
+        ),
+        "error": error,
     }
+
+
+def ranges_to_cache_json(ranges: list[tuple[date, date, str]]) -> str:
+    return json.dumps(
+        [(ini.isoformat(), fim.isoformat(), label) for ini, fim, label in ranges]
+    )
 
 
 def classify_realism(
@@ -190,14 +437,14 @@ def classify_realism(
         if ratio < 0.95:
             return "Abaixo do histórico", "warn"
         if ratio <= 1.10:
-            return "Dentro do histórico", "ok"
+            return "Dentro do histórico", "within"
         if ratio <= 1.30:
-            return "Acima do histórico", "warn"
-        return "Muito agressivo", "bad"
+            return "Acima do histórico", "above"
+        return "Muito acima da média", "very-high"
     if ratio < 0.8:
         return "Melhor que histórico", "good"
     if ratio <= 1.10:
-        return "Dentro do histórico", "ok"
+        return "Dentro do histórico", "within"
     if ratio <= 1.30:
         return "Acima do histórico", "warn"
     return "Muito alto", "bad"

@@ -22,22 +22,20 @@ from src.one_page_funnel import project_receita_from_montante
 
 PERIODO_TIPO_PADRAO = "filtro_global"
 
-_LOAD_SQL = """
-SELECT
-    investimento_mes,
-    custo_por_lead,
-    pct_lead_aplicacao,
-    pct_aplicacao_agendamento,
-    pct_agendamento_comparecimento,
-    pct_comparecimento_venda,
-    ticket_medio
-FROM bi.metas_funil_reconecta
+_LOAD_LATEST_SQL = """
+SELECT *
+FROM bi.vw_metas_funil_reconecta
 WHERE periodo_tipo = :periodo_tipo
   AND periodo_inicio = :periodo_inicio
   AND periodo_fim = :periodo_fim
-ORDER BY versao_meta DESC NULLS LAST, atualizado_em DESC NULLS LAST
+ORDER BY
+  versao_meta DESC NULLS LAST,
+  atualizado_em DESC NULLS LAST,
+  id DESC
 LIMIT 1
 """
+
+_LOAD_SQL = _LOAD_LATEST_SQL
 
 _NEXT_VERSION_SQL = """
 SELECT COALESCE(MAX(versao_meta), 0) + 1 AS proxima_versao
@@ -230,7 +228,23 @@ def normalize_reference_pct_recebimento(row: dict[str, Any]) -> float:
             "pct_recebimento",
         ],
     )
-    return pct_to_display_percent(raw)
+    pct = pct_to_display_percent(raw)
+    if pct > 0:
+        return pct
+    montante = float(
+        _get_first_from_reference(row, ["montante", "montante_meta"]) or 0,
+    )
+    receita = float(
+        _get_first_from_reference(row, ["receita", "receita_meta"]) or 0,
+    )
+    if montante <= 0:
+        vendas = float(_get_first_from_reference(row, ["vendas", "vendas_meta"]) or 0)
+        ticket = float(_get_first_from_reference(row, ["ticket_medio", "ticket"]) or 0)
+        if vendas > 0 and ticket > 0:
+            montante = vendas * ticket
+    if montante > 0 and receita > 0:
+        return receita / montante * 100.0
+    return 0.0
 
 
 def _safe_volume_ratio(num: float, den: float) -> float:
@@ -477,14 +491,84 @@ def _as_date(value: Any) -> date:
     return date.fromisoformat(str(value)[:10])
 
 
-def load_funil_meta(
+def _meta_historico_row_from_db(raw: Any) -> dict[str, Any]:
+    """Linha da view → dict compatível com referências do funil."""
+    ini = _as_date(raw["periodo_inicio"])
+    fim = _as_date(raw["periodo_fim"])
+    metas = _row_to_metas_dict(raw)
+    calc = _calc_meta_volumes_mes(metas)
+    pct_rec_raw = _optional_float(raw, "pct_receita_sobre_montante")
+    if pct_rec_raw is None:
+        pct_rec_raw = _optional_float(raw, "pct_recebimento_sobre_montante")
+    pct_hint = pct_to_display_percent(pct_rec_raw) if pct_rec_raw is not None else 0.0
+    montante, receita, pct_recebimento = _resolve_meta_financeiro(
+        raw, metas, pct_recebimento=pct_hint,
+    )
+    meta_db_id = int(raw["id"])
+    nome_meta, versao_meta = _resolve_meta_nome_versao(raw)
+    return {
+        "id": f"meta_db_{meta_db_id}",
+        "meta_db_id": meta_db_id,
+        "periodo": meta_periodo_label(
+            ini, fim, versao=versao_meta, nome_meta=nome_meta,
+        ),
+        "nome_meta": nome_meta,
+        "versao_meta": versao_meta,
+        "data_ini": ini,
+        "data_fim": fim,
+        "periodo_tipo": str(raw.get("periodo_tipo") or ""),
+        "investimento_mes": metas["investimento"],
+        "investimento": metas["investimento"],
+        "custo_por_lead": metas["custo_lead"],
+        "custo_lead": metas["custo_lead"],
+        "leads": _optional_float(raw, "leads_meta") or calc["leads"],
+        "leads_meta": _optional_float(raw, "leads_meta") or calc["leads"],
+        "pct_lead_aplicacao": raw.get("pct_lead_aplicacao"),
+        "pct_la": metas["pct_la"],
+        "aplicacoes": _optional_float(raw, "aplicacoes_meta") or calc["aplicacoes"],
+        "aplicacoes_meta": _optional_float(raw, "aplicacoes_meta") or calc["aplicacoes"],
+        "pct_aplicacao_agendamento": raw.get("pct_aplicacao_agendamento"),
+        "pct_a_ag": metas["pct_a_ag"],
+        "agendamentos": _optional_float(raw, "agendamentos_meta") or calc["agendamentos"],
+        "agendamentos_meta": _optional_float(raw, "agendamentos_meta") or calc["agendamentos"],
+        "pct_agendamento_comparecimento": raw.get("pct_agendamento_comparecimento"),
+        "pct_ag_c": metas["pct_ag_c"],
+        "comparecimento": (
+            _optional_float(raw, "comparecimentos_meta") or calc["comparecimento"]
+        ),
+        "comparecimentos_meta": (
+            _optional_float(raw, "comparecimentos_meta") or calc["comparecimento"]
+        ),
+        "pct_comparecimento_venda": raw.get("pct_comparecimento_venda"),
+        "pct_c_v": metas["pct_c_v"],
+        "vendas": _optional_float(raw, "vendas_meta") or calc["vendas"],
+        "vendas_meta": _optional_float(raw, "vendas_meta") or calc["vendas"],
+        "ticket_medio": metas["ticket"],
+        "ticket": metas["ticket"],
+        "montante_meta": montante,
+        "montante": montante,
+        "receita_meta": receita,
+        "receita": receita,
+        "pct_receita_sobre_montante": pct_recebimento,
+        "pct_recebimento": pct_recebimento,
+        "scenario": metas_dict_to_scenario(metas),
+        "criado_em": raw.get("criado_em"),
+        "atualizado_em": raw.get("atualizado_em"),
+        "criado_por": raw.get("criado_por"),
+        "observacao": raw.get("observacao"),
+    }
+
+
+def load_latest_meta_funil(
     periodo_tipo: str,
     periodo_inicio: date,
     periodo_fim: date,
-) -> dict[str, float] | None:
-    """Carrega metas oficiais do período ou None se não houver registro."""
+) -> dict[str, Any] | None:
+    """Última meta oficial salva para o período (`bi.vw_metas_funil_reconecta`)."""
+    if not is_metas_database_configured():
+        return None
     df = run_metas_sql(
-        _LOAD_SQL,
+        _LOAD_LATEST_SQL,
         {
             "periodo_tipo": periodo_tipo,
             "periodo_inicio": periodo_inicio,
@@ -493,7 +577,39 @@ def load_funil_meta(
     )
     if df.empty:
         return None
-    return _row_to_metas_dict(df.iloc[0])
+    return _meta_historico_row_from_db(df.iloc[0])
+
+
+def load_funil_meta(
+    periodo_tipo: str,
+    periodo_inicio: date,
+    periodo_fim: date,
+) -> tuple[dict[str, float], float] | None:
+    """Carrega metas oficiais do período ou None se não houver registro.
+
+    Retorna `(cenário, pct_recebimento)` com financeiro resolvido por fallback.
+    """
+    row = load_latest_meta_funil(periodo_tipo, periodo_inicio, periodo_fim)
+    if row is None:
+        return None
+    metas = _row_to_metas_dict_from_historico(row)
+    pct_recebimento = float(row.get("pct_recebimento") or 0)
+    return metas, pct_recebimento
+
+
+def _row_to_metas_dict_from_historico(row: dict[str, Any]) -> dict[str, float]:
+    scenario = row.get("scenario")
+    if isinstance(scenario, dict):
+        return {
+            "investimento": float(scenario["investimento"]),
+            "custo_lead": float(scenario["custo_lead"]),
+            "pct_la": float(scenario["pct_la"]),
+            "pct_a_ag": float(scenario["pct_a_ag"]),
+            "pct_ag_c": float(scenario["pct_ag_c"]),
+            "pct_c_v": float(scenario["pct_c_v"]),
+            "ticket": float(scenario["ticket"]),
+        }
+    return _row_to_metas_dict(row)
 
 
 def save_funil_meta(
@@ -564,53 +680,7 @@ def load_metas_funil_historico(*, limit: int = 100) -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
     for _, raw in df.iterrows():
-        ini = _as_date(raw["periodo_inicio"])
-        fim = _as_date(raw["periodo_fim"])
-        metas = _row_to_metas_dict(raw)
-        calc = _calc_meta_volumes_mes(metas)
-        pct_rec_raw = _optional_float(raw, "pct_receita_sobre_montante")
-        if pct_rec_raw is None:
-            pct_rec_raw = _optional_float(raw, "pct_recebimento_sobre_montante")
-        pct_hint = pct_to_display_percent(pct_rec_raw) if pct_rec_raw is not None else 0.0
-        montante, receita, pct_recebimento = _resolve_meta_financeiro(
-            raw, metas, pct_recebimento=pct_hint,
-        )
-        meta_db_id = int(raw["id"])
-        nome_meta, versao_meta = _resolve_meta_nome_versao(raw)
-        rows.append({
-            "id": f"meta_db_{meta_db_id}",
-            "meta_db_id": meta_db_id,
-            "periodo": meta_periodo_label(
-                ini, fim, versao=versao_meta, nome_meta=nome_meta,
-            ),
-            "nome_meta": nome_meta,
-            "versao_meta": versao_meta,
-            "data_ini": ini,
-            "data_fim": fim,
-            "periodo_tipo": str(raw.get("periodo_tipo") or ""),
-            "investimento": metas["investimento"],
-            "custo_lead": metas["custo_lead"],
-            "leads": _optional_float(raw, "leads_meta") or calc["leads"],
-            "pct_la": metas["pct_la"],
-            "aplicacoes": _optional_float(raw, "aplicacoes_meta") or calc["aplicacoes"],
-            "pct_a_ag": metas["pct_a_ag"],
-            "agendamentos": _optional_float(raw, "agendamentos_meta") or calc["agendamentos"],
-            "pct_ag_c": metas["pct_ag_c"],
-            "comparecimento": (
-                _optional_float(raw, "comparecimentos_meta") or calc["comparecimento"]
-            ),
-            "pct_c_v": metas["pct_c_v"],
-            "vendas": _optional_float(raw, "vendas_meta") or calc["vendas"],
-            "ticket": metas["ticket"],
-            "montante": montante,
-            "receita": receita,
-            "pct_recebimento": pct_recebimento,
-            "scenario": metas_dict_to_scenario(metas),
-            "criado_em": raw.get("criado_em"),
-            "atualizado_em": raw.get("atualizado_em"),
-            "criado_por": raw.get("criado_por"),
-            "observacao": raw.get("observacao"),
-        })
+        rows.append(_meta_historico_row_from_db(raw))
     return rows
 
 
@@ -628,6 +698,7 @@ __all__ = [
     "PERIODO_TIPO_PADRAO",
     "is_metas_database_configured",
     "load_funil_meta",
+    "load_latest_meta_funil",
     "load_metas_funil_historico",
     "build_funil_meta_save_payload",
     "metas_dict_from_scenario",

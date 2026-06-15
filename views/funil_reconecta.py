@@ -35,10 +35,14 @@ from src.funil_export import (
 from src.funil_benchmark import (
     BENCHMARK_METRIC_SPECS,
     BENCHMARK_TAG_SPECS,
+    HISTORICO_CUSTOM_KEY,
+    HISTORICO_GRANULARIDADES,
     HISTORICO_PERIODOS,
     classify_realism,
     compute_funil_benchmark,
-    resolve_historical_window,
+    period_windows_from_ranges,
+    ranges_to_cache_json,
+    resolve_historical_base,
     scenario_field_value,
 )
 from src.funil_historico import (
@@ -53,6 +57,7 @@ from src.funil_meta_store import (
     build_funil_meta_save_payload,
     is_metas_database_configured,
     load_funil_meta,
+    load_latest_meta_funil,
     load_metas_funil_historico,
     metas_dict_from_scenario,
     metas_dict_to_scenario,
@@ -440,6 +445,83 @@ def _pct_recebimento_snapshot(snapshot: FunnelSnapshot | None) -> float:
     return float(snapshot.pct_recebimento)
 
 
+def _pct_recebimento_historico(
+    benchmark_metrics: dict[str, dict[str, Any]] | None,
+) -> float:
+    if not benchmark_metrics:
+        return 0.0
+    bm = benchmark_metrics.get("pct_recebimento") or {}
+    mean = bm.get("mean")
+    if mean is None:
+        return 0.0
+    val = float(mean)
+    return val if val > 0 else 0.0
+
+
+def _resolve_pct_recebimento(
+    explicit: float,
+    *,
+    snapshot: FunnelSnapshot | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
+) -> float | None:
+    """Taxa efetiva para projeção: explícita → Atual → média histórica."""
+    if explicit and float(explicit) > 0:
+        return float(explicit)
+    snap = _pct_recebimento_snapshot(snapshot)
+    if snap > 0:
+        return snap
+    hist = _pct_recebimento_historico(benchmark_metrics)
+    if hist > 0:
+        return hist
+    return None
+
+
+def _receita_projetada_de_montante(
+    montante: float,
+    pct_recebimento: float | None,
+) -> float | None:
+    if montante <= 0 or pct_recebimento is None or pct_recebimento <= 0:
+        return None
+    return project_receita_from_montante(montante, pct_recebimento)
+
+
+def _format_receita_projetada(
+    montante: float,
+    pct_recebimento: float | None,
+    *,
+    receita_real: float | None = None,
+) -> str:
+    """Texto para card de receita — evita R$ 0,00 quando não há taxa válida."""
+    projetada = _receita_projetada_de_montante(montante, pct_recebimento)
+    if projetada is not None:
+        return brl(projetada)
+    if receita_real is not None and receita_real > 0:
+        return brl(receita_real)
+    return "—"
+
+
+def _calc_exibicao_com_receita(
+    s: Scenario,
+    periodo: str,
+    *,
+    pct_recebimento: float,
+    snapshot: FunnelSnapshot | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
+) -> dict:
+    """Cascata de exibição com receita sempre projetada quando possível."""
+    pct_eff = _resolve_pct_recebimento(
+        pct_recebimento,
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
+    )
+    pct_use = pct_eff if pct_eff is not None else 0.0
+    calc = calcular_funil_exibicao(s, periodo, pct_recebimento=pct_use)
+    receita = _receita_projetada_de_montante(calc["montante"], pct_eff)
+    if receita is not None:
+        calc["receita"] = receita
+    return calc
+
+
 def identificar_gargalos(
     atual: Scenario,
     meta: Scenario,
@@ -555,11 +637,21 @@ def _meta_editor_proj_card_html(
 
 def _render_meta_editor_projecao_cards(
     mont_proj: float,
-    rec_proj: float,
+    rec_proj: float | None,
+    *,
+    pct_recebimento: float | None = None,
 ) -> None:
     """Montante e receita projetados (mês) no rodapé do Ajuste de meta."""
     chips_rec: list[str] = []
-    pct_rec_mont = _pct_ratio_txt(rec_proj, mont_proj)
+    rec_val = _receita_projetada_de_montante(mont_proj, pct_recebimento)
+    if rec_val is None and rec_proj is not None and rec_proj > 0:
+        rec_val = rec_proj
+    rec_txt = _format_receita_projetada(
+        mont_proj,
+        pct_recebimento,
+        receita_real=rec_val,
+    )
+    pct_rec_mont = _pct_ratio_txt(rec_val or 0.0, mont_proj)
     if pct_rec_mont:
         chips_rec.append(f"{pct_rec_mont} do montante")
 
@@ -573,7 +665,7 @@ def _render_meta_editor_projecao_cards(
         )
         + _meta_editor_proj_card_html(
             "Receita projetada (mês)",
-            brl(rec_proj),
+            rec_txt,
             chips_rec,
             theme="receita",
         )
@@ -825,6 +917,99 @@ def _apply_benchmark_scenario_to_sim(
     st.session_state["funil_simulador"] = sim
 
 
+def _benchmark_period_short(period_label: object) -> str:
+    """Normaliza rótulo de período para MM/AA na tabela."""
+    if period_label is None:
+        return "—"
+    raw = str(period_label).strip()
+    if not raw or raw == "—":
+        return "—"
+    if len(raw) == 5 and raw[2] == "/":
+        return raw
+    if "–" in raw:
+        start = raw.split("–", 1)[0].strip()
+        parts = start.split("/")
+        if len(parts) == 3:
+            try:
+                month = int(parts[1])
+                year = int(parts[2]) % 100
+                return f"{month:02d}/{year:02d}"
+            except ValueError:
+                pass
+    return raw
+
+
+def _format_benchmark_period_cell(kind: str, value: object, period_label: object) -> str:
+    short = _benchmark_period_short(period_label)
+    val_txt = _format_benchmark_value(kind, value)
+    if short == "—":
+        return val_txt
+    return f"{val_txt} ({short})"
+
+
+def _render_benchmark_legend_html(
+    *,
+    base_summary: str,
+    period_windows: list[dict[str, str]] | None,
+    hist_ini: date,
+    hist_fim: date,
+    available: int,
+    requested: int | None,
+) -> str:
+    note_parts: list[str] = [
+        "Mesmas regras da One Page e do Atual. "
+        "Tags do Simulador e do Ajuste de meta usam a coluna Média histórica.",
+    ]
+    if (
+        requested is not None
+        and requested > 0
+        and available < requested
+    ):
+        note_parts.insert(
+            0,
+            f"Base calculada com {available} de {requested} períodos disponíveis.",
+        )
+
+    windows_html = ""
+    if period_windows:
+        chips = "".join(
+            f'<span class="fr-benchmark-window-chip">'
+            f'{html.escape(w["short"])} → {html.escape(w["full"])}'
+            f"</span>"
+            for w in period_windows
+        )
+        windows_html = (
+            f'<div class="fr-benchmark-legend-windows">'
+            f'<span class="fr-benchmark-legend-label">Janelas comparadas:</span>'
+            f'<div class="fr-benchmark-window-list">{chips}</div>'
+            f"</div>"
+        )
+    else:
+        full = (
+            f"{hist_ini.strftime('%d/%m/%Y')}–{hist_fim.strftime('%d/%m/%Y')}"
+        )
+        short = f"{hist_ini.month:02d}/{hist_ini.year % 100:02d}"
+        windows_html = (
+            f'<div class="fr-benchmark-legend-windows">'
+            f'<span class="fr-benchmark-legend-label">Janelas comparadas:</span>'
+            f'<div class="fr-benchmark-window-list">'
+            f'<span class="fr-benchmark-window-chip">'
+            f"{html.escape(short)} → {html.escape(full)}"
+            f"</span></div></div>"
+        )
+
+    note = " ".join(note_parts)
+    return (
+        f'<div class="fr-benchmark-legend">'
+        f'<div class="fr-benchmark-legend-base">'
+        f"Base: {html.escape(base_summary)}."
+        f"</div>"
+        f"{windows_html}"
+        f'<div class="fr-benchmark-legend-note">{html.escape(note)}</div>'
+        f"</div>"
+    )
+
+
 def _render_benchmark_historico(
     benchmark_raw: dict[str, Any],
     *,
@@ -851,13 +1036,24 @@ def _render_benchmark_historico(
     hist_ini = date.fromisoformat(benchmark_raw["hist_ini"])
     hist_fim = date.fromisoformat(benchmark_raw["hist_fim"])
     days_key = str(benchmark_raw.get("days_key", ""))
-    hist_label = HISTORICO_PERIODOS.get(days_key, {}).get("label", "histórico")
-    st.caption(
-        f'Base: {hist_label}. '
-        f'Janela: {hist_ini.strftime("%d/%m/%Y")} – {hist_fim.strftime("%d/%m/%Y")} '
-        f'({benchmark_raw.get("monthly_count", 0)} mês(es) com dados). '
-        "Mesmas regras da One Page e do Atual. "
-        "Tags do Simulador e do Ajuste de meta usam a coluna Média histórica."
+    base_summary = benchmark_raw.get("summary") or HISTORICO_PERIODOS.get(
+        days_key, {},
+    ).get("label", "histórico")
+    requested = benchmark_raw.get("requested_period_count")
+    available = benchmark_raw.get("monthly_count", 0)
+    period_windows = benchmark_raw.get("period_windows")
+    st.markdown(
+        _render_benchmark_legend_html(
+            base_summary=str(base_summary),
+            period_windows=period_windows,
+            hist_ini=hist_ini,
+            hist_fim=hist_fim,
+            available=int(available or 0),
+            requested=(
+                int(requested) if requested is not None else None
+            ),
+        ),
+        unsafe_allow_html=True,
     )
 
     calc_atual_mes = calcular_funil_exibicao(
@@ -899,14 +1095,12 @@ def _render_benchmark_historico(
                 mean_f if mean_f is not None and mean_f > 0 else None,
             ),
             "Mediana": _format_benchmark_value(kind, bm.get("median")),
-            "P75": _format_benchmark_value(kind, bm.get("p75")),
-            "Melhor período": (
-                f'{_format_benchmark_value(kind, bm.get("best"))} '
-                f'({bm.get("best_period", "—")})'
+            "C. Otimista": _format_benchmark_value(kind, bm.get("p75")),
+            "Melhor período": _format_benchmark_period_cell(
+                kind, bm.get("best"), bm.get("best_period"),
             ),
-            "Pior período": (
-                f'{_format_benchmark_value(kind, bm.get("worst"))} '
-                f'({bm.get("worst_period", "—")})'
+            "Pior período": _format_benchmark_period_cell(
+                kind, bm.get("worst"), bm.get("worst_period"),
             ),
             "Atual": _format_benchmark_value(kind, atual_val),
             "Meta da tela": _format_benchmark_value(kind, meta_val),
@@ -918,6 +1112,9 @@ def _render_benchmark_historico(
         use_container_width=True,
         column_config={
             "Métrica": st.column_config.TextColumn(width="medium"),
+            "C. Otimista": st.column_config.TextColumn(
+                help="Cenário otimista (P75 histórico)",
+            ),
         },
     )
 
@@ -940,7 +1137,8 @@ def _render_benchmark_historico(
             st.rerun()
     st.caption(
         "Conservador: ~90% das taxas (ou CPL +10%). Provável: mediana histórica. "
-        "Otimista: P75 nas taxas (ou P25 no CPL). Investimento do simulador não muda."
+        "Otimista: coluna C. Otimista (P75 nas taxas ou P25 no CPL). "
+        "Investimento do simulador não muda."
     )
 
 
@@ -1867,11 +2065,72 @@ span.fr-referencia-funil-table-anchor + div [data-testid="stDataFrame"] [role="g
     flex-shrink: 0;
     width: fit-content;
 }
-.fr-realism-ok { background: rgba(4, 120, 87, 0.35); color: #a7f3d0; }
+.fr-realism-within {
+    background: rgba(148, 163, 184, 0.16);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.32);
+}
 .fr-realism-good { background: rgba(4, 120, 87, 0.45); color: #d1fae5; }
 .fr-realism-warn { background: rgba(180, 120, 20, 0.35); color: #fde68a; }
 .fr-realism-bad { background: rgba(153, 27, 27, 0.4); color: #fecaca; }
+.fr-realism-above,
+.fr-realism-high {
+    background: rgba(59, 130, 246, 0.18);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+}
+.fr-realism-very-high {
+    background: rgba(16, 185, 129, 0.16);
+    color: #6ee7b7;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+}
 .fr-realism-neutral { display: none; }
+.fr-benchmark-legend {
+    margin: 0 0 12px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(180, 120, 20, 0.28);
+    background: rgba(180, 120, 20, 0.08);
+}
+.fr-benchmark-legend-base {
+    font-size: 0.82rem;
+    color: rgba(255, 255, 255, 0.88);
+    margin-bottom: 8px;
+}
+.fr-benchmark-legend-windows {
+    margin-bottom: 8px;
+}
+.fr-benchmark-legend-label {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #fde68a;
+    margin-bottom: 6px;
+}
+.fr-benchmark-window-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.fr-benchmark-window-chip {
+    display: inline-block;
+    background: rgba(180, 120, 20, 0.35);
+    color: #fde68a;
+    border: 1px solid rgba(180, 120, 20, 0.45);
+    border-radius: 4px;
+    padding: 3px 9px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: nowrap;
+}
+.fr-benchmark-legend-note {
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.62);
+    line-height: 1.4;
+}
 </style>
 """
 
@@ -1990,18 +2249,60 @@ def _init_meta_session_for_period(
     pct_padrao = float(snapshot.pct_recebimento) if snapshot is not None else 0.0
 
     meta_tela = asdict(_BASE_META)
+    pct_meta = pct_padrao
     if is_metas_database_configured():
         try:
             loaded = load_funil_meta(PERIODO_TIPO_PADRAO, data_ini, data_fim)
             if loaded is not None:
-                meta_tela = metas_dict_to_scenario(loaded)
+                meta_tela = metas_dict_to_scenario(loaded[0])
+                if loaded[1] > 0:
+                    pct_meta = float(loaded[1])
         except Exception:
             pass
 
     st.session_state["funil_meta_tela"] = meta_tela
-    st.session_state["funil_meta_pct_recebimento"] = pct_padrao
-    st.session_state["funil_meta_pct_recebimento_padrao"] = pct_padrao
+    st.session_state["funil_meta_pct_recebimento"] = pct_meta
+    st.session_state["funil_meta_pct_recebimento_padrao"] = (
+        pct_meta if pct_meta > 0 else pct_padrao
+    )
     _clear_meta_editor_widget_keys()
+
+
+def _restore_internal_default_meta(snapshot: FunnelSnapshot | None) -> None:
+    """Fallback interno quando não há meta oficial salva para o período."""
+    pct_padrao = float(snapshot.pct_recebimento) if snapshot is not None else 0.0
+    st.session_state["funil_meta_tela"] = asdict(_BASE_META)
+    st.session_state["funil_meta_pct_recebimento"] = float(
+        st.session_state.get("funil_meta_pct_recebimento_padrao", pct_padrao),
+    )
+    _clear_meta_editor_widget_keys()
+
+
+def _restore_default_meta_for_period(
+    data_ini: date,
+    data_fim: date,
+    *,
+    snapshot: FunnelSnapshot | None = None,
+) -> None:
+    """Restaura a última meta oficial salva ou o padrão interno."""
+    latest_meta: dict[str, Any] | None = None
+    if is_metas_database_configured():
+        try:
+            latest_meta = load_latest_meta_funil(
+                PERIODO_TIPO_PADRAO,
+                data_ini,
+                data_fim,
+            )
+        except Exception:
+            latest_meta = None
+
+    if latest_meta:
+        _apply_historico_row_to_meta_editor(latest_meta)
+        st.session_state["_meta_restore_msg"] = "saved_latest"
+    else:
+        _restore_internal_default_meta(snapshot)
+        st.session_state["_meta_restore_msg"] = "internal_default"
+    st.rerun()
 
 
 def _get_meta_tela() -> Scenario:
@@ -2010,8 +2311,18 @@ def _get_meta_tela() -> Scenario:
     )
 
 
-def _get_meta_pct_recebimento() -> float:
-    return float(st.session_state.get("funil_meta_pct_recebimento", 0.0))
+def _get_meta_pct_recebimento(
+    *,
+    snapshot: FunnelSnapshot | None = None,
+    benchmark_metrics: dict[str, dict[str, Any]] | None = None,
+) -> float:
+    explicit = float(st.session_state.get("funil_meta_pct_recebimento", 0.0))
+    resolved = _resolve_pct_recebimento(
+        explicit,
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
+    )
+    return resolved if resolved is not None else 0.0
 
 
 def _apply_historico_row_to_sim(row: dict[str, Any]) -> None:
@@ -2747,7 +3058,13 @@ def _render_vitrine_comparison(
     meta_pct = (
         float(meta_pct_recebimento)
         if meta_pct_recebimento is not None
-        else _get_meta_pct_recebimento()
+        else _get_meta_pct_recebimento(
+            snapshot=snapshot,
+            benchmark_metrics=benchmark_metrics,
+        )
+    )
+    meta_pct_raw = float(
+        st.session_state.get("funil_meta_pct_recebimento", meta_pct),
     )
 
     h_atual, h_sim, h_meta = st.columns(3, gap="medium")
@@ -2779,11 +3096,19 @@ def _render_vitrine_comparison(
 
     for idx, spec in enumerate(rows):
         sim_s = Scenario(**sim_state)
-        calc_s = calcular_funil_exibicao(
-            sim_s, periodo, pct_recebimento=pct_recebimento,
+        calc_s = _calc_exibicao_com_receita(
+            sim_s,
+            periodo,
+            pct_recebimento=pct_recebimento,
+            snapshot=snapshot,
+            benchmark_metrics=benchmark_metrics,
         )
-        calc_m = calcular_funil_exibicao(
-            meta_s, periodo, pct_recebimento=meta_pct,
+        calc_m = _calc_exibicao_com_receita(
+            meta_s,
+            periodo,
+            pct_recebimento=meta_pct_raw,
+            snapshot=snapshot,
+            benchmark_metrics=benchmark_metrics,
         )
 
         label = spec["label"]
@@ -2853,11 +3178,29 @@ def _render_vitrine_comparison(
     st.session_state["funil_simulador"] = sim_state
 
     sim_s = Scenario(**sim_state)
-    calc_s = calcular_funil_exibicao(
-        sim_s, periodo, pct_recebimento=pct_recebimento,
+    sim_pct_eff = _resolve_pct_recebimento(
+        pct_recebimento,
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
     )
-    calc_m = calcular_funil_exibicao(
-        meta_s, periodo, pct_recebimento=meta_pct,
+    meta_pct_eff = _resolve_pct_recebimento(
+        meta_pct_raw,
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
+    )
+    calc_s = _calc_exibicao_com_receita(
+        sim_s,
+        periodo,
+        pct_recebimento=pct_recebimento,
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
+    )
+    calc_m = _calc_exibicao_com_receita(
+        meta_s,
+        periodo,
+        pct_recebimento=meta_pct_raw,
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
     )
 
     f_atual, f_sim, f_meta = st.columns(3, gap="medium")
@@ -2876,6 +3219,7 @@ def _render_vitrine_comparison(
         _render_valor_blocks(
             calc_s,
             bloco="simulador",
+            pct_recebimento=sim_pct_eff,
             ref_atual=calc_atual_display,
         )
         st.markdown("</div></div>", unsafe_allow_html=True)
@@ -2887,6 +3231,7 @@ def _render_vitrine_comparison(
         _render_valor_blocks(
             calc_m,
             bloco="meta",
+            pct_recebimento=meta_pct_eff,
             ref_sim=calc_s,
         )
         st.markdown("</div></div>", unsafe_allow_html=True)
@@ -2918,6 +3263,7 @@ def _render_valor_blocks(
     calc: dict,
     *,
     bloco: str = "simulador",
+    pct_recebimento: float | None = None,
     ref_atual: dict | None = None,
     ref_sim: dict | None = None,
 ) -> None:
@@ -2930,17 +3276,23 @@ def _render_valor_blocks(
         titulo_receita = "Receita projetada"
 
     montante_val = float(calc.get("montante") or 0)
-    receita_val = float(calc.get("receita") or 0)
-    receita_txt = (
-        brl(receita_val)
-        if receita_val > 0 or bloco == "atual"
-        else "—"
-    )
+    if bloco == "atual":
+        receita_val = float(calc.get("receita") or 0)
+        receita_txt = brl(receita_val) if receita_val > 0 else "—"
+    else:
+        receita_val = _receita_projetada_de_montante(montante_val, pct_recebimento)
+        if receita_val is None:
+            receita_val = float(calc.get("receita") or 0) or None
+        receita_txt = _format_receita_projetada(
+            montante_val,
+            pct_recebimento,
+            receita_real=receita_val,
+        )
 
     chips_montante: list[str] = []
     chips_receita: list[str] = []
 
-    pct_rec_mont = _pct_ratio_txt(receita_val, montante_val)
+    pct_rec_mont = _pct_ratio_txt(float(receita_val or 0), montante_val)
     if pct_rec_mont:
         chips_receita.append(f"{pct_rec_mont} do montante")
 
@@ -2948,7 +3300,7 @@ def _render_valor_blocks(
         ref_m = float(ref_atual.get("montante") or 0)
         ref_r = float(ref_atual.get("receita") or 0)
         pct_m = _pct_ratio_txt(montante_val, ref_m)
-        pct_r = _pct_ratio_txt(receita_val, ref_r)
+        pct_r = _pct_ratio_txt(float(receita_val or 0), ref_r)
         if pct_m:
             chips_montante.append(f"{pct_m} do atual")
         if pct_r:
@@ -2957,7 +3309,7 @@ def _render_valor_blocks(
         ref_m = float(ref_sim.get("montante") or 0)
         ref_r = float(ref_sim.get("receita") or 0)
         pct_m = _pct_ratio_txt(montante_val, ref_m)
-        pct_r = _pct_ratio_txt(receita_val, ref_r)
+        pct_r = _pct_ratio_txt(float(receita_val or 0), ref_r)
         if pct_m:
             chips_montante.append(f"{pct_m} do simulado")
         if pct_r:
@@ -3114,8 +3466,18 @@ def _metas_oficiais_to_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
     for r in rows:
         s = Scenario(**r["scenario"])
+        montante = float(r.get("montante") or 0)
         pct_rec = float(r.get("pct_recebimento") or 0)
+        receita = float(r.get("receita") or 0)
         calc = calcular_funil_exibicao(s, "mes", pct_recebimento=pct_rec)
+        if montante <= 0:
+            montante = float(calc["montante"])
+        if receita <= 0 and montante > 0 and pct_rec > 0:
+            receita = project_receita_from_montante(montante, pct_rec)
+        elif pct_rec <= 0 and montante > 0 and receita > 0:
+            pct_rec = receita / montante * 100.0
+        elif receita <= 0:
+            receita = float(calc["receita"])
         records.append({
             "Período": r["periodo"],
             "Investimento": r["investimento"],
@@ -3130,8 +3492,8 @@ def _metas_oficiais_to_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
             "% Comp→Vda": pct_to_display_percent(r["pct_c_v"]),
             "Vendas": r.get("vendas", calc["vendas"]),
             "Ticket": r["ticket"],
-            "Montante": r.get("montante", calc["montante"]),
-            "Receita": r.get("receita", calc["receita"]),
+            "Montante": montante,
+            "Receita": receita,
             "% Rec/Mont": pct_rec,
             "Atualizado": r.get("atualizado_em"),
             "Por": r.get("criado_por") or "—",
@@ -3369,6 +3731,7 @@ def _render_meta_cenario_editor(
     data_ini: date,
     data_fim: date,
     can_edit_meta: bool,
+    snapshot: FunnelSnapshot | None = None,
     benchmark_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Ajuste da Meta — edição local com opção de salvar meta oficial."""
@@ -3381,6 +3744,16 @@ def _render_meta_cenario_editor(
         return
     if st.session_state.pop("_meta_editor_ref_loaded_msg", False):
         st.success("Referência carregada no Ajuste de cenário de meta.")
+    restore_msg = st.session_state.pop("_meta_restore_msg", None)
+    if restore_msg == "saved_latest":
+        st.success(
+            "Cenário padrão restaurado com a última meta oficial salva."
+        )
+    elif restore_msg == "internal_default":
+        st.info(
+            "Nenhuma meta oficial salva encontrada para este período. "
+            "Restaurado cenário padrão interno."
+        )
     if os.environ.get("FUNIL_DEBUG") and "_meta_editor_debug_payload" in st.session_state:
         st.write(
             "Payload carregado no ajuste:",
@@ -3421,10 +3794,19 @@ def _render_meta_cenario_editor(
         default_modes=_DEFAULT_META_EDIT_MODES,
     )
 
-    meta_pct = _get_meta_pct_recebimento()
+    meta_pct = _get_meta_pct_recebimento(
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
+    )
     meta_s = Scenario(**meta_state)
-    calc_m = calcular_funil_exibicao(
-        meta_s, periodo, pct_recebimento=meta_pct,
+    calc_m = _calc_exibicao_com_receita(
+        meta_s,
+        periodo,
+        pct_recebimento=float(
+            st.session_state.get("funil_meta_pct_recebimento", meta_pct),
+        ),
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
     )
     rows = _vitrine_row_specs(periodo)
 
@@ -3462,7 +3844,7 @@ def _render_meta_cenario_editor(
             benchmark_metrics=benchmark_metrics,
         )
     with c_pct_inp:
-        st.session_state["funil_meta_pct_recebimento"] = float(st.number_input(
+        pct_input = float(st.number_input(
             "% Receita sobre Montante",
             value=float(meta_pct),
             min_value=0.0,
@@ -3473,12 +3855,28 @@ def _render_meta_cenario_editor(
             label_visibility="collapsed",
             help="Receita projetada = Montante × este percentual.",
         ))
-    mont_proj = float(calc_m["montante"]) * div
-    rec_proj = project_receita_from_montante(
-        mont_proj,
-        st.session_state["funil_meta_pct_recebimento"],
+        st.session_state["funil_meta_pct_recebimento"] = pct_input
+
+    meta_s_final = Scenario(**meta_state)
+    calc_m_final = _calc_exibicao_com_receita(
+        meta_s_final,
+        periodo,
+        pct_recebimento=pct_input,
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
     )
-    _render_meta_editor_projecao_cards(mont_proj, rec_proj)
+    mont_proj = float(calc_m_final["montante"]) * div
+    meta_pct_eff = _resolve_pct_recebimento(
+        pct_input,
+        snapshot=snapshot,
+        benchmark_metrics=benchmark_metrics,
+    )
+    rec_proj = _receita_projetada_de_montante(mont_proj, meta_pct_eff)
+    _render_meta_editor_projecao_cards(
+        mont_proj,
+        rec_proj,
+        pct_recebimento=meta_pct_eff,
+    )
 
     b_sim, b_save, b_reset, _ = st.columns([2, 2, 2, 2], gap="small")
     with b_sim:
@@ -3501,7 +3899,7 @@ def _render_meta_cenario_editor(
                         data_fim,
                         build_funil_meta_save_payload(
                             meta_state,
-                            calc_m,
+                            calc_m_final,
                             pct_recebimento=float(
                                 st.session_state["funil_meta_pct_recebimento"],
                             ),
@@ -3514,12 +3912,11 @@ def _render_meta_cenario_editor(
                     st.error(f"Não foi possível salvar a meta oficial: {exc}")
     with b_reset:
         if st.button("Restaurar cenário padrão", use_container_width=True):
-            st.session_state["funil_meta_tela"] = asdict(_BASE_META)
-            st.session_state["funil_meta_pct_recebimento"] = float(
-                st.session_state.get("funil_meta_pct_recebimento_padrao", 0.0),
+            _restore_default_meta_for_period(
+                data_ini,
+                data_fim,
+                snapshot=snapshot,
             )
-            _clear_meta_editor_widget_keys()
-            st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -3710,24 +4107,83 @@ hist_base_key = st.selectbox(
     key="funil_hist_base",
     help=(
         "Não altera o período principal da página. "
-        "Usa o intervalo imediatamente anterior ao filtro global. "
-        "Define a referência das tags históricas e da tabela Benchmark."
+        "Define a referência das tags históricas e da tabela Benchmark. "
+        "Em **Personalizado**, compare períodos equivalentes ao filtro atual."
     ),
 )
-_hist_days = int(HISTORICO_PERIODOS[hist_base_key]["days"])
-_hist_window = resolve_historical_window(ctx.data_ini, _hist_days)
+
+_custom_granularity = "mes"
+_custom_n_periods = 3
+_custom_same_interval = True
+if hist_base_key == HISTORICO_CUSTOM_KEY:
+    c_gran, c_qty, c_same = st.columns([2, 2, 3], gap="medium")
+    with c_gran:
+        _custom_granularity = st.segmented_control(
+            "Comparar por",
+            options=list(HISTORICO_GRANULARIDADES.keys()),
+            format_func=lambda k: HISTORICO_GRANULARIDADES[k],
+            default="mes",
+            key="funil_hist_custom_gran",
+        ) or "mes"
+    with c_qty:
+        _custom_n_periods = int(
+            st.number_input(
+                "Quantidade de períodos anteriores",
+                min_value=1,
+                max_value=24,
+                value=3,
+                step=1,
+                key="funil_hist_custom_n",
+            )
+        )
+    with c_same:
+        _custom_same_interval = st.checkbox(
+            "Usar mesmo intervalo do período atual",
+            value=True,
+            key="funil_hist_custom_same",
+            help=(
+                "Aplica o mesmo recorte de dias do filtro global "
+                "em cada mês anterior (ex.: dias 1–15)."
+            ),
+        )
+    if _custom_granularity != "mes":
+        st.caption(
+            "Semana e Dia estarão disponíveis em breve. "
+            "Por enquanto, use **Mês**."
+        )
+
+_hist_spec = resolve_historical_base(
+    ctx.data_ini,
+    ctx.data_fim,
+    base_key=hist_base_key,
+    custom_granularity=_custom_granularity,
+    custom_n_periods=_custom_n_periods,
+    custom_same_interval=_custom_same_interval,
+)
+if hist_base_key == HISTORICO_CUSTOM_KEY and _hist_spec.summary and not _hist_spec.error:
+    st.caption(f"Base: {_hist_spec.summary}.")
+
 _benchmark_raw: dict[str, Any] = {}
 _benchmark_metrics: dict[str, dict[str, Any]] | None = None
-if _hist_window is None:
-    _benchmark_raw = {"error": "Período principal sem histórico anterior suficiente."}
+if _hist_spec.error:
+    _benchmark_raw = {"error": _hist_spec.error}
+elif not _hist_spec.ranges:
+    _benchmark_raw = {"error": "Nenhum período histórico disponível."}
 else:
-    _h_ini, _h_fim = _hist_window
+    _ranges_json = ranges_to_cache_json(_hist_spec.ranges)
     with st.spinner("Calculando benchmark histórico…"):
         _benchmark_raw = compute_funil_benchmark(
-            _h_ini.isoformat(),
-            _h_fim.isoformat(),
+            _hist_spec.hist_ini.isoformat(),
+            _hist_spec.hist_fim.isoformat(),
             hist_base_key,
             excluir_testes_aplicacoes,
+            _ranges_json,
+        )
+    _benchmark_raw["summary"] = _hist_spec.summary
+    _benchmark_raw["window_detail"] = _hist_spec.window_detail
+    if not _benchmark_raw.get("period_windows"):
+        _benchmark_raw["period_windows"] = period_windows_from_ranges(
+            _hist_spec.ranges,
         )
     if not _benchmark_raw.get("error"):
         _benchmark_metrics = _benchmark_raw.get("metrics")
@@ -3751,7 +4207,10 @@ _init_meta_session_for_period(ctx.data_ini, ctx.data_fim, _funnel_snapshot)
 
 atual_s = Scenario(**st.session_state["funil_atual"])
 meta_tela_s = _get_meta_tela()
-_meta_pct_rec = _get_meta_pct_recebimento()
+_meta_pct_rec = _get_meta_pct_recebimento(
+    snapshot=_funnel_snapshot,
+    benchmark_metrics=_benchmark_metrics,
+)
 
 # Visualização (Mês / Semana / Dia) + ações globais (reset / exportar).
 c_periodo, c_reset, c_export = st.columns([4, 2, 2], gap="medium")
@@ -3807,11 +4266,21 @@ atual_s, sim_s, meta_s = _render_vitrine_comparison(
 )
 
 calc_atual = _calc_atual_para_tela(_funnel_snapshot, atual_s, periodo)
-calc_sim = calcular_funil_exibicao(
-    sim_s, periodo, pct_recebimento=_pct_rec,
+calc_sim = _calc_exibicao_com_receita(
+    sim_s,
+    periodo,
+    pct_recebimento=_pct_rec,
+    snapshot=_funnel_snapshot,
+    benchmark_metrics=_benchmark_metrics,
 )
-calc_meta = calcular_funil_exibicao(
-    meta_s, periodo, pct_recebimento=_meta_pct_rec,
+calc_meta = _calc_exibicao_com_receita(
+    meta_s,
+    periodo,
+    pct_recebimento=float(
+        st.session_state.get("funil_meta_pct_recebimento", _meta_pct_rec),
+    ),
+    snapshot=_funnel_snapshot,
+    benchmark_metrics=_benchmark_metrics,
 )
 
 # Gap até a meta — volumes e financeiro.
@@ -3879,6 +4348,7 @@ _render_meta_cenario_editor(
     data_ini=ctx.data_ini,
     data_fim=ctx.data_fim,
     can_edit_meta=_can_edit_meta,
+    snapshot=_funnel_snapshot,
     benchmark_metrics=_benchmark_metrics,
 )
 
