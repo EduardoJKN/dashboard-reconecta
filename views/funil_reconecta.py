@@ -54,13 +54,15 @@ from src.funil_historico import (
 from src.funil_meta_store import (
     PERIODO_TIPO_PADRAO,
     MetasDatabaseNotConfiguredError,
+    MetaMensalProporcao,
     build_funil_meta_save_payload,
     is_metas_database_configured,
-    load_funil_meta,
-    load_latest_meta_funil,
-    load_metas_funil_historico,
+    load_latest_meta_funil_mensal,
+    load_metas_funil_mensal_for_selection,
+    prepare_meta_row_for_selection,
+    resolve_meta_mensal_proporcao,
+    scale_meta_save_payload_to_monthly,
     metas_dict_from_scenario,
-    metas_dict_to_scenario,
     meta_payload_from_reference_volumes,
     normalize_reference_pct_recebimento,
     normalize_reference_to_meta_payload,
@@ -2236,36 +2238,79 @@ def _funil_period_storage_key(data_ini: date, data_fim: date) -> str:
     return f"{data_ini.isoformat()}_{data_fim.isoformat()}"
 
 
-def _init_meta_session_for_period(
+def _meta_bootstrap_session_key(data_ini: date, data_fim: date) -> str:
+    return f"funil_meta_bootstrapped_{_funil_period_storage_key(data_ini, data_fim)}"
+
+
+def _fetch_latest_official_meta(
     data_ini: date,
     data_fim: date,
-    snapshot: FunnelSnapshot | None,
-) -> None:
-    """Inicializa meta da tela quando o filtro global muda (banco de metas → padrão)."""
-    key = _funil_period_storage_key(data_ini, data_fim)
-    if st.session_state.get("funil_meta_period_key") == key:
+) -> dict[str, Any] | None:
+    if not is_metas_database_configured():
+        return None
+    try:
+        row, prop = load_latest_meta_funil_mensal(data_ini, data_fim)
+        st.session_state["funil_meta_proporcao"] = prop
+        if prop.multi_mes:
+            st.session_state["funil_meta_proporcao_aviso"] = (
+                "Período em mais de um mês civil: meta oficial mensal proporcional "
+                "indisponível nesta versão."
+            )
+        else:
+            st.session_state.pop("funil_meta_proporcao_aviso", None)
+        return row
+    except Exception as exc:
+        if os.environ.get("FUNIL_DEBUG"):
+            st.session_state["_meta_load_error"] = str(exc)
+        return None
+
+
+def _render_meta_proporcao_caption() -> None:
+    aviso = st.session_state.get("funil_meta_proporcao_aviso")
+    if aviso:
+        st.caption(aviso)
         return
-    st.session_state["funil_meta_period_key"] = key
-    pct_padrao = float(snapshot.pct_recebimento) if snapshot is not None else 0.0
+    prop = st.session_state.get("funil_meta_proporcao")
+    if not isinstance(prop, MetaMensalProporcao):
+        return
+    legenda = prop.legenda()
+    if legenda:
+        st.caption(legenda)
 
-    meta_tela = asdict(_BASE_META)
-    pct_meta = pct_padrao
-    if is_metas_database_configured():
-        try:
-            loaded = load_funil_meta(PERIODO_TIPO_PADRAO, data_ini, data_fim)
-            if loaded is not None:
-                meta_tela = metas_dict_to_scenario(loaded[0])
-                if loaded[1] > 0:
-                    pct_meta = float(loaded[1])
-        except Exception:
-            pass
 
-    st.session_state["funil_meta_tela"] = meta_tela
-    st.session_state["funil_meta_pct_recebimento"] = pct_meta
-    st.session_state["funil_meta_pct_recebimento_padrao"] = (
-        pct_meta if pct_meta > 0 else pct_padrao
-    )
+def _row_for_current_period(
+    row: dict[str, Any],
+    data_ini: date,
+    data_fim: date,
+) -> dict[str, Any]:
+    return prepare_meta_row_for_selection(row, data_ini, data_fim)
+
+
+def _meta_payload_from_saved_row(
+    row: dict[str, Any],
+) -> tuple[dict[str, float], float]:
+    volumes = normalize_reference_volumes(row)
+    if volumes:
+        payload = meta_payload_from_reference_volumes(row, volumes)
+        pct_rec = pct_recebimento_from_reference_volumes(row, volumes)
+    else:
+        payload = normalize_reference_to_meta_payload(row)
+        pct_rec = normalize_reference_pct_recebimento(row)
+    return payload, pct_rec
+
+
+def _apply_saved_meta_to_tela(row: dict[str, Any]) -> None:
+    """Última meta oficial → coluna Meta, gargalo, gaps e projeções."""
+    payload, pct_rec = _meta_payload_from_saved_row(row)
     _clear_meta_editor_widget_keys()
+    st.session_state["funil_meta_tela"] = dict(payload)
+    st.session_state["funil_meta_pct_recebimento"] = pct_rec
+    st.session_state["_meta_source"] = "latest_saved"
+    st.session_state["funil_meta_loaded_db_id"] = row.get("meta_db_id")
+    prop = row.get("meta_mensal_proporcao")
+    if isinstance(prop, MetaMensalProporcao):
+        st.session_state["funil_meta_proporcao"] = prop
+    st.session_state.pop("_meta_user_override", None)
 
 
 def _restore_internal_default_meta(snapshot: FunnelSnapshot | None) -> None:
@@ -2275,7 +2320,56 @@ def _restore_internal_default_meta(snapshot: FunnelSnapshot | None) -> None:
     st.session_state["funil_meta_pct_recebimento"] = float(
         st.session_state.get("funil_meta_pct_recebimento_padrao", pct_padrao),
     )
+    st.session_state["_meta_source"] = "internal_default"
+    st.session_state.pop("funil_meta_loaded_db_id", None)
+    st.session_state.pop("funil_meta_proporcao", None)
+    st.session_state.pop("funil_meta_proporcao_aviso", None)
     _clear_meta_editor_widget_keys()
+
+
+def _bootstrap_default_meta_for_period(
+    data_ini: date,
+    data_fim: date,
+    snapshot: FunnelSnapshot | None,
+) -> None:
+    """Carrega a última meta oficial salva ou o padrão interno para o período."""
+    pct_padrao = float(snapshot.pct_recebimento) if snapshot is not None else 0.0
+    latest_meta = _fetch_latest_official_meta(data_ini, data_fim)
+    if latest_meta:
+        _apply_saved_meta_to_tela(latest_meta)
+        pct_meta = float(st.session_state.get("funil_meta_pct_recebimento") or 0.0)
+        st.session_state["funil_meta_pct_recebimento_padrao"] = (
+            pct_meta if pct_meta > 0 else pct_padrao
+        )
+        return
+
+    _restore_internal_default_meta(snapshot)
+    st.session_state["funil_meta_pct_recebimento_padrao"] = pct_padrao
+
+
+def _init_meta_session_for_period(
+    data_ini: date,
+    data_fim: date,
+    snapshot: FunnelSnapshot | None,
+) -> None:
+    """Inicializa a meta da tela ao abrir a página ou trocar o período global."""
+    key = _funil_period_storage_key(data_ini, data_fim)
+    period_changed = st.session_state.get("funil_meta_period_key") != key
+    if period_changed:
+        st.session_state["funil_meta_period_key"] = key
+        st.session_state.pop("_meta_user_override", None)
+        st.session_state.pop(_meta_bootstrap_session_key(data_ini, data_fim), None)
+
+    bootstrap_key = _meta_bootstrap_session_key(data_ini, data_fim)
+    should_bootstrap = (
+        period_changed
+        or not st.session_state.get(bootstrap_key)
+    )
+    if not should_bootstrap or st.session_state.get("_meta_user_override"):
+        return
+
+    _bootstrap_default_meta_for_period(data_ini, data_fim, snapshot)
+    st.session_state[bootstrap_key] = True
 
 
 def _restore_default_meta_for_period(
@@ -2285,24 +2379,45 @@ def _restore_default_meta_for_period(
     snapshot: FunnelSnapshot | None = None,
 ) -> None:
     """Restaura a última meta oficial salva ou o padrão interno."""
-    latest_meta: dict[str, Any] | None = None
-    if is_metas_database_configured():
-        try:
-            latest_meta = load_latest_meta_funil(
-                PERIODO_TIPO_PADRAO,
-                data_ini,
-                data_fim,
-            )
-        except Exception:
-            latest_meta = None
-
+    latest_meta = _fetch_latest_official_meta(data_ini, data_fim)
     if latest_meta:
         _apply_historico_row_to_meta_editor(latest_meta)
+        st.session_state["_meta_source"] = "latest_saved"
+        st.session_state["funil_meta_loaded_db_id"] = latest_meta.get("meta_db_id")
+        st.session_state.pop("_meta_user_override", None)
         st.session_state["_meta_restore_msg"] = "saved_latest"
     else:
         _restore_internal_default_meta(snapshot)
         st.session_state["_meta_restore_msg"] = "internal_default"
+
+    st.session_state[_meta_bootstrap_session_key(data_ini, data_fim)] = True
     st.rerun()
+
+
+def _reload_default_meta_after_db_change(
+    data_ini: date,
+    data_fim: date,
+    *,
+    snapshot: FunnelSnapshot | None = None,
+    seed_editor: bool = False,
+) -> None:
+    """Reaplica o padrão após salvar/excluir meta oficial no banco."""
+    st.session_state.pop(_meta_bootstrap_session_key(data_ini, data_fim), None)
+    st.session_state.pop("_meta_user_override", None)
+    latest_meta = _fetch_latest_official_meta(data_ini, data_fim)
+    if latest_meta:
+        if seed_editor:
+            _apply_historico_row_to_meta_editor(latest_meta)
+        else:
+            _apply_saved_meta_to_tela(latest_meta)
+        pct_meta = float(st.session_state.get("funil_meta_pct_recebimento") or 0.0)
+        pct_padrao = float(snapshot.pct_recebimento) if snapshot is not None else 0.0
+        st.session_state["funil_meta_pct_recebimento_padrao"] = (
+            pct_meta if pct_meta > 0 else pct_padrao
+        )
+    else:
+        _restore_internal_default_meta(snapshot)
+    st.session_state[_meta_bootstrap_session_key(data_ini, data_fim)] = True
 
 
 def _get_meta_tela() -> Scenario:
@@ -3505,6 +3620,8 @@ def _metas_oficiais_to_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
 def _render_referencia_acoes(
     row: dict[str, Any],
     *,
+    data_ini: date,
+    data_fim: date,
     can_edit_meta: bool,
     sim_key: str,
     editor_key: str,
@@ -3516,7 +3633,7 @@ def _render_referencia_acoes(
         b_sim, b_edit, b_meta = st.columns([2, 2, 2], gap="small")
         with b_sim:
             if st.button("Carregar no Simulador", key=sim_key, use_container_width=True):
-                _apply_historico_row_to_sim(row)
+                _apply_historico_row_to_sim(_row_for_current_period(row, data_ini, data_fim))
                 st.rerun()
         with b_edit:
             if st.button(
@@ -3524,19 +3641,26 @@ def _render_referencia_acoes(
                 key=editor_key,
                 use_container_width=True,
             ):
-                _apply_historico_row_to_meta_editor(row)
+                _apply_historico_row_to_meta_editor(
+                    _row_for_current_period(row, data_ini, data_fim),
+                )
                 st.session_state["_meta_editor_ref_loaded_msg"] = True
                 st.rerun()
         with b_meta:
             if st.button("Usar como Meta da tela", key=meta_key, use_container_width=True):
-                _apply_historico_row_to_meta(row)
+                scaled = _row_for_current_period(row, data_ini, data_fim)
+                _apply_historico_row_to_meta(scaled)
                 st.session_state["funil_meta_loaded_db_id"] = row.get("meta_db_id")
+                prop = scaled.get("meta_mensal_proporcao")
+                if isinstance(prop, MetaMensalProporcao):
+                    st.session_state["funil_meta_proporcao"] = prop
+                st.session_state["_meta_user_override"] = True
                 st.rerun()
     else:
         b_sim, _ = st.columns([2, 4], gap="small")
         with b_sim:
             if st.button("Carregar no Simulador", key=sim_key, use_container_width=True):
-                _apply_historico_row_to_sim(row)
+                _apply_historico_row_to_sim(_row_for_current_period(row, data_ini, data_fim))
                 st.rerun()
         st.caption(
             "Entre como editor de metas para carregar referências no "
@@ -3585,6 +3709,7 @@ def _render_referencia_acoes(
             st.session_state.pop("funil_meta_delete_confirm", None)
             st.session_state.pop("funil_metas_db_sel_idx", None)
             st.success("Meta excluída com sucesso.")
+            st.session_state["_meta_deleted_reload"] = True
             st.rerun()
 
 
@@ -3627,6 +3752,8 @@ def _render_referencia_dados_reais(
     )
     _render_referencia_acoes(
         row,
+        data_ini=data_ini,
+        data_fim=data_fim,
         can_edit_meta=can_edit_meta,
         sim_key="funil_ref_real_sim",
         editor_key="funil_ref_real_editor",
@@ -3635,7 +3762,12 @@ def _render_referencia_dados_reais(
     return rows
 
 
-def _render_referencia_metas_oficiais(*, can_edit_meta: bool) -> None:
+def _render_referencia_metas_oficiais(
+    *,
+    data_ini: date,
+    data_fim: date,
+    can_edit_meta: bool,
+) -> None:
     if not is_metas_database_configured():
         st.info(
             "Configure `METAS_DATABASE_URL` no `.env` ou nos Secrets do Streamlit "
@@ -3644,15 +3776,28 @@ def _render_referencia_metas_oficiais(*, can_edit_meta: bool) -> None:
         return
 
     try:
-        rows = load_metas_funil_historico(limit=100)
+        rows, prop = load_metas_funil_mensal_for_selection(data_ini, data_fim)
+        st.session_state["funil_meta_proporcao"] = prop
     except MetasDatabaseNotConfiguredError:
         return
     except Exception as exc:
         st.warning(f"Não foi possível carregar metas oficiais salvas: {exc}")
         return
 
+    if prop.multi_mes:
+        st.info(
+            "Período em mais de um mês civil. Listagem de metas mensais por mês "
+            "será habilitada em breve."
+        )
+        return
+
     if not rows:
-        st.info("Nenhuma meta oficial salva ainda para este ambiente.")
+        st.info(
+            "Nenhuma meta oficial mensal salva para "
+            f"{prop.mes_label} "
+            f"({prop.mes_inicio.strftime('%d/%m/%Y')} – "
+            f"{prop.mes_fim.strftime('%d/%m/%Y')})."
+        )
         return
 
     _render_referencia_funil_table(_metas_oficiais_to_display_df(rows))
@@ -3675,6 +3820,8 @@ def _render_referencia_metas_oficiais(*, can_edit_meta: bool) -> None:
     )
     _render_referencia_acoes(
         row,
+        data_ini=data_ini,
+        data_fim=data_fim,
         can_edit_meta=can_edit_meta,
         sim_key="funil_ref_db_sim",
         editor_key="funil_ref_db_editor",
@@ -3715,7 +3862,11 @@ def _render_base_meta_referencia(
         )
 
     if origem == _ORIGEM_METAS_SALVAS:
-        _render_referencia_metas_oficiais(can_edit_meta=can_edit_meta)
+        _render_referencia_metas_oficiais(
+            data_ini=data_ini,
+            data_fim=data_fim,
+            can_edit_meta=can_edit_meta,
+        )
     else:
         _render_referencia_dados_reais(
             data_ini=data_ini,
@@ -3744,6 +3895,9 @@ def _render_meta_cenario_editor(
         return
     if st.session_state.pop("_meta_editor_ref_loaded_msg", False):
         st.success("Referência carregada no Ajuste de cenário de meta.")
+    saved_msg = st.session_state.pop("_meta_saved_msg", None)
+    if saved_msg:
+        st.success(f"Meta oficial salva: {saved_msg}.")
     restore_msg = st.session_state.pop("_meta_restore_msg", None)
     if restore_msg == "saved_latest":
         st.success(
@@ -3878,7 +4032,21 @@ def _render_meta_cenario_editor(
         pct_recebimento=meta_pct_eff,
     )
 
+    _meta_prop = resolve_meta_mensal_proporcao(data_ini, data_fim)
+    if _meta_prop.multi_mes:
+        st.caption(
+            "Período em mais de um mês civil: salvar meta oficial mensal "
+            "não está disponível nesta versão."
+        )
+    elif abs(_meta_prop.fator - 1.0) > 1e-9:
+        st.caption(
+            f"Esta meta será salva como meta oficial mensal de {_meta_prop.mes_label} "
+            f"({_meta_prop.mes_inicio.strftime('%d/%m/%Y')} – "
+            f"{_meta_prop.mes_fim.strftime('%d/%m/%Y')})."
+        )
+
     b_sim, b_save, b_reset, _ = st.columns([2, 2, 2, 2], gap="small")
+
     with b_sim:
         if st.button("Carregar no Simulador", key="meta_cfg_to_sim", use_container_width=True):
             st.session_state["funil_simulador"] = dict(meta_state)
@@ -3893,21 +4061,37 @@ def _render_meta_cenario_editor(
                 )
             else:
                 try:
-                    saved = save_funil_meta(
-                        PERIODO_TIPO_PADRAO,
-                        data_ini,
-                        data_fim,
-                        build_funil_meta_save_payload(
+                    if _meta_prop.multi_mes:
+                        st.error(
+                            "Selecione um período dentro de um único mês civil "
+                            "para salvar meta oficial mensal."
+                        )
+                    else:
+                        payload = build_funil_meta_save_payload(
                             meta_state,
                             calc_m_final,
                             pct_recebimento=float(
                                 st.session_state["funil_meta_pct_recebimento"],
                             ),
-                        ),
-                    )
-                    st.success(
-                        f"Meta oficial salva: {saved['periodo_label']}."
-                    )
+                        )
+                        payload = scale_meta_save_payload_to_monthly(
+                            payload,
+                            _meta_prop.fator,
+                        )
+                        saved = save_funil_meta(
+                            PERIODO_TIPO_PADRAO,
+                            _meta_prop.mes_inicio,
+                            _meta_prop.mes_fim,
+                            payload,
+                        )
+                        _reload_default_meta_after_db_change(
+                            data_ini,
+                            data_fim,
+                            snapshot=snapshot,
+                            seed_editor=True,
+                        )
+                        st.session_state["_meta_saved_msg"] = saved["periodo_label"]
+                        st.rerun()
                 except Exception as exc:
                     st.error(f"Não foi possível salvar a meta oficial: {exc}")
     with b_reset:
@@ -4205,6 +4389,14 @@ if "funil_simulador" not in st.session_state and _funnel_snapshot is not None:
 
 _init_meta_session_for_period(ctx.data_ini, ctx.data_fim, _funnel_snapshot)
 
+if st.session_state.pop("_meta_deleted_reload", False):
+    _reload_default_meta_after_db_change(
+        ctx.data_ini,
+        ctx.data_fim,
+        snapshot=_funnel_snapshot,
+        seed_editor=True,
+    )
+
 atual_s = Scenario(**st.session_state["funil_atual"])
 meta_tela_s = _get_meta_tela()
 _meta_pct_rec = _get_meta_pct_recebimento(
@@ -4238,6 +4430,7 @@ impactos = identificar_gargalos(
     atual_s, meta_tela_s, pct_recebimento=_pct_rec,
 )
 _render_alerta_gargalo(impactos, periodo)
+_render_meta_proporcao_caption()
 st.caption(
     "Gargalo e gaps comparam o Atual (dados reais) com a **meta da tela** "
     "(padrão, editada localmente ou carregada de um histórico)."

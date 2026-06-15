@@ -16,8 +16,11 @@ import streamlit as st
 from src.auth import (
     auth_cookie_expiry_days,
     auth_cookie_key,
+    clear_logout_pending,
     delete_cookie,
     get_cookie,
+    is_logout_pending,
+    logout_dashboard,
     resolve_env_or_secret,
     set_cookie,
 )
@@ -87,6 +90,10 @@ def is_metas_editor_authenticated() -> bool:
 
 def sync_metas_editor_session() -> bool:
     """Hidrata `session_state` a partir do cookie do editor (sem renderizar UI)."""
+    if is_logout_pending():
+        st.session_state.pop(_SESSION_KEY, None)
+        return False
+
     if st.session_state.get(_SESSION_KEY):
         return True
 
@@ -102,7 +109,7 @@ def sync_metas_editor_session() -> bool:
 
 
 def logout_metas_editor(*, rerun: bool = False) -> None:
-    """Remove só a sessão/cookie do editor de metas (login geral permanece)."""
+    """Remove sessão/cookie do editor de metas."""
     st.session_state.pop(_SESSION_KEY, None)
     st.session_state.pop("_metas_editor_just_activated", None)
     delete_cookie(_COOKIE_NAME, widget_key="metas_editor_logout")
@@ -124,7 +131,7 @@ def render_metas_editor_gate() -> bool:
         else:
             st.success("Modo editor de metas ativo.")
         if st.button("Sair do modo editor", key="metas_editor_logout_btn"):
-            logout_metas_editor(rerun=True)
+            logout_dashboard()
         return True
 
     expected = expected_metas_editor_password()
@@ -157,6 +164,7 @@ def render_metas_editor_gate() -> bool:
             )
             return False
         if hmac.compare_digest(str(pwd), str(expected)):
+            clear_logout_pending()
             activate_metas_editor(persist_cookie=True)
             st.session_state["_metas_editor_just_activated"] = True
             time.sleep(0.6)

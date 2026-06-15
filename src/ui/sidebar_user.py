@@ -196,9 +196,9 @@ def _render_account_menu() -> None:
             key="sidebar_menu_leave_editor",
             use_container_width=True,
         ):
-            from src.metas_auth import logout_metas_editor
+            from src.auth import logout_dashboard
 
-            logout_metas_editor(rerun=True)
+            logout_dashboard()
 
     if st.button("Trocar acesso", key="sidebar_menu_logout", use_container_width=True):
         from src.auth import logout_dashboard

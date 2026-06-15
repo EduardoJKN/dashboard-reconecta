@@ -7,30 +7,207 @@ manualmente no banco — o app não executa DDL em runtime.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict
-from datetime import date
+from dataclasses import asdict, dataclass
+from datetime import date, timedelta
 from typing import Any
+
+from sqlalchemy import text
 
 from src.metas_db import (
     MetasDatabaseNotConfiguredError,
     execute_metas_sql,
     execute_metas_sql_rowcount,
+    get_metas_engine,
     is_metas_database_configured,
     run_metas_sql,
 )
 from src.one_page_funnel import project_receita_from_montante
 
-PERIODO_TIPO_PADRAO = "filtro_global"
+PERIODO_TIPO_META_MENSAL = "mes"
+PERIODO_TIPO_PADRAO = PERIODO_TIPO_META_MENSAL
+LEGACY_PERIODO_TIPOS = ("filtro_global",)
+
+_MESES_PT = (
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+)
+
+_META_VOLUME_SCALE_KEYS = (
+    "investimento_mes",
+    "investimento",
+    "leads",
+    "leads_meta",
+    "aplicacoes",
+    "aplicacoes_meta",
+    "agendamentos",
+    "agendamentos_meta",
+    "comparecimento",
+    "comparecimentos",
+    "comparecimentos_meta",
+    "vendas",
+    "vendas_meta",
+    "montante",
+    "montante_meta",
+    "receita",
+    "receita_meta",
+)
+
+_META_SAVE_SCALE_KEYS = (
+    "investimento",
+    "leads_meta",
+    "aplicacoes_meta",
+    "agendamentos_meta",
+    "comparecimentos_meta",
+    "vendas_meta",
+    "montante_meta",
+    "receita_meta",
+)
+
+
+@dataclass(frozen=True)
+class MetaMensalProporcao:
+    """Proporção da meta mensal oficial para o recorte selecionado."""
+
+    mes_inicio: date
+    mes_fim: date
+    selecao_inicio: date
+    selecao_fim: date
+    dias_selecionados: int
+    dias_mes: int
+    fator: float
+    multi_mes: bool = False
+
+    @property
+    def mes_label(self) -> str:
+        return f"{_MESES_PT[self.mes_inicio.month - 1]}/{self.mes_inicio.year}"
+
+    def legenda(self) -> str | None:
+        if self.multi_mes:
+            return None
+        if abs(self.fator - 1.0) <= 1e-9:
+            return (
+                f"Meta oficial mensal de {self.mes_label} "
+                f"({self.mes_inicio.strftime('%d/%m/%Y')} – "
+                f"{self.mes_fim.strftime('%d/%m/%Y')})."
+            )
+        pct = self.fator * 100.0
+        return (
+            f"Meta oficial de {self.mes_label} proporcional ao período selecionado: "
+            f"{self.dias_selecionados} de {self.dias_mes} dias "
+            f"({pct:.1f}% da meta mensal)."
+        )
+
+
+def first_day_of_month(d: date) -> date:
+    return d.replace(day=1)
+
+
+def last_day_of_month(d: date) -> date:
+    if d.month == 12:
+        return date(d.year + 1, 1, 1) - timedelta(days=1)
+    return date(d.year, d.month + 1, 1) - timedelta(days=1)
+
+
+def days_inclusive(data_ini: date, data_fim: date) -> int:
+    return (data_fim - data_ini).days + 1
+
+
+def is_single_calendar_month(data_ini: date, data_fim: date) -> bool:
+    return data_ini.year == data_fim.year and data_ini.month == data_fim.month
+
+
+def resolve_meta_mensal_proporcao(
+    selecao_inicio: date,
+    selecao_fim: date,
+) -> MetaMensalProporcao:
+    """Calcula fator dias_selecionados / dias_mes para metas mensais."""
+    ini = _as_date(selecao_inicio)
+    fim = _as_date(selecao_fim)
+    if not is_single_calendar_month(ini, fim):
+        return MetaMensalProporcao(
+            mes_inicio=first_day_of_month(ini),
+            mes_fim=last_day_of_month(ini),
+            selecao_inicio=ini,
+            selecao_fim=fim,
+            dias_selecionados=days_inclusive(ini, fim),
+            dias_mes=days_inclusive(first_day_of_month(ini), last_day_of_month(ini)),
+            fator=1.0,
+            multi_mes=True,
+        )
+    mes_ini = first_day_of_month(ini)
+    mes_fim = last_day_of_month(ini)
+    dias_sel = days_inclusive(ini, fim)
+    dias_mes = days_inclusive(mes_ini, mes_fim)
+    fator = dias_sel / dias_mes if dias_mes > 0 else 1.0
+    return MetaMensalProporcao(
+        mes_inicio=mes_ini,
+        mes_fim=mes_fim,
+        selecao_inicio=ini,
+        selecao_fim=fim,
+        dias_selecionados=dias_sel,
+        dias_mes=dias_mes,
+        fator=fator,
+        multi_mes=False,
+    )
+
+
+def _scale_meta_row_fields(row: dict[str, Any], factor: float) -> dict[str, Any]:
+    """Escala volumes e valores totais; mantém taxas, CPL e ticket."""
+    if abs(factor - 1.0) <= 1e-12:
+        return dict(row)
+    out = dict(row)
+    for key in _META_VOLUME_SCALE_KEYS:
+        if key not in out or out[key] is None:
+            continue
+        out[key] = float(out[key]) * factor
+    scenario = out.get("scenario")
+    if isinstance(scenario, dict):
+        sc = dict(scenario)
+        sc["investimento"] = float(sc.get("investimento", 0)) * factor
+        out["scenario"] = sc
+    return out
+
+
+def scale_meta_row_to_selection(
+    row: dict[str, Any],
+    factor: float,
+) -> dict[str, Any]:
+    """Meta mensal completa → meta proporcional ao recorte selecionado."""
+    return _scale_meta_row_fields(row, factor)
+
+
+def scale_meta_save_payload_to_monthly(
+    payload: dict[str, float],
+    factor: float,
+) -> dict[str, float]:
+    """Converte payload proporcional da tela em meta mensal para persistência."""
+    if abs(factor - 1.0) <= 1e-12:
+        return dict(payload)
+    if factor <= 0:
+        return dict(payload)
+    inv = 1.0 / factor
+    out = dict(payload)
+    for key in _META_SAVE_SCALE_KEYS:
+        if key in out:
+            out[key] = float(out[key]) * inv
+    return out
+
+
+def monthly_save_bounds(selecao_inicio: date, selecao_fim: date) -> tuple[date, date]:
+    """Período civil do mês para salvar meta oficial."""
+    prop = resolve_meta_mensal_proporcao(selecao_inicio, selecao_fim)
+    return prop.mes_inicio, prop.mes_fim
 
 _LOAD_LATEST_SQL = """
 SELECT *
 FROM bi.vw_metas_funil_reconecta
 WHERE periodo_tipo = :periodo_tipo
-  AND periodo_inicio = :periodo_inicio
-  AND periodo_fim = :periodo_fim
+  AND periodo_inicio = CAST(:periodo_inicio AS DATE)
+  AND periodo_fim = CAST(:periodo_fim AS DATE)
 ORDER BY
   versao_meta DESC NULLS LAST,
   atualizado_em DESC NULLS LAST,
+  criado_em DESC NULLS LAST,
   id DESC
 LIMIT 1
 """
@@ -567,17 +744,109 @@ def load_latest_meta_funil(
     """Última meta oficial salva para o período (`bi.vw_metas_funil_reconecta`)."""
     if not is_metas_database_configured():
         return None
-    df = run_metas_sql(
-        _LOAD_LATEST_SQL,
-        {
-            "periodo_tipo": periodo_tipo,
-            "periodo_inicio": periodo_inicio,
-            "periodo_fim": periodo_fim,
-        },
-    )
-    if df.empty:
+    params = {
+        "periodo_tipo": periodo_tipo,
+        "periodo_inicio": _as_date(periodo_inicio),
+        "periodo_fim": _as_date(periodo_fim),
+    }
+    with get_metas_engine().connect() as conn:
+        row = conn.execute(text(_LOAD_LATEST_SQL), params).mappings().first()
+    if row is None:
         return None
-    return _meta_historico_row_from_db(df.iloc[0])
+    return _meta_historico_row_from_db(row)
+
+
+def load_metas_funil_for_period(
+    periodo_tipo: str,
+    periodo_inicio: date,
+    periodo_fim: date,
+) -> list[dict[str, Any]]:
+    """Todas as metas oficiais do período, da mais recente para a mais antiga."""
+    if not is_metas_database_configured():
+        return []
+    sql = """
+SELECT *
+FROM bi.vw_metas_funil_reconecta
+WHERE periodo_tipo = :periodo_tipo
+  AND periodo_inicio = CAST(:periodo_inicio AS DATE)
+  AND periodo_fim = CAST(:periodo_fim AS DATE)
+ORDER BY
+  versao_meta DESC NULLS LAST,
+  atualizado_em DESC NULLS LAST,
+  criado_em DESC NULLS LAST,
+  id DESC
+"""
+    params = {
+        "periodo_tipo": periodo_tipo,
+        "periodo_inicio": _as_date(periodo_inicio),
+        "periodo_fim": _as_date(periodo_fim),
+    }
+    df = run_metas_sql(sql, params)
+    if df.empty:
+        return []
+    return [_meta_historico_row_from_db(raw) for _, raw in df.iterrows()]
+
+
+def load_latest_meta_funil_mensal(
+    selecao_inicio: date,
+    selecao_fim: date,
+) -> tuple[dict[str, Any] | None, MetaMensalProporcao]:
+    """Última meta mensal oficial, proporcional ao recorte selecionado."""
+    prop = resolve_meta_mensal_proporcao(selecao_inicio, selecao_fim)
+    if prop.multi_mes:
+        return None, prop
+
+    row: dict[str, Any] | None = None
+    for tipo in (PERIODO_TIPO_META_MENSAL, *LEGACY_PERIODO_TIPOS):
+        row = load_latest_meta_funil(tipo, prop.mes_inicio, prop.mes_fim)
+        if row is not None:
+            break
+    if row is None:
+        for tipo in (PERIODO_TIPO_META_MENSAL, *LEGACY_PERIODO_TIPOS):
+            legacy = load_latest_meta_funil(
+                tipo, prop.selecao_inicio, prop.selecao_fim,
+            )
+            if legacy is not None:
+                legacy["meta_mensal_proporcao"] = prop
+                return legacy, prop
+        return None, prop
+
+    scaled = scale_meta_row_to_selection(row, prop.fator)
+    scaled["meta_mensal_proporcao"] = prop
+    scaled["meta_mensal_row"] = row
+    return scaled, prop
+
+
+def load_metas_funil_mensal_for_selection(
+    selecao_inicio: date,
+    selecao_fim: date,
+) -> tuple[list[dict[str, Any]], MetaMensalProporcao]:
+    """Metas mensais oficiais do mês de referência (valores mensais completos)."""
+    prop = resolve_meta_mensal_proporcao(selecao_inicio, selecao_fim)
+    if prop.multi_mes:
+        return [], prop
+
+    rows: list[dict[str, Any]] = []
+    for tipo in (PERIODO_TIPO_META_MENSAL, *LEGACY_PERIODO_TIPOS):
+        rows = load_metas_funil_for_period(tipo, prop.mes_inicio, prop.mes_fim)
+        if rows:
+            break
+    return rows, prop
+
+
+def prepare_meta_row_for_selection(
+    row: dict[str, Any],
+    selecao_inicio: date,
+    selecao_fim: date,
+) -> dict[str, Any]:
+    """Meta mensal de referência → valores proporcionais ao filtro atual."""
+    prop = resolve_meta_mensal_proporcao(selecao_inicio, selecao_fim)
+    if prop.multi_mes:
+        return dict(row)
+    scaled = scale_meta_row_to_selection(row, prop.fator)
+    scaled["meta_mensal_proporcao"] = prop
+    scaled["meta_mensal_row"] = row
+    return scaled
 
 
 def load_funil_meta(
@@ -695,11 +964,26 @@ def delete_meta_funil(meta_id: int) -> int:
 
 __all__ = [
     "MetasDatabaseNotConfiguredError",
+    "MetaMensalProporcao",
     "PERIODO_TIPO_PADRAO",
+    "PERIODO_TIPO_META_MENSAL",
+    "LEGACY_PERIODO_TIPOS",
     "is_metas_database_configured",
+    "days_inclusive",
+    "first_day_of_month",
+    "is_single_calendar_month",
+    "last_day_of_month",
     "load_funil_meta",
     "load_latest_meta_funil",
+    "load_latest_meta_funil_mensal",
+    "load_metas_funil_for_period",
+    "load_metas_funil_mensal_for_selection",
     "load_metas_funil_historico",
+    "monthly_save_bounds",
+    "prepare_meta_row_for_selection",
+    "resolve_meta_mensal_proporcao",
+    "scale_meta_row_to_selection",
+    "scale_meta_save_payload_to_monthly",
     "build_funil_meta_save_payload",
     "metas_dict_from_scenario",
     "metas_dict_to_scenario",

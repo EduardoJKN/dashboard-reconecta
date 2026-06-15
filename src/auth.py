@@ -45,6 +45,7 @@ from dotenv import load_dotenv
 _dotenv_loaded = False
 
 _AUTHED_KEY = "_reconecta_authed"
+_LOGOUT_PENDING_KEY = "_reconecta_logout_pending"
 _COOKIE_NAME = "reconecta_auth"
 _COOKIE_MANAGER_KEY = "auth_cookie_manager_init"
 _GET_ALL_KEY = "auth_cookie_get_all"
@@ -295,12 +296,35 @@ def set_cookie(
 def delete_cookie(name: str, *, widget_key: str | None = None) -> None:
     """Remove cookie via o CookieManager único do app."""
     cm = _auth_cookie_manager()
+    wkey = widget_key or f"auth_cookie_delete_{name}"
     try:
-        cm.delete(name, key=widget_key or f"auth_cookie_delete_{name}")
+        cm.delete(name, key=wkey)
+    except Exception:
+        pass
+    try:
+        expired = datetime.now() - timedelta(days=1)
+        cm.set(
+            name,
+            "",
+            expires_at=expired,
+            max_age=0,
+            path="/",
+            same_site="lax",
+            key=f"{wkey}_expire",
+        )
     except Exception:
         pass
     if _AUTH_COOKIES_KEY in st.session_state:
         st.session_state[_AUTH_COOKIES_KEY].pop(name, None)
+
+
+def is_logout_pending() -> bool:
+    """True após logout — bloqueia reidratação automática via cookie."""
+    return bool(st.session_state.get(_LOGOUT_PENDING_KEY))
+
+
+def clear_logout_pending() -> None:
+    st.session_state.pop(_LOGOUT_PENDING_KEY, None)
 
 
 def is_dashboard_authenticated() -> bool:
@@ -323,6 +347,7 @@ def _persist_dashboard_login(cookie_key: str, days: float) -> None:
 
 def logout_dashboard() -> None:
     """Encerra login geral e editor de metas; volta para a tela de login."""
+    st.session_state[_LOGOUT_PENDING_KEY] = True
     st.session_state.pop(_AUTHED_KEY, None)
     st.session_state.pop(_COOKIES_READY_KEY, None)
     st.session_state.pop(_AUTH_COOKIES_KEY, None)
@@ -362,8 +387,11 @@ def require_auth() -> None:
 
     Chame UMA VEZ no topo do `app.py`."""
     # 1) Sessão atual já autenticada — caminho rápido pós-login no mesmo run.
-    if st.session_state.get(_AUTHED_KEY):
+    if st.session_state.get(_AUTHED_KEY) and not is_logout_pending():
         return
+
+    if is_logout_pending():
+        st.session_state.pop(_AUTHED_KEY, None)
 
     expected = _expected_password()
     if not expected:
@@ -389,13 +417,14 @@ def require_auth() -> None:
     _dbg("cookies_visiveis", list(cookies.keys()))
     _dbg("tem_reconecta_auth", _COOKIE_NAME in cookies)
 
-    # 2) Cookie válido?
+    # 2) Cookie válido? (ignorado enquanto logout pendente — evita relogin automático)
     token = cookies.get(_COOKIE_NAME)
-    if token:
+    if token and not is_logout_pending():
         valid = _validate_token(str(token), cookie_key)
         _dbg("token_valido", valid)
         if valid:
             st.session_state[_AUTHED_KEY] = True
+            clear_logout_pending()
             return
 
     # 3) Form de login — AUTH_PASSWORD (visualização) ou METAS_EDITOR_PASSWORD
@@ -414,12 +443,14 @@ def require_auth() -> None:
         pwd_cmp = str(pwd).strip()
         if hmac.compare_digest(pwd_cmp, str(expected).strip()):
             logout_metas_editor()
+            clear_logout_pending()
             _persist_dashboard_login(cookie_key, days)
             time.sleep(0.6)
             st.rerun()
         elif metas_password and hmac.compare_digest(
             pwd_cmp, str(metas_password).strip()
         ):
+            clear_logout_pending()
             _persist_dashboard_login(cookie_key, days)
             activate_metas_editor(persist_cookie=True)
             st.session_state["_metas_editor_just_activated"] = True
