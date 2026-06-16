@@ -353,6 +353,22 @@ def _safe_ratio(num: float, den: float) -> float:
     return max(0.0, float(num or 0) / d)
 
 
+def _recalc_sim_cpl_from_leads(state: dict) -> None:
+    """CPL = investimento / leads (mensal) — mantém o Simulador consistente."""
+    inv = float(state.get("investimento") or 0)
+    if inv <= 0:
+        return
+    leads_mes = float(calcular_funil(Scenario(**state), "mes").get("leads") or 0)
+    if leads_mes > 0:
+        state["custo_lead"] = inv / leads_mes
+
+
+def _sync_sim_cpl_widget(state: dict, key_prefix: str) -> None:
+    """Alinha o widget de CPL ao valor derivado em `state`."""
+    if key_prefix == "simulador":
+        st.session_state[f"{key_prefix}_cl"] = float(state["custo_lead"])
+
+
 def _apply_sim_volume_mensal(stage: str, volume_mensal: float, state: dict) -> None:
     """Ajusta taxas (ou CPL) para atingir o volume mensal informado."""
     vol = max(0.0, float(volume_mensal))
@@ -386,15 +402,7 @@ def _apply_scenario_edits_from_session(
     """Lê widgets do rerun anterior e atualiza o cenário em session_state."""
     rows = _vitrine_row_specs(periodo)
 
-    for spec in rows:
-        if spec.get("sim_stage") is None and spec.get("sim_editable"):
-            wkey = _sim_widget_key(spec, key_prefix)
-            if wkey in st.session_state:
-                _apply_sim_editable(
-                    spec, state, float(st.session_state[wkey]), div=div,
-                )
-
-    for stage in _SIM_EDIT_STAGES:
+    def _apply_stage_edit(stage: str) -> None:
         smode = _sim_edit_mode_for_stage(
             stage,
             key_prefix,
@@ -408,7 +416,8 @@ def _apply_scenario_edits_from_session(
                     _apply_sim_volume_mensal(
                         stage, float(st.session_state[wkey]) * div, state,
                     )
-            continue
+                    _sync_sim_cpl_widget(state, key_prefix)
+            return
         if smode == "volume":
             wkey = f"{key_prefix}_vol_{stage}"
             if wkey in st.session_state:
@@ -428,6 +437,22 @@ def _apply_scenario_edits_from_session(
                     raw = float(st.session_state[wkey])
                     field = _SIM_STAGE_PCT_FIELD[stage]
                     state[field] = raw / 100.0
+
+    # Leads em volume recalculam CPL — processar antes do widget de CPL.
+    _apply_stage_edit("leads")
+
+    for spec in rows:
+        if spec.get("sim_stage") is None and spec.get("sim_editable"):
+            wkey = _sim_widget_key(spec, key_prefix)
+            if wkey in st.session_state:
+                _apply_sim_editable(
+                    spec, state, float(st.session_state[wkey]), div=div,
+                )
+
+    for stage in _SIM_EDIT_STAGES:
+        if stage == "leads":
+            continue
+        _apply_stage_edit(stage)
 
 
 def _apply_simulator_from_session(
@@ -903,6 +928,23 @@ def _render_metric_label_history(
     st.markdown(block, unsafe_allow_html=True)
 
 
+def _seed_simulator_widget_keys(
+    payload: dict[str, float],
+    *,
+    periodo: str,
+) -> None:
+    """Sincroniza widgets do Simulador após aplicar cenário ou referência."""
+    prefix = "simulador"
+    div = PERIODOS[periodo]["divisor"]
+    st.session_state[f"{prefix}_inv"] = float(payload["investimento"]) / div
+    st.session_state[f"{prefix}_cl"] = float(payload["custo_lead"])
+    st.session_state[f"{prefix}_pla"] = pct_to_display_percent(payload["pct_la"])
+    st.session_state[f"{prefix}_paag"] = pct_to_display_percent(payload["pct_a_ag"])
+    st.session_state[f"{prefix}_pagc"] = pct_to_display_percent(payload["pct_ag_c"])
+    st.session_state[f"{prefix}_pcv"] = pct_to_display_percent(payload["pct_c_v"])
+    st.session_state[f"{prefix}_tk"] = float(payload["ticket"])
+
+
 def _apply_benchmark_scenario_to_sim(
     benchmark_metrics: dict[str, dict[str, Any]],
     mode: str,
@@ -915,8 +957,11 @@ def _apply_benchmark_scenario_to_sim(
         if metric:
             sim[key] = scenario_field_value(metric, mode)
     if inv is not None:
-        sim["investimento"] = inv
+        sim["investimento"] = float(inv)
+    _recalc_sim_cpl_from_leads(sim)
     st.session_state["funil_simulador"] = sim
+    periodo = st.session_state.get("funil_periodo", "mes") or "mes"
+    _seed_simulator_widget_keys(sim, periodo=periodo)
 
 
 def _benchmark_period_short(period_label: object) -> str:
@@ -1124,18 +1169,18 @@ def _render_benchmark_historico(
     b1, b2, b3, _ = st.columns([2, 2, 2, 3], gap="small")
     with b1:
         if st.button("Aplicar cenário conservador", use_container_width=True):
-            _apply_benchmark_scenario_to_sim(metrics, "conservador")
             _clear_funil_widget_keys(sim_only=True)
+            _apply_benchmark_scenario_to_sim(metrics, "conservador")
             st.rerun()
     with b2:
         if st.button("Aplicar cenário provável", use_container_width=True):
-            _apply_benchmark_scenario_to_sim(metrics, "provavel")
             _clear_funil_widget_keys(sim_only=True)
+            _apply_benchmark_scenario_to_sim(metrics, "provavel")
             st.rerun()
     with b3:
         if st.button("Aplicar cenário otimista", use_container_width=True):
-            _apply_benchmark_scenario_to_sim(metrics, "otimista")
             _clear_funil_widget_keys(sim_only=True)
+            _apply_benchmark_scenario_to_sim(metrics, "otimista")
             st.rerun()
     st.caption(
         "Conservador: ~90% das taxas (ou CPL +10%). Provável: mediana histórica. "
@@ -2441,10 +2486,11 @@ def _get_meta_pct_recebimento(
 
 
 def _apply_historico_row_to_sim(row: dict[str, Any]) -> None:
-    st.session_state["funil_simulador"] = dict(
-        normalize_reference_to_meta_payload(row),
-    )
+    payload = dict(normalize_reference_to_meta_payload(row))
     _clear_funil_widget_keys(sim_only=True)
+    st.session_state["funil_simulador"] = payload
+    periodo = st.session_state.get("funil_periodo", "mes") or "mes"
+    _seed_simulator_widget_keys(payload, periodo=periodo)
 
 
 def _apply_historico_row_to_meta(row: dict[str, Any]) -> None:
