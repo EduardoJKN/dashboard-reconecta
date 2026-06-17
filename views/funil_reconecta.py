@@ -40,6 +40,7 @@ from src.funil_benchmark import (
     HISTORICO_PERIODOS,
     classify_realism,
     compute_funil_benchmark,
+    is_full_closed_month,
     period_windows_from_ranges,
     ranges_to_cache_json,
     resolve_historical_base,
@@ -4330,23 +4331,40 @@ st.markdown(_FUNIL_CSS, unsafe_allow_html=True)
 excluir_testes_aplicacoes = _EXCLUIR_TESTES_APLICACOES
 
 st.session_state.setdefault("funil_hist_base", "90")
-hist_base_key = st.selectbox(
-    "Base histórica de comparação",
-    options=list(HISTORICO_PERIODOS.keys()),
-    format_func=lambda k: HISTORICO_PERIODOS[k]["label"],
-    key="funil_hist_base",
-    help=(
-        "Não altera o período principal da página. "
-        "Define a referência das tags históricas e da tabela Benchmark. "
-        "Em **Personalizado**, compare períodos equivalentes ao filtro atual."
-    ),
-)
+_hist_base_col, _hist_interval_col = st.columns([2, 3], gap="medium")
+with _hist_base_col:
+    hist_base_key = st.selectbox(
+        "Base histórica de comparação",
+        options=list(HISTORICO_PERIODOS.keys()),
+        format_func=lambda k: HISTORICO_PERIODOS[k]["label"],
+        key="funil_hist_base",
+        help=(
+            "Não altera o período principal da página. "
+            "Define quantos períodos anteriores entram no benchmark histórico."
+        ),
+    )
+with _hist_interval_col:
+    _period_is_full_month = is_full_closed_month(ctx.data_ini, ctx.data_fim)
+    _same_interval = st.checkbox(
+        "Comparar históricos no mesmo intervalo do período atual",
+        value=True,
+        key="funil_hist_same_interval",
+        disabled=_period_is_full_month,
+        help=(
+            "Ligado: cada mês anterior usa o mesmo recorte de dias do filtro global "
+            "(ex.: 01/06–17/06 → 01/05–17/05). "
+            "Desligado: compara meses civis fechados anteriores."
+        ),
+    )
+    if _period_is_full_month:
+        st.caption(
+            "Período atual é um mês civil fechado; a comparação usa meses completos."
+        )
 
 _custom_granularity = "mes"
 _custom_n_periods = 3
-_custom_same_interval = True
 if hist_base_key == HISTORICO_CUSTOM_KEY:
-    c_gran, c_qty, c_same = st.columns([2, 2, 3], gap="medium")
+    c_gran, c_qty = st.columns([2, 2], gap="medium")
     with c_gran:
         _custom_granularity = st.segmented_control(
             "Comparar por",
@@ -4366,16 +4384,6 @@ if hist_base_key == HISTORICO_CUSTOM_KEY:
                 key="funil_hist_custom_n",
             )
         )
-    with c_same:
-        _custom_same_interval = st.checkbox(
-            "Usar mesmo intervalo do período atual",
-            value=True,
-            key="funil_hist_custom_same",
-            help=(
-                "Aplica o mesmo recorte de dias do filtro global "
-                "em cada mês anterior (ex.: dias 1–15)."
-            ),
-        )
     if _custom_granularity != "mes":
         st.caption(
             "Semana e Dia estarão disponíveis em breve. "
@@ -4388,9 +4396,9 @@ _hist_spec = resolve_historical_base(
     base_key=hist_base_key,
     custom_granularity=_custom_granularity,
     custom_n_periods=_custom_n_periods,
-    custom_same_interval=_custom_same_interval,
+    same_interval=_same_interval,
 )
-if hist_base_key == HISTORICO_CUSTOM_KEY and _hist_spec.summary and not _hist_spec.error:
+if _hist_spec.summary and not _hist_spec.error:
     st.caption(f"Base: {_hist_spec.summary}.")
 
 _benchmark_raw: dict[str, Any] = {}

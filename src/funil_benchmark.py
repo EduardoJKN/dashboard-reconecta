@@ -62,6 +62,29 @@ def _last_day_of_month(d: date) -> date:
     return nxt - timedelta(days=1)
 
 
+def is_full_closed_month(period_ini: date, period_fim: date) -> bool:
+    """Período atual cobre um mês civil fechado (dia 1 até o último dia do mês)."""
+    if period_ini > period_fim:
+        return False
+    return (
+        period_ini.day == 1
+        and period_ini.year == period_fim.year
+        and period_ini.month == period_fim.month
+        and period_fim.day == _last_day_of_month(period_fim).day
+    )
+
+
+def effective_same_interval(
+    period_ini: date,
+    period_fim: date,
+    same_interval: bool,
+) -> bool:
+    """Checkbox sem efeito quando o período atual já é um mês fechado."""
+    if is_full_closed_month(period_ini, period_fim):
+        return False
+    return bool(same_interval)
+
+
 def _add_months(d: date, months: int) -> date:
     """Desloca `d` em meses civis, ajustando o dia em meses mais curtos."""
     y, m = d.year, d.month + months
@@ -88,12 +111,13 @@ def period_windows_from_ranges(
     ranges: list[tuple[date, date, str]],
 ) -> list[dict[str, str]]:
     """Janelas para legenda: identificador curto + intervalo completo."""
+    ordered = sorted(ranges, key=lambda item: item[0])
     return [
         {
             "short": _period_short_label(ini),
             "full": _fmt_br_range(ini, fim),
         }
-        for ini, fim, _ in ranges
+        for ini, fim, _ in ordered
     ]
 
 
@@ -189,7 +213,7 @@ class HistoricalBaseSpec:
     window_detail: str
     requested_periods: int
     custom_granularity: str | None = None
-    custom_same_interval: bool | None = None
+    same_interval: bool | None = None
     error: str | None = None
 
 
@@ -200,9 +224,13 @@ def resolve_historical_base(
     base_key: str,
     custom_granularity: str = "mes",
     custom_n_periods: int = 3,
-    custom_same_interval: bool = True,
+    same_interval: bool = True,
 ) -> HistoricalBaseSpec:
     """Monta recortes históricos conforme preset ou modo personalizado."""
+    use_same_interval = effective_same_interval(
+        page_data_ini, page_data_fim, same_interval,
+    )
+
     if base_key == HISTORICO_CUSTOM_KEY:
         if custom_granularity != "mes":
             return HistoricalBaseSpec(
@@ -215,22 +243,20 @@ def resolve_historical_base(
                 window_detail="",
                 requested_periods=custom_n_periods,
                 custom_granularity=custom_granularity,
-                custom_same_interval=custom_same_interval,
+                same_interval=use_same_interval,
                 error=(
                     "Modo personalizado por Semana ou Dia ainda não disponível. "
                     "Use **Mês** por enquanto."
                 ),
             )
-        if custom_same_interval:
+        if use_same_interval:
             ranges = build_equivalent_month_ranges(
                 page_data_ini, page_data_fim, custom_n_periods,
             )
-            interval_note = "mesmo intervalo do período atual"
         else:
             ranges = build_full_previous_month_ranges(
                 page_data_ini, custom_n_periods,
             )
-            interval_note = "meses fechados anteriores"
         if not ranges:
             return HistoricalBaseSpec(
                 ranges=[],
@@ -242,7 +268,7 @@ def resolve_historical_base(
                 window_detail="",
                 requested_periods=custom_n_periods,
                 custom_granularity=custom_granularity,
-                custom_same_interval=custom_same_interval,
+                same_interval=use_same_interval,
                 error="Não foi possível montar períodos históricos equivalentes.",
             )
         hist_ini = min(r[0] for r in ranges)
@@ -251,24 +277,32 @@ def resolve_historical_base(
             page_data_ini,
             page_data_fim,
             custom_n_periods,
-            same_interval=custom_same_interval,
+            same_interval=use_same_interval,
         )
-        window_detail = ", ".join(_fmt_br_range(ini, fim) for ini, fim, _ in ranges)
+        window_detail = ", ".join(
+            _fmt_br_range(ini, fim)
+            for ini, fim, _ in sorted(ranges, key=lambda item: item[0])
+        )
         return HistoricalBaseSpec(
             ranges=ranges,
             hist_ini=hist_ini,
             hist_fim=hist_fim,
             base_key=base_key,
             base_label=HISTORICO_PERIODOS[base_key]["label"],
-            summary=short,
+            summary=f"{HISTORICO_PERIODOS[base_key]['label']} · {short}",
             window_detail=window_detail,
             requested_periods=custom_n_periods,
             custom_granularity=custom_granularity,
-            custom_same_interval=custom_same_interval,
+            same_interval=use_same_interval,
         )
 
     months = int(HISTORICO_PERIODOS[base_key]["months"])
-    ranges = build_fixed_preset_month_ranges(page_data_ini, months)
+    if use_same_interval:
+        ranges = build_equivalent_month_ranges(
+            page_data_ini, page_data_fim, months,
+        )
+    else:
+        ranges = build_full_previous_month_ranges(page_data_ini, months)
     if not ranges:
         return HistoricalBaseSpec(
             ranges=[],
@@ -279,19 +313,31 @@ def resolve_historical_base(
             summary="",
             window_detail="",
             requested_periods=0,
+            same_interval=use_same_interval,
             error="Período principal sem histórico anterior suficiente.",
         )
     hist_ini = ranges[0][0]
     hist_fim = ranges[-1][1]
+    short = _custom_interval_summary(
+        page_data_ini,
+        page_data_fim,
+        months,
+        same_interval=use_same_interval,
+    )
+    window_detail = ", ".join(
+        _fmt_br_range(ini, fim)
+        for ini, fim, _ in sorted(ranges, key=lambda item: item[0])
+    )
     return HistoricalBaseSpec(
         ranges=ranges,
         hist_ini=hist_ini,
         hist_fim=hist_fim,
         base_key=base_key,
         base_label=HISTORICO_PERIODOS[base_key]["label"],
-        summary=HISTORICO_PERIODOS[base_key]["label"],
-        window_detail=_fmt_br_range(hist_ini, hist_fim),
+        summary=f"{HISTORICO_PERIODOS[base_key]['label']} · {short}",
+        window_detail=window_detail,
         requested_periods=len(ranges),
+        same_interval=use_same_interval,
     )
 
 
