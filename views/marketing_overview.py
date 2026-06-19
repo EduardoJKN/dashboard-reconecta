@@ -15,6 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from src.marketing_perf import (
+    PAGE_OVERVIEW,
     perf_debug_enabled,
     perf_finalize_page,
     perf_mark_kpi_rendered,
@@ -67,7 +68,8 @@ def _fetch_df(
     elapsed = time.perf_counter() - t0
     if perf_debug_enabled():
         perf_record_query(
-            name, data_ini, data_fim, elapsed, len(df), error=err,
+            name, data_ini, data_fim, elapsed, len(df),
+            page=PAGE_OVERVIEW, error=err,
         )
     return df, err
 
@@ -577,7 +579,7 @@ def _has_period_data(k: dict) -> bool:
 
 def main() -> None:
     if perf_debug_enabled():
-        perf_reset_run()
+        perf_reset_run(PAGE_OVERVIEW)
 
     ctx = start_page(
         title="Visão Geral Marketing",
@@ -599,7 +601,7 @@ def main() -> None:
     kpi_err: str | None = None
     df_kpc_reuse: pd.DataFrame | None = None
     try:
-        with perf_timed_block("KPIs principais"):
+        with perf_timed_block("KPIs principais", page=PAGE_OVERVIEW):
             k, kp, df_kpc_reuse, kpi_err = _load_primary_kpis(
                 ctx, prev_ini, prev_fim, canal_ativo,
             )
@@ -619,12 +621,12 @@ def main() -> None:
 
     if not _has_period_data(k) and (df_kpc_reuse is None or df_kpc_reuse.empty):
         st.warning("Sem dados para o período selecionado.")
-        perf_finalize_page()
-        perf_render_panel()
+        perf_finalize_page(PAGE_OVERVIEW)
+        perf_render_panel(PAGE_OVERVIEW)
         st.stop()
 
     _render_captions(canal_ativo)
-    perf_mark_kpi_rendered()
+    perf_mark_kpi_rendered(PAGE_OVERVIEW)
 
     _render_visao_executiva(ctx, k, kp, dias)
     _render_geracao_leads(k, kp, canal_ativo, canais_sel)
@@ -634,7 +636,7 @@ def main() -> None:
     df_vg_all = pd.DataFrame()
     try:
         with st.spinner("Carregando tendência diária…"):
-            with perf_timed_block("Tendência diária"):
+            with perf_timed_block("Tendência diária", page=PAGE_OVERVIEW):
                 df_vg_all, trend_err = _load_daily_trend(ctx)
         if trend_err:
             st.error("Não foi possível carregar a tendência diária.")
@@ -654,7 +656,7 @@ def main() -> None:
     df_kpc_all = df_kpc_reuse if canal_ativo else pd.DataFrame()
     if not canal_ativo:
         try:
-            with perf_timed_block("Por canal"):
+            with perf_timed_block("Por canal", page=PAGE_OVERVIEW):
                 df_kpc_all, canal_err = _load_channel_breakdown(ctx)
             if canal_err:
                 section_title("Por canal",
@@ -677,8 +679,8 @@ def main() -> None:
     # --- P5: Detalhamento on-demand ---
     _render_detalhamento(ctx, col_map, canais_sel)
 
-    perf_finalize_page()
-    perf_render_panel()
+    perf_finalize_page(PAGE_OVERVIEW)
+    perf_render_panel(PAGE_OVERVIEW)
 
 
 main()

@@ -665,13 +665,17 @@ def render_funil_selecionado(
     section_subtitle: str = "investimento → vendas novas",
     sel_state_key: str = "funil_selecionado",
     lista_fn: Callable[[pd.DataFrame, str], pd.DataFrame] | None = None,
-    kpis_fn: Callable[[pd.DataFrame, str | None], dict] | None = None,
+    kpis_fn: Callable[..., dict] | None = None,
     etapas_fn: Callable[[dict], tuple[list[str], list[float]]] | None = None,
     etapas_aplicacoes_fn: Callable[[dict], tuple[list[str], list[float]]] | None = None,
     marketing_funil_unico: bool = False,
     empty_msg: str | None = None,
     caption: str | None = None,
     expander_md: str | None = None,
+    # Carrega totais oficiais DEPOIS do selectbox (ex.: __todos__ em Campanhas).
+    oficiais_loader: Callable[[str], dict] | None = None,
+    on_selector_rendered: Callable[[], None] | None = None,
+    on_funil_cards_rendered: Callable[[], None] | None = None,
     # Auditoria (opcional) — quando data_ini/data_fim/nivel passados,
     # renderiza tabela "Conferir leads e vendas deste funil" abaixo dos
     # cards e ACIMA do expander "Como este funil é calculado?".
@@ -721,7 +725,14 @@ def render_funil_selecionado(
         key=sel_state_key,
     )
 
-    kf = kpis_fn(df_funil, sel)
+    if on_selector_rendered is not None:
+        on_selector_rendered()
+
+    oficiais: dict = {}
+    if oficiais_loader is not None:
+        oficiais = oficiais_loader(sel) or {}
+
+    kf = kpis_fn(df_funil, sel, **oficiais)
 
     _apl = int(kf.get("aplicacoes") or 0)
     _apl12 = int(kf.get("aplicacoes_mais_12") or 0)
@@ -777,6 +788,9 @@ def render_funil_selecionado(
             hint="investimento ÷ aplicações +12",
             accent=True,
         )
+
+    if on_funil_cards_rendered is not None:
+        on_funil_cards_rendered()
 
     # Esteira Mídia → Funil de Marketing
     labels_f, values_f = etapas_fn(kf)
@@ -872,7 +886,15 @@ def _render_funil_auditoria_block(
     if not item_norm:
         return
 
-    with st.expander("Conferir leads e vendas deste funil", expanded=False):
+    exp = st.expander(
+        "Conferir leads e vendas deste funil",
+        expanded=False,
+        on_change="rerun",
+    )
+    if not exp.open:
+        return
+
+    with exp:
         try:
             df_aud = get_mkt_funil_leads_auditoria(
                 data_ini, data_fim, nivel, str(item_norm),
