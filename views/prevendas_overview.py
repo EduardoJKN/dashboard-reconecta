@@ -548,12 +548,16 @@ with st.expander(
         n_venc = int((tabela_audit["É vencido"] == "Sim").sum())
         n_canc = int((tabela_audit["É cancelado"] == "Sim").sum())
         n_exib = int((tabela_audit["Entra no card (exibido)"] == "Sim").sum())
+        delta_exib = n_exib - 27
+        delta_exib_txt = int_br(delta_exib)
+        if delta_exib > 0:
+            delta_exib_txt = f"+{delta_exib_txt}"
         st.markdown(
             f"**Resumo:** {int_br(n_bruto)} brutos · "
             f"{int_br(n_venc)} vencidos removidos · "
             f"{int_br(n_canc)} cancelados no CRM (ainda no exibido) · "
             f"**{int_br(n_exib)} exibidos** · gestora: **27** · "
-            f"Δ {int_br(n_exib - 27):+d}"
+            f"Δ {delta_exib_txt}"
         )
         st.dataframe(
             tabela_audit,

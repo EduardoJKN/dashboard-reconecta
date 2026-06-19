@@ -2280,6 +2280,99 @@ def _seed_meta_editor_widget_keys(
                 )
 
 
+def _load_scenario_into_goal_adjustment(
+    payload: dict[str, float],
+    *,
+    periodo: str,
+    pct_recebimento: float,
+    volumes: dict[str, float] | None = None,
+    modes: dict[str, str] | None = None,
+) -> None:
+    """Carrega cenário no Ajuste de meta + Meta da tela (local, sem salvar no banco)."""
+    _clear_meta_editor_widget_keys()
+    st.session_state["funil_meta_tela"] = dict(payload)
+    st.session_state["funil_meta_pct_recebimento"] = float(pct_recebimento)
+    st.session_state["_meta_user_override"] = True
+    _seed_meta_editor_widget_keys(
+        payload,
+        periodo=periodo,
+        pct_recebimento=pct_recebimento,
+        volumes=volumes,
+        modes=modes,
+    )
+
+
+def _resolve_simulator_state_for_copy(
+    atual_s: Scenario,
+    periodo: str,
+    *,
+    pct_recebimento: float = 0.0,
+) -> tuple[dict[str, float], dict[str, str], dict[str, float] | None, float]:
+    """Estado mais recente do Simulador (session + widgets) para cópia ao Ajuste de meta."""
+    div = PERIODOS[periodo]["divisor"]
+    sim_state = dict(_ensure_scenario("funil_simulador", atual_s))
+    _apply_simulator_from_session(sim_state, periodo, div, "simulador")
+    _ensure_sim_edit_modes()
+    modes = dict(st.session_state.get("funil_sim_edit_modes", _DEFAULT_SIM_EDIT_MODES))
+    calc_mes = calcular_funil_exibicao(
+        Scenario(**sim_state),
+        "mes",
+        pct_recebimento=pct_recebimento,
+    )
+    vol_data: dict[str, float] = {}
+    for stage in _SIM_EDIT_STAGES:
+        if modes.get(stage) != "volume":
+            continue
+        vol_field = _SIM_STAGE_VOLUME_FIELD[stage]
+        vol_data[vol_field] = float(calc_mes[vol_field])
+    volumes: dict[str, float] | None = None
+    if vol_data:
+        mont = float(calc_mes.get("montante") or 0)
+        rec = float(calc_mes.get("receita") or 0)
+        if mont > 0:
+            vol_data["montante"] = mont
+        if rec > 0:
+            vol_data["receita"] = rec
+        volumes = vol_data
+    payload = {
+        "investimento": float(sim_state["investimento"]),
+        "custo_lead": float(sim_state["custo_lead"]),
+        "pct_la": float(sim_state["pct_la"]),
+        "pct_a_ag": float(sim_state["pct_a_ag"]),
+        "pct_ag_c": float(sim_state["pct_ag_c"]),
+        "pct_c_v": float(sim_state["pct_c_v"]),
+        "ticket": float(sim_state["ticket"]),
+    }
+    mont = float(calc_mes.get("montante") or 0)
+    rec = float(calc_mes.get("receita") or 0)
+    if mont > 0 and rec > 0:
+        pct_rec = rec / mont * 100.0
+    else:
+        pct_rec = float(pct_recebimento or 0)
+    return payload, modes, volumes, pct_rec
+
+
+def _apply_simulator_to_meta_editor(
+    *,
+    atual_s: Scenario,
+    periodo: str,
+    pct_recebimento: float,
+) -> None:
+    """Copia o cenário ativo do Simulador para o Ajuste de cenário de meta."""
+    payload, modes, volumes, pct_rec = _resolve_simulator_state_for_copy(
+        atual_s,
+        periodo,
+        pct_recebimento=pct_recebimento,
+    )
+    _load_scenario_into_goal_adjustment(
+        payload,
+        periodo=periodo,
+        pct_recebimento=pct_rec,
+        volumes=volumes,
+        modes=modes,
+    )
+
+
 def _funil_period_storage_key(data_ini: date, data_fim: date) -> str:
     return f"{data_ini.isoformat()}_{data_fim.isoformat()}"
 
@@ -2515,11 +2608,8 @@ def _apply_historico_row_to_meta_editor(row: dict[str, Any]) -> None:
         modes = dict(_DEFAULT_META_EDIT_MODES)
         volumes = None
 
-    _clear_meta_editor_widget_keys()
-    st.session_state["funil_meta_tela"] = dict(payload)
-    st.session_state["funil_meta_pct_recebimento"] = pct_rec
     periodo = st.session_state.get("funil_periodo", "mes") or "mes"
-    _seed_meta_editor_widget_keys(
+    _load_scenario_into_goal_adjustment(
         payload,
         periodo=periodo,
         pct_recebimento=pct_rec,
@@ -3929,6 +4019,8 @@ def _render_meta_cenario_editor(
     data_ini: date,
     data_fim: date,
     can_edit_meta: bool,
+    atual_s: Scenario,
+    pct_recebimento_sim: float = 0.0,
     snapshot: FunnelSnapshot | None = None,
     benchmark_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> None:
@@ -3940,6 +4032,28 @@ def _render_meta_cenario_editor(
     if not can_edit_meta:
         st.caption(METAS_VIEW_ONLY_MESSAGE)
         return
+    if st.button(
+        "Carregar Simulador no Ajuste de meta",
+        key="meta_cfg_load_from_sim",
+        use_container_width=False,
+        help=(
+            "Copia o cenário atual do Simulador para a Meta da tela em modo editor. "
+            "Não salva metas oficiais."
+        ),
+    ):
+        _apply_simulator_to_meta_editor(
+            atual_s=atual_s,
+            periodo=periodo,
+            pct_recebimento=pct_recebimento_sim,
+        )
+        st.session_state["_meta_editor_sim_loaded_msg"] = True
+        st.rerun()
+    st.caption(
+        "Use o botão acima para trazer o cenário montado no Simulador "
+        "(valores e modos Auto / % / Nº) para esta meta local."
+    )
+    if st.session_state.pop("_meta_editor_sim_loaded_msg", False):
+        st.success("Cenário do Simulador carregado no Ajuste de meta.")
     if st.session_state.pop("_meta_editor_ref_loaded_msg", False):
         st.success("Referência carregada no Ajuste de cenário de meta.")
     saved_msg = st.session_state.pop("_meta_saved_msg", None)
@@ -4595,6 +4709,8 @@ _render_meta_cenario_editor(
     data_ini=ctx.data_ini,
     data_fim=ctx.data_fim,
     can_edit_meta=_can_edit_meta,
+    atual_s=atual_s,
+    pct_recebimento_sim=_pct_rec,
     snapshot=_funnel_snapshot,
     benchmark_metrics=_benchmark_metrics,
 )

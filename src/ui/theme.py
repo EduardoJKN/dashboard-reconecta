@@ -133,10 +133,25 @@ def fmt_percent_br(v: float | int | None) -> str:
     return pct(v, casas=2)
 
 
-def int_br(v: float | int | None) -> str:
-    if v is None or v != v:
-        return "—"
-    return f"{int(v):,}".replace(",", ".")
+def int_br(v: float | int | str | None = None, default: int = 0) -> str:
+    """Inteiro pt-BR com separador de milhar (ex.: 15234 → '15.234')."""
+    try:
+        if v is None:
+            n = default
+        elif isinstance(v, str):
+            s = v.strip()
+            if s == "":
+                n = default
+            else:
+                s = s.replace(".", "").replace(",", ".")
+                n = float(s)
+        elif isinstance(v, float) and v != v:
+            n = default
+        else:
+            n = v
+        return f"{int(round(float(n))):,}".replace(",", ".")
+    except Exception:
+        return f"{int(default):,}".replace(",", ".")
 
 
 # ---------------------------------------------------------------------------
