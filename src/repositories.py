@@ -33,6 +33,18 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo vendas oficiais (Campanhas)…")
+def get_mkt_campanhas_vendas_oficiais(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Total CRM de vendas novas para Campanhas (__todos__).
+
+    Leve substituto de int(SUM(vendas)) sobre dashboard_executivas.sql —
+    cache separado de get_executivas."""
+    return run_sql_file(
+        "mkt_campanhas_vendas_oficiais.sql",
+        _date_params(data_ini, data_fim),
+    )
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Por Executiva…")
 def get_one_page_por_executiva(data_ini: date,
                                data_fim: date,

@@ -49,11 +49,12 @@ from src.marketing_transforms import (
     vendas_one_page_oficial,
 )
 from src.repositories import (
-    get_executivas,
     get_investimento_diario,
     get_leads_visao_geral,
+    get_mkt_campanhas_vendas_oficiais,
     get_prevendas_overview_diario,
 )
+from views.marketing_campaigns import _resolve_vendas_novas_oficial
 from src.transforms import _safe_div
 
 DATA_INI = date(2026, 4, 1)
@@ -66,7 +67,7 @@ _SEM = "__sem_campanha_identificada__"
 
 OFFICIAL_NAMES = {
     "leads_visao_geral",
-    "dashboard_executivas",
+    "mkt_campanhas_vendas_oficiais",
     "investimento_diario",
     "prevendas_overview_diario",
 }
@@ -117,21 +118,33 @@ def _top_kpis_new(df_camp: pd.DataFrame, df_lcd: pd.DataFrame) -> dict:
 
 def _oficiais_dict() -> dict:
     df_leads = get_leads_visao_geral(DATA_INI, DATA_FIM)
-    df_exec = get_executivas(DATA_INI, DATA_FIM)
+    df_vendas = get_mkt_campanhas_vendas_oficiais(DATA_INI, DATA_FIM)
     df_inv = get_investimento_diario(DATA_INI, DATA_FIM)
     df_prev = get_prevendas_overview_diario(DATA_INI, DATA_FIM)
+    leads_totais = int(len(df_leads)) if not df_leads.empty else None
+    investimento = (
+        float(df_inv["investimento_total"].fillna(0).sum())
+        if not df_inv.empty and "investimento_total" in df_inv.columns else None
+    )
+    agendamentos = agendamentos_one_page_oficial(df_prev)
+    comparecimentos = comparecimentos_one_page_oficial(df_prev)
+    vendas_count = (
+        int(df_vendas["vendas"].fillna(0).iloc[0])
+        if not df_vendas.empty and "vendas" in df_vendas.columns
+        else None
+    )
     return {
-        "leads_totais_oficial": int(len(df_leads)) if not df_leads.empty else None,
-        "vendas_novas_oficial": (
-            int(df_exec["vendas"].fillna(0).sum())
-            if not df_exec.empty and "vendas" in df_exec.columns else None
+        "leads_totais_oficial": leads_totais,
+        "vendas_novas_oficial": _resolve_vendas_novas_oficial(
+            vendas_count,
+            leads_totais=leads_totais,
+            investimento=investimento,
+            agendamentos=agendamentos,
+            comparecimentos=comparecimentos,
         ),
-        "investimento_oficial": (
-            float(df_inv["investimento_total"].fillna(0).sum())
-            if not df_inv.empty and "investimento_total" in df_inv.columns else None
-        ),
-        "agendamentos_oficial": agendamentos_one_page_oficial(df_prev),
-        "comparecimentos_oficial": comparecimentos_one_page_oficial(df_prev),
+        "investimento_oficial": investimento,
+        "agendamentos_oficial": agendamentos,
+        "comparecimentos_oficial": comparecimentos,
         "vendas_oficial": vendas_one_page_oficial(df_prev),
     }
 
@@ -177,7 +190,7 @@ def _simulate_query_paths() -> None:
         ],
         "opt_todos_funil": [
             "bi.vw_mkt_campanhas", "leads_canal_diario", "mkt_campanha_funil",
-            "leads_visao_geral", "dashboard_executivas",
+            "leads_visao_geral", "mkt_campanhas_vendas_oficiais",
             "investimento_diario", "prevendas_overview_diario",
         ],
         "opt_campanha_funil": [
@@ -185,7 +198,7 @@ def _simulate_query_paths() -> None:
         ],
         "opt_full_sem_lazy": [
             "bi.vw_mkt_campanhas", "leads_canal_diario", "mkt_campanha_funil",
-            "leads_visao_geral", "dashboard_executivas",
+            "leads_visao_geral", "mkt_campanhas_vendas_oficiais",
             "investimento_diario", "prevendas_overview_diario",
             "leads_por_utm", "paginas_variantes",
         ],

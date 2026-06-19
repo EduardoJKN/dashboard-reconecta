@@ -40,9 +40,9 @@ from src.marketing_queries import (
 )
 from src.marketing_safe import safe_run
 from src.repositories import (
-    get_executivas,
     get_investimento_diario,
     get_leads_visao_geral,
+    get_mkt_campanhas_vendas_oficiais,
     get_prevendas_overview_diario,
 )
 from src.marketing_transforms import (
@@ -252,6 +252,25 @@ def _render_financeiro_volume(
         )
 
 
+def _resolve_vendas_novas_oficial(
+    vendas_count: int | None,
+    *,
+    leads_totais: int | None,
+    investimento: float | None,
+    agendamentos: int | None,
+    comparecimentos: int | None,
+) -> int | None:
+    """Preserva None quando a fonte falha ou o periodo nao tem dados oficiais."""
+    if vendas_count is None:
+        return None
+    if vendas_count == 0 and all(
+        v is None
+        for v in (leads_totais, investimento, agendamentos, comparecimentos)
+    ):
+        return None
+    return vendas_count
+
+
 def _load_oficiais_todos(ctx: PageContext) -> dict:
     """Carrega as 4 fontes oficiais — somente para __todos__."""
     _df_leads, _ = _fetch_df(
@@ -265,17 +284,19 @@ def _load_oficiais_todos(ctx: PageContext) -> dict:
         else None
     )
 
-    _df_exec, _ = _fetch_df(
-        "dashboard_executivas",
-        lambda: get_executivas(ctx.data_ini, ctx.data_fim),
+    _df_vendas, err_vendas = _fetch_df(
+        "mkt_campanhas_vendas_oficiais",
+        lambda: get_mkt_campanhas_vendas_oficiais(ctx.data_ini, ctx.data_fim),
         ctx.data_ini, ctx.data_fim,
     )
-    _vendas_novas = (
-        int(_df_exec["vendas"].fillna(0).sum())
-        if (_df_exec is not None and not _df_exec.empty
-            and "vendas" in _df_exec.columns)
-        else None
-    )
+    _vendas_count: int | None = None
+    if (
+        not err_vendas
+        and _df_vendas is not None
+        and not _df_vendas.empty
+        and "vendas" in _df_vendas.columns
+    ):
+        _vendas_count = int(_df_vendas["vendas"].fillna(0).iloc[0])
 
     _df_inv, _ = _fetch_df(
         "investimento_diario",
@@ -295,6 +316,13 @@ def _load_oficiais_todos(ctx: PageContext) -> dict:
         if (_df_inv is not None and not _df_inv.empty
             and "investimento_total" in _df_inv.columns)
         else None
+    )
+    _vendas_novas = _resolve_vendas_novas_oficial(
+        _vendas_count,
+        leads_totais=_leads_totais,
+        investimento=_investimento,
+        agendamentos=_agendamentos,
+        comparecimentos=_comparecimentos,
     )
 
     _oficiais_status = [

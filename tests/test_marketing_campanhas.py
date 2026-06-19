@@ -4,6 +4,8 @@ Nao dependem do banco de producao."""
 from __future__ import annotations
 
 import unittest
+from datetime import date
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -332,6 +334,228 @@ class TestCampanhasTabela(unittest.TestCase):
         self.assertAlmostEqual(row["ctr"], _safe_div(160, 8000) * 100)
         self.assertAlmostEqual(row["cpc"], _safe_div(800.0, 160))
         self.assertAlmostEqual(row["cpl"], _safe_div(800.0, 25))
+
+
+class TestResolveVendasNovasOficial(unittest.TestCase):
+    def _resolve(self, vendas_count, **kwargs):
+        from views.marketing_campaigns import _resolve_vendas_novas_oficial
+
+        defaults = {
+            "leads_totais": None,
+            "investimento": None,
+            "agendamentos": None,
+            "comparecimentos": None,
+        }
+        defaults.update(kwargs)
+        return _resolve_vendas_novas_oficial(vendas_count, **defaults)
+
+    def test_falha_consulta_retorna_none(self):
+        self.assertIsNone(self._resolve(None))
+
+    def test_periodo_sem_dados_retorna_none(self):
+        self.assertIsNone(self._resolve(0))
+
+    def test_zero_com_outras_fontes_retorna_zero(self):
+        self.assertEqual(self._resolve(0, leads_totais=10), 0)
+
+    def test_valor_positivo(self):
+        self.assertEqual(self._resolve(49, leads_totais=100), 49)
+
+
+class TestCampanhasOficiaisVendasIntegration(unittest.TestCase):
+    def _ctx(self) -> MagicMock:
+        ctx = MagicMock()
+        ctx.data_ini = date(2026, 4, 1)
+        ctx.data_fim = date(2026, 4, 30)
+        return ctx
+
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns._fetch_df")
+    def test_todos_usa_nova_fonte_vendas(self, mock_fetch, _mock_st):
+        from views.marketing_campaigns import _load_oficiais_todos
+
+        mock_fetch.side_effect = [
+            (pd.DataFrame({"x": [1, 2]}), None),
+            (pd.DataFrame({"vendas": [49]}), None),
+            (pd.DataFrame({"investimento_total": [1000.0]}), None),
+            (pd.DataFrame(), None),
+        ]
+        out = _load_oficiais_todos(self._ctx())
+        names = [c.args[0] for c in mock_fetch.call_args_list]
+        self.assertIn("mkt_campanhas_vendas_oficiais", names)
+        self.assertNotIn("dashboard_executivas", names)
+        self.assertEqual(out["vendas_novas_oficial"], 49)
+        self.assertEqual(out["leads_totais_oficial"], 2)
+
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns._fetch_df")
+    def test_erro_consulta_mantem_fallback(self, mock_fetch, _mock_st):
+        from views.marketing_campaigns import _load_oficiais_todos
+
+        mock_fetch.side_effect = [
+            (pd.DataFrame({"x": [1]}), None),
+            (pd.DataFrame(), "erro sql"),
+            (pd.DataFrame({"investimento_total": [100.0]}), None),
+            (pd.DataFrame(), None),
+        ]
+        out = _load_oficiais_todos(self._ctx())
+        self.assertIsNone(out["vendas_novas_oficial"])
+
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns._fetch_df")
+    def test_dataframe_vazio_periodo_sem_dados(self, mock_fetch, _mock_st):
+        from views.marketing_campaigns import _load_oficiais_todos
+
+        mock_fetch.side_effect = [
+            (pd.DataFrame(), None),
+            (pd.DataFrame({"vendas": [0]}), None),
+            (pd.DataFrame(), None),
+            (pd.DataFrame(), None),
+        ]
+        out = _load_oficiais_todos(self._ctx())
+        self.assertIsNone(out["vendas_novas_oficial"])
+
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns._fetch_df")
+    def test_oficial_substitui_funil_sem_alterar_leads(self, mock_fetch, _mock_st):
+        from views.marketing_campaigns import _load_oficiais_todos
+
+        mock_fetch.side_effect = [
+            (pd.DataFrame({"x": range(854)}), None),
+            (pd.DataFrame({"vendas": [50]}), None),
+            (pd.DataFrame({"investimento_total": [102_199.89]}), None),
+            (pd.DataFrame(), None),
+        ]
+        out = _load_oficiais_todos(self._ctx())
+        self.assertEqual(out["vendas_novas_oficial"], 50)
+        self.assertEqual(out["leads_totais_oficial"], 854)
+        self.assertAlmostEqual(out["investimento_oficial"], 102_199.89)
+
+    def test_funil_kpis_outras_metricas_inalteradas_pelo_override_vendas(self):
+        df = _funil_df([
+            _camp_row("camp_a", "Camp A", invest=100.0, leads=10, vendas=1),
+            _camp_row("camp_b", "Camp B", invest=200.0, leads=20, vendas=2),
+        ])
+        k_base = campanha_funil_kpis(df, _TODOS)
+        k_off = campanha_funil_kpis(
+            df, _TODOS,
+            leads_totais_oficial=854,
+            vendas_novas_oficial=50,
+            investimento_oficial=102_199.89,
+        )
+        for key in (
+            "aplicacoes", "aplicacoes_mais_12", "aplicacoes_menos_12",
+            "impressoes", "cliques", "leads_mais_12", "leads_menos_12",
+        ):
+            self.assertEqual(k_base[key], k_off[key], key)
+        self.assertEqual(k_off["vendas_novas"], 50)
+        self.assertNotEqual(k_base["vendas_novas"], k_off["vendas_novas"])
+
+    @patch("views.marketing_campaigns.perf_timed_block")
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns._load_oficiais_todos")
+    def test_vinculados_nao_carrega_oficiais(
+        self, mock_load, _mock_st, mock_block,
+    ):
+        from views.marketing_campaigns import _oficiais_loader_factory
+
+        mock_block.return_value.__enter__ = MagicMock(return_value=None)
+        mock_block.return_value.__exit__ = MagicMock(return_value=False)
+        loader = _oficiais_loader_factory(self._ctx())
+        self.assertEqual(loader("__vinculados__"), {})
+        mock_load.assert_not_called()
+
+    @patch("views.marketing_campaigns.perf_timed_block")
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns._load_oficiais_todos")
+    def test_sem_campanha_nao_carrega_oficiais(
+        self, mock_load, _mock_st, mock_block,
+    ):
+        from views.marketing_campaigns import _oficiais_loader_factory
+
+        mock_block.return_value.__enter__ = MagicMock(return_value=None)
+        mock_block.return_value.__exit__ = MagicMock(return_value=False)
+        loader = _oficiais_loader_factory(self._ctx())
+        self.assertEqual(loader("__sem_campanha_identificada__"), {})
+        mock_load.assert_not_called()
+
+    @patch("views.marketing_campaigns.perf_timed_block")
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns._load_oficiais_todos")
+    def test_campanha_individual_nao_carrega_oficiais(
+        self, mock_load, _mock_st, mock_block,
+    ):
+        from views.marketing_campaigns import _oficiais_loader_factory
+
+        mock_block.return_value.__enter__ = MagicMock(return_value=None)
+        mock_block.return_value.__exit__ = MagicMock(return_value=False)
+        loader = _oficiais_loader_factory(self._ctx())
+        self.assertEqual(loader("camp_alpha"), {})
+        mock_load.assert_not_called()
+
+    @patch("src.repositories.get_executivas")
+    @patch("views.marketing_campaigns.get_prevendas_overview_diario")
+    @patch("views.marketing_campaigns.get_investimento_diario")
+    @patch("views.marketing_campaigns.get_leads_visao_geral")
+    @patch("views.marketing_campaigns.get_mkt_campanhas_vendas_oficiais")
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns.safe_run")
+    def test_get_executivas_nao_chamado_pelo_loader(
+        self,
+        mock_safe,
+        _mock_st,
+        mock_vendas,
+        mock_leads,
+        mock_inv,
+        mock_prev,
+        mock_exec,
+    ):
+        from views.marketing_campaigns import _load_oficiais_todos
+
+        mock_leads.return_value = pd.DataFrame({"x": [1]})
+        mock_vendas.return_value = pd.DataFrame({"vendas": [49]})
+        mock_inv.return_value = pd.DataFrame({"investimento_total": [100.0]})
+        mock_prev.return_value = pd.DataFrame()
+        mock_exec.return_value = pd.DataFrame({"vendas": [999]})
+
+        def _safe(fn, **_kw):
+            return fn()
+
+        mock_safe.side_effect = _safe
+        _load_oficiais_todos(self._ctx())
+        mock_vendas.assert_called_once()
+        mock_exec.assert_not_called()
+
+    @patch("views.marketing_campaigns.perf_timed_block")
+    @patch("views.marketing_campaigns.st")
+    @patch("views.marketing_campaigns._load_oficiais_todos")
+    def test_todos_dispara_loader(self, mock_load, _mock_st, mock_block):
+        from views.marketing_campaigns import _oficiais_loader_factory
+
+        mock_block.return_value.__enter__ = MagicMock(return_value=None)
+        mock_block.return_value.__exit__ = MagicMock(return_value=False)
+        mock_load.return_value = {"vendas_novas_oficial": 49}
+        loader = _oficiais_loader_factory(self._ctx())
+        out = loader("__todos__")
+        mock_load.assert_called_once()
+        self.assertEqual(out["vendas_novas_oficial"], 49)
+
+
+class TestGetMktCampanhasVendasOficiaisCache(unittest.TestCase):
+    @patch("src.repositories.run_sql_file")
+    def test_sql_executada_no_maximo_uma_vez_por_periodo(self, mock_sql):
+        from src.repositories import get_mkt_campanhas_vendas_oficiais
+
+        mock_sql.return_value = pd.DataFrame([{"vendas": 49}])
+        get_mkt_campanhas_vendas_oficiais.clear()
+        di, df = date(2026, 4, 1), date(2026, 4, 30)
+        get_mkt_campanhas_vendas_oficiais(di, df)
+        get_mkt_campanhas_vendas_oficiais(di, df)
+        self.assertEqual(mock_sql.call_count, 1)
+        mock_sql.assert_called_with(
+            "mkt_campanhas_vendas_oficiais.sql",
+            {"data_ini": di, "data_fim": df},
+        )
 
 
 if __name__ == "__main__":

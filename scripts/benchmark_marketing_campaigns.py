@@ -53,6 +53,10 @@ Q_LEADS_UTM = ("ext_reconecta.leads (por utm_campaign)", "mkt_campanhas_leads_po
 Q_CAMP_FUNIL = ("mkt_campanha_funil", "mkt_campanha_funil.sql")
 Q_LEADS_VG = ("leads_visao_geral", "leads_visao_geral.sql")
 Q_EXEC = ("dashboard_executivas", "dashboard_executivas.sql")
+Q_VENDAS_OFICIAIS = (
+    "mkt_campanhas_vendas_oficiais",
+    "mkt_campanhas_vendas_oficiais.sql",
+)
 Q_INV = ("investimento_diario", "investimento_diario.sql")
 Q_PREV = ("prevendas_overview_diario", "prevendas_overview_diario.sql")
 Q_PAGINAS = (
@@ -120,7 +124,7 @@ def optimized_flow(scenario: str) -> tuple[float, int, float, float, list[dict]]
     sel_end = time.perf_counter() - t0
 
     if scenario == "todos":
-        for q in (Q_LEADS_VG, Q_EXEC, Q_INV, Q_PREV):
+        for q in (Q_LEADS_VG, Q_VENDAS_OFICIAIS, Q_INV, Q_PREV):
             sec, rows, cols = _run(*q)
             details.append({"name": q[0], "seconds": sec, "rows": rows, "cols": cols})
 
@@ -200,9 +204,9 @@ def _run_app_flow_cached(
         get_mkt_paginas_variantes,
     )
     from src.repositories import (
-        get_executivas,
         get_investimento_diario,
         get_leads_visao_geral,
+        get_mkt_campanhas_vendas_oficiais,
         get_prevendas_overview_diario,
     )
 
@@ -230,7 +234,7 @@ def _run_app_flow_cached(
 
     if scenario == "todos":
         get_leads_visao_geral(DATA_INI, DATA_FIM)
-        get_executivas(DATA_INI, DATA_FIM)
+        get_mkt_campanhas_vendas_oficiais(DATA_INI, DATA_FIM)
         get_investimento_diario(DATA_INI, DATA_FIM)
         get_prevendas_overview_diario(DATA_INI, DATA_FIM)
     t_funil = time.perf_counter() - t0
@@ -411,6 +415,34 @@ def main() -> None:
         _print_stats("Ate seletor", camp_sel)
         print("Detalhe funil path (1 run):")
         _print_detail(camp_details)
+
+        print(
+            "\n=== VENDAS OFICIAIS SQL (wall time run_sql_file, PG buffers nao controlados) ==="
+        )
+        old_wall, new_wall = [], []
+        old_rows, new_rows = 0, 0
+        old_cols, new_cols = 0, 0
+        for _ in range(min(5, args.runs)):
+            sec, rows, cols = _run(*Q_EXEC)
+            old_wall.append(sec)
+            old_rows, old_cols = rows, cols
+            sec, rows, cols = _run(*Q_VENDAS_OFICIAIS)
+            new_wall.append(sec)
+            new_rows, new_cols = rows, cols
+        _print_stats("dashboard_executivas.sql (wall)", old_wall)
+        _print_stats("mkt_campanhas_vendas_oficiais.sql (wall)", new_wall)
+        p50_old = statistics.median(old_wall)
+        p50_new = statistics.median(new_wall)
+        if p50_old > 0:
+            pct = (1 - p50_new / p50_old) * 100
+            print(
+                f"Reducao wall p50: {pct:.1f}% "
+                f"({p50_old:.3f}s -> {p50_new:.3f}s)"
+            )
+        print(
+            f"Payload antigo: {old_rows} rows x {old_cols} cols | "
+            f"novo: {new_rows} rows x {new_cols} cols"
+        )
         return
 
     runs = args.runs
