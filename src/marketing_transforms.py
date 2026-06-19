@@ -23,6 +23,15 @@ CANAIS_VISIVEIS_OVERVIEW = (
 )
 
 
+def filtro_canal_ativo(canais_sel: list[str] | None) -> bool:
+    """True quando o usuário restringiu a um subconjunto real de canais.
+
+    Lista vazia (= widget “Todos”) e seleção igual a CANAIS_VISIVEIS_OVERVIEW
+    representam o total geral — filtro inativo."""
+    canais = list(canais_sel or [])
+    return bool(canais) and set(canais) != set(CANAIS_VISIVEIS_OVERVIEW)
+
+
 def filtro_canais_padrao(canais: tuple[str, ...] = CANAIS_PADRAO) -> pd.DataFrame:
     """DataFrame sintético — 1 linha por canal — usado para popular o filtro
     de canal mesmo quando algum canal está sem dados no período. Garante que
