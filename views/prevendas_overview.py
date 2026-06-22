@@ -26,7 +26,6 @@ from src.prevendas_transforms import (
     prevendas_sdrs_brutos_para_oficial,
 )
 from src.repositories import (
-    get_executivas,
     get_investimento_diario,
     get_prevendas_cohort_agendamentos,
     get_prevendas_cohort_leads,
@@ -37,7 +36,7 @@ from src.repositories import (
     get_prevendas_por_sdr,
     get_prevendas_sdrs_oficiais,
 )
-from src.transforms import _safe_div, visao_geral_kpis
+from src.transforms import _safe_div
 from src.team_classification import classify_sdr, is_known_sdr
 from src.ui.charts import bar_ranked, funnel
 from src.ui.components import metric_card_v2, section_title
@@ -122,14 +121,21 @@ try:
 except Exception:
     leads_mais_12_card = leads_menos_12_card = leads_nao_atua_card = None
 
-# Investido — mesma fonte/cálculo da One Page (Vendas/Financeiro):
-# `get_investimento_diario` → `bi.vw_investimento_diario` +
-# `visao_geral_kpis` (soma do período + contagem de dias em executivas).
+# Investido — `bi.vw_investimento_diario` (soma do período + dias distintos).
+# CP2: dias vêm da própria série de investimento (equivalente à contagem
+# via `dashboard_executivas`, validado nos períodos de teste).
 # Não responde a filtros de SDR/Tipo SDR (investimento é global).
 try:
     df_inv_periodo = get_investimento_diario(ctx.data_ini, ctx.data_fim)
-    df_exec_inv = get_executivas(ctx.data_ini, ctx.data_fim)
-    k_investido = visao_geral_kpis(df_exec_inv, df_inv_periodo)
+    if df_inv_periodo is not None and not df_inv_periodo.empty:
+        k_investido = {
+            "investimento": float(df_inv_periodo["investimento_total"].sum()),
+            "dias": int(
+                pd.to_datetime(df_inv_periodo["data_ref"]).dt.date.nunique()
+            ),
+        }
+    else:
+        k_investido = {"investimento": 0, "dias": 0}
 except Exception:
     k_investido = {"investimento": 0, "dias": 0}
 
@@ -144,9 +150,9 @@ df_sdr_filt = ctx.apply_filters(
 # globais. Quando o usuário seleciona SDR/Tipo SDR no header, recompomos
 # o df_diario a partir do df_detalhe (que tem SDR atribuído por activity
 # e por venda), preservando os totais de Leads (não atribuíveis a SDR).
-df_det_norm_global = prevendas_anotar_tipo_sdr_detalhe(
-    prevendas_normalizar_detalhe(df_detalhe)
-)
+# Normalização única — reutilizada em ranking, tabela e auditoria local.
+df_det_norm_base = prevendas_normalizar_detalhe(df_detalhe)
+df_det_norm_global = prevendas_anotar_tipo_sdr_detalhe(df_det_norm_base)
 sdr_sel_global      = list(ctx.selections.get("sdr") or [])
 tipo_sdr_sel_global = list(ctx.selections.get("tipo_sdr") or [])
 filtros_globais_ativos = bool(sdr_sel_global or tipo_sdr_sel_global)
@@ -168,9 +174,13 @@ if filtros_globais_ativos and df_det_norm_global is not None and not df_det_norm
     if tipo_sdr_sel_global:
         _mask_global_det &= df_det_norm_global["tipo_sdr_filtro"].isin(tipo_sdr_sel_global)
     df_detalhe_view = df_detalhe.loc[_mask_global_det].copy().reset_index(drop=True)
+    df_det_norm_view = (
+        df_det_norm_global.loc[_mask_global_det].copy().reset_index(drop=True)
+    )
 else:
     df_diario_view = df_diario
     df_detalhe_view = df_detalhe
+    df_det_norm_view = df_det_norm_global
 
 k = prevendas_overview_kpis(df_diario_view)
 agendamentos_brutos = int(k["agendamentos"])
@@ -515,6 +525,21 @@ with r2c5:
 # Auditoria temporária — Agendamentos 10/06/2026 (não altera o card)
 # ---------------------------------------------------------------------------
 _AUDITORIA_AG_DIA = date(2026, 6, 10)
+_AUDITORIA_MES_INI = date(_AUDITORIA_AG_DIA.year, _AUDITORIA_AG_DIA.month, 1)
+_AUDITORIA_MES_FIM = date(_AUDITORIA_AG_DIA.year, _AUDITORIA_AG_DIA.month, 30)
+_periodo_cobre_mes_auditoria = (
+    ctx.data_ini <= _AUDITORIA_MES_INI and ctx.data_fim >= _AUDITORIA_MES_FIM
+)
+carregar_auditoria = st.checkbox(
+    "Carregar auditoria de agendamentos jun/2026",
+    value=False,
+    key="prevendas_overview_carregar_auditoria",
+    help=(
+        "Consulta o detalhe de jun/2026 só quando ativado. "
+        "Se o período selecionado já cobre jun/2026 inteiro, reutiliza os "
+        "dados já carregados."
+    ),
+)
 with st.expander(
     f"🔎 Auditoria temporária — Agendamentos {_AUDITORIA_AG_DIA.strftime('%d/%m/%Y')}",
     expanded=False,
@@ -527,21 +552,33 @@ with st.expander(
         "(canceladas permanecem no exibido). "
         "Referência esperada pela gestora: **27** exibidos."
     )
-    try:
-        # Mês inteiro — captura activities criadas antes da data da reunião.
-        _df_audit = get_prevendas_leads_detalhe_diario(
-            date(_AUDITORIA_AG_DIA.year, _AUDITORIA_AG_DIA.month, 1),
-            date(_AUDITORIA_AG_DIA.year, _AUDITORIA_AG_DIA.month, 30),
+    if not carregar_auditoria:
+        st.info(
+            "Ative **Carregar auditoria de agendamentos jun/2026** acima "
+            "para executar a consulta."
         )
-        _det_audit = prevendas_normalizar_detalhe(_df_audit)
-        tabela_audit = prevendas_auditoria_agendamentos_bruto_dia(
-            _det_audit, _AUDITORIA_AG_DIA,
-        )
-    except Exception as _e_audit:
-        st.error(f"Falha ao montar auditoria: {_e_audit}")
         tabela_audit = pd.DataFrame()
+    else:
+        try:
+            if _periodo_cobre_mes_auditoria:
+                _det_audit = df_det_norm_base
+            else:
+                # Mês inteiro — captura activities criadas antes da reunião.
+                _df_audit = get_prevendas_leads_detalhe_diario(
+                    _AUDITORIA_MES_INI,
+                    _AUDITORIA_MES_FIM,
+                )
+                _det_audit = prevendas_normalizar_detalhe(_df_audit)
+            tabela_audit = prevendas_auditoria_agendamentos_bruto_dia(
+                _det_audit, _AUDITORIA_AG_DIA,
+            )
+        except Exception as _e_audit:
+            st.error(f"Falha ao montar auditoria: {_e_audit}")
+            tabela_audit = pd.DataFrame()
 
-    if tabela_audit.empty:
+    if not carregar_auditoria:
+        pass
+    elif tabela_audit.empty:
         st.info("Nenhuma activity encontrada na base bruta para essa data.")
     else:
         n_bruto = len(tabela_audit)
@@ -894,7 +931,7 @@ with col_detalhe:
                 key=SELECTBOX_KEY,
             )
 
-            df_det_norm = prevendas_normalizar_detalhe(df_detalhe_view)
+            df_det_norm = df_det_norm_view
             mask_metrica = prevendas_detalhe_mask_por_metrica(
                 df_det_norm, ranking_metric_col, ctx.data_ini, ctx.data_fim
             )
@@ -1183,372 +1220,383 @@ with col_detalhe:
 # respeita os filtros globais SDR/Tipo SDR. Não bate com "Leads totais"
 # porque o universo aqui é deal-criado-no-período e ainda exclui SDRs
 # não oficiais — caption explica.
-section_title(
-    "Indicadores por Pré-vendas",
-    "Oportunidades recebidas, agendamentos e conversão por classificação.",
+carregar_indicadores_oport = st.checkbox(
+    "Carregar indicadores detalhados por Pré-vendas",
+    value=False,
+    key="prevendas_overview_carregar_indicadores_oport",
+    help=(
+        "Executa a consulta de oportunidades × agendamentos × conversão "
+        "somente quando ativado."
+    ),
 )
 
-try:
-    df_oport_raw = get_prevendas_oportunidades_sdr(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.error(f"Falha ao consultar oportunidades por SDR: {e}")
-    df_oport_raw = pd.DataFrame()
-
-if df_oport_raw.empty:
-    st.info("Sem oportunidades no período selecionado.")
-else:
-    from src.prevendas_transforms import _canonical_official_name
-
-    # 1) Mapear cada SDR cru pro nome oficial (mesma regra de
-    #    prevendas_ranking_sdr_oficiais). Sem mapping → vazio → fica fora.
-    if df_sdrs_oficiais is not None and not df_sdrs_oficiais.empty:
-        official_names = [
-            str(n).strip()
-            for n in df_sdrs_oficiais["nome"].dropna().tolist()
-            if str(n).strip()
-        ]
-    else:
-        official_names = []
-
-    df_oport = df_oport_raw.copy()
-    if "comparecimentos" not in df_oport.columns:
-        df_oport["comparecimentos"] = 0
-    df_oport["sdr"] = df_oport["sdr"].astype(str)
-    df_oport["sdr_oficial"] = df_oport["sdr"].apply(
-        lambda nome: _canonical_official_name(nome, official_names)
+if carregar_indicadores_oport:
+    section_title(
+        "Indicadores por Pré-vendas",
+        "Oportunidades recebidas, agendamentos e conversão por classificação.",
     )
-    df_oport = df_oport[df_oport["sdr_oficial"] != ""].copy()
 
-    # Filtro de Funil de Origem (mesmo seletor que afeta Funil/Tendência).
-    # Coluna `funil_origem` vem do GROUP BY da query —
-    # `prevendas_oportunidades_sdr.sql` agrega por (sdr × classif × funil).
-    if funil_origem_ativo and "funil_origem" in df_oport.columns:
-        df_oport = df_oport[df_oport["funil_origem"].isin(funil_origem_sel)]
+    try:
+        df_oport_raw = get_prevendas_oportunidades_sdr(ctx.data_ini, ctx.data_fim)
+    except Exception as e:
+        st.error(f"Falha ao consultar oportunidades por SDR: {e}")
+        df_oport_raw = pd.DataFrame()
 
-    if df_oport.empty:
-        st.info(
-            "Nenhuma oportunidade atribuída a SDR do cadastro oficial no "
-            "período. Veja o Top SDRs acima — pode haver SDRs fora da "
-            "composição oficial respondendo por essas oportunidades."
-        )
+    if df_oport_raw.empty:
+        st.info("Sem oportunidades no período selecionado.")
     else:
-        # 2) Pivotar (sdr × bucket) — 1 row por SDR com colunas por bucket
-        #    para oportunidades, agendamentos e vendas (3 pivots paralelos).
-        BUCKETS = ["+12", "-12", "Não atua", "Sem classif"]
-        df_oport_g = (
-            df_oport.groupby(["sdr_oficial", "classif_bucket"],
-                             as_index=False, dropna=False)
-                    .agg(oport=("oportunidades", "sum"),
-                         agend=("agendamentos", "sum"),
-                         comp=("comparecimentos", "sum"),
-                         vendas=("vendas", "sum"))
-        )
+        from src.prevendas_transforms import _canonical_official_name
 
-        def _piv(col: str) -> pd.DataFrame:
-            return (
-                df_oport_g.pivot_table(
-                    index="sdr_oficial", columns="classif_bucket",
-                    values=col, aggfunc="sum", fill_value=0,
-                ).reindex(columns=BUCKETS, fill_value=0)
-            )
-
-        piv_oport  = _piv("oport")
-        piv_agend  = _piv("agend")
-        piv_comp   = _piv("comp")
-        piv_vendas = _piv("vendas")
-
-        tabela = pd.DataFrame({
-            "SDR / Pré-vendas":           piv_oport.index,
-            "oport_total":                piv_oport.sum(axis=1).values,
-            "oport_+12":                  piv_oport["+12"].values,
-            "oport_-12":                  piv_oport["-12"].values,
-            "oport_nao_atua":             piv_oport["Não atua"].values,
-            "oport_sem_classif":          piv_oport["Sem classif"].values,
-            "agend_+12":                  piv_agend["+12"].values,
-            "agend_-12":                  piv_agend["-12"].values,
-            "agend_nao_atua":             piv_agend["Não atua"].values,
-            "agend_total":                piv_agend.sum(axis=1).values,
-            "comp_+12":                   piv_comp["+12"].values,
-            "comp_-12":                   piv_comp["-12"].values,
-            "comp_nao_atua":              piv_comp["Não atua"].values,
-            "comp_total":                 piv_comp.sum(axis=1).values,
-            "vendas_+12":                 piv_vendas["+12"].values,
-            "vendas_-12":                 piv_vendas["-12"].values,
-            "vendas_nao_atua":            piv_vendas["Não atua"].values,
-            "vendas_total":               piv_vendas.sum(axis=1).values,
-        })
-
-        # 3) Tipo SDR (para filtro global Tipo SDR).
-        tabela["tipo_sdr"] = tabela["SDR / Pré-vendas"].apply(classify_sdr)
-
-        # 4) Aplicar filtros globais (SDR / Tipo SDR).
-        if sdr_sel_global:
-            tabela = tabela[tabela["SDR / Pré-vendas"].isin(sdr_sel_global)]
-        if tipo_sdr_sel_global:
-            tabela = tabela[tabela["tipo_sdr"].isin(tipo_sdr_sel_global)]
-
-        if tabela.empty:
-            st.info("Sem SDRs no recorte dos filtros SDR / Tipo SDR.")
+        # 1) Mapear cada SDR cru pro nome oficial (mesma regra de
+        #    prevendas_ranking_sdr_oficiais). Sem mapping → vazio → fica fora.
+        if df_sdrs_oficiais is not None and not df_sdrs_oficiais.empty:
+            official_names = [
+                str(n).strip()
+                for n in df_sdrs_oficiais["nome"].dropna().tolist()
+                if str(n).strip()
+            ]
         else:
-            # 5) Métricas Looker-style. Pré-calculadas pra usar tanto no
-            #    modo "Percentuais" quanto nos totais do caption.
-            #    % Agendamento  = Agend / Oport
-            #    % Ag. +12      = Agend +12 / Oport +12
-            #    % Ag. -12      = Agend -12 / Oport -12
-            #    % Ag. Não atua = Agend Não atua / Oport Não atua
-            #    % Conversão    = Vendas / Agendamentos       (padrão Looker)
-            #    % Conv. +12    = Vendas +12 / Agend +12
-            def _ratio(num, den):
-                return (num / den * 100.0) if den else None
+            official_names = []
 
-            tabela["pct_agend"]          = tabela.apply(
-                lambda r: _ratio(r["agend_total"],   r["oport_total"]),    axis=1)
-            tabela["pct_agend_+12"]      = tabela.apply(
-                lambda r: _ratio(r["agend_+12"],     r["oport_+12"]),      axis=1)
-            tabela["pct_agend_-12"]      = tabela.apply(
-                lambda r: _ratio(r["agend_-12"],     r["oport_-12"]),      axis=1)
-            tabela["pct_agend_nao_atua"] = tabela.apply(
-                lambda r: _ratio(r["agend_nao_atua"], r["oport_nao_atua"]), axis=1)
-            tabela["pct_conversao"]      = tabela.apply(
-                lambda r: _ratio(r["vendas_total"],  r["agend_total"]),    axis=1)
-            tabela["pct_conv_+12"]       = tabela.apply(
-                lambda r: _ratio(r["vendas_+12"],    r["agend_+12"]),      axis=1)
+        df_oport = df_oport_raw.copy()
+        if "comparecimentos" not in df_oport.columns:
+            df_oport["comparecimentos"] = 0
+        df_oport["sdr"] = df_oport["sdr"].astype(str)
+        df_oport["sdr_oficial"] = df_oport["sdr"].apply(
+            lambda nome: _canonical_official_name(nome, official_names)
+        )
+        df_oport = df_oport[df_oport["sdr_oficial"] != ""].copy()
 
-            tabela = tabela.sort_values(
-                "oport_total", ascending=False,
-            ).reset_index(drop=True)
+        # Filtro de Funil de Origem (mesmo seletor que afeta Funil/Tendência).
+        # Coluna `funil_origem` vem do GROUP BY da query —
+        # `prevendas_oportunidades_sdr.sql` agrega por (sdr × classif × funil).
+        if funil_origem_ativo and "funil_origem" in df_oport.columns:
+            df_oport = df_oport[df_oport["funil_origem"].isin(funil_origem_sel)]
 
-            # 6) Controles — modo de visualização + custo (só Números / híbrido).
-            opcoes_view = ["Números", "Percentuais", "Números + Percentuais"]
-            ctrl_modo, ctrl_custo = st.columns([2.2, 1.0], gap="medium")
-            with ctrl_modo:
-                if hasattr(st, "segmented_control"):
-                    modo_view = st.segmented_control(
-                        "Visualizar indicadores como",
-                        options=opcoes_view,
-                        default="Números",
-                        key="prevendas_overview_oport_modo",
-                    )
-                else:
-                    modo_view = st.radio(
-                        "Visualizar indicadores como",
-                        options=opcoes_view,
-                        index=0,
-                        horizontal=True,
-                        key="prevendas_overview_oport_modo",
-                    )
-            with ctrl_custo:
-                if modo_view == "Percentuais":
-                    mostrar_custo_oport = False
-                    st.checkbox(
-                        "Exibir custo ao lado do valor",
-                        value=False,
-                        disabled=True,
-                        key="prevendas_overview_oport_show_cost",
-                        help="Disponível nos modos Números e Números + Percentuais.",
-                    )
-                else:
-                    mostrar_custo_oport = st.checkbox(
-                        "Exibir custo ao lado do valor",
-                        value=False,
-                        key="prevendas_overview_oport_show_cost",
-                        help=(
-                            "Investimento estimado por SDR = valor × custo "
-                            "médio da métrica (investido ÷ total da coluna)."
-                        ),
-                    )
-
-            if modo_view not in opcoes_view:
-                modo_view = "Números"
-
-            custos_medios_oport = custos_medios_indicadores_oport(
-                tabela, _investido_total,
+        if df_oport.empty:
+            st.info(
+                "Nenhuma oportunidade atribuída a SDR do cadastro oficial no "
+                "período. Veja o Top SDRs acima — pode haver SDRs fora da "
+                "composição oficial respondendo por essas oportunidades."
+            )
+        else:
+            # 2) Pivotar (sdr × bucket) — 1 row por SDR com colunas por bucket
+            #    para oportunidades, agendamentos e vendas (3 pivots paralelos).
+            BUCKETS = ["+12", "-12", "Não atua", "Sem classif"]
+            df_oport_g = (
+                df_oport.groupby(["sdr_oficial", "classif_bucket"],
+                                 as_index=False, dropna=False)
+                        .agg(oport=("oportunidades", "sum"),
+                             agend=("agendamentos", "sum"),
+                             comp=("comparecimentos", "sum"),
+                             vendas=("vendas", "sum"))
             )
 
-            _sdr_col_cfg = st.column_config.TextColumn(
-                "SDR / Pré-vendas",
-                width=260,
-                pinned=True,
-                alignment="left",
-            )
-            _w_num = 145 if mostrar_custo_oport else 100
-            _w_wide = 155 if mostrar_custo_oport else 125
-
-            def _cfg_metrica(label: str, *, wide: bool = False):
-                w = _w_wide if wide else _w_num
-                if modo_view == "Números" and not mostrar_custo_oport:
-                    return st.column_config.NumberColumn(
-                        label, format="%d", width=w, alignment="center",
-                    )
-                return st.column_config.TextColumn(
-                    label, width=w, alignment="center",
+            def _piv(col: str) -> pd.DataFrame:
+                return (
+                    df_oport_g.pivot_table(
+                        index="sdr_oficial", columns="classif_bucket",
+                        values=col, aggfunc="sum", fill_value=0,
+                    ).reindex(columns=BUCKETS, fill_value=0)
                 )
 
-            def _fmt_n_pct(n, denom) -> str:
-                """Formata 'N (P,P%)'. Denominador zero → só o número."""
-                try:
-                    n_int = int(n) if pd.notna(n) else 0
-                except (TypeError, ValueError):
-                    n_int = 0
-                if denom and denom > 0:
-                    pct_val = n_int / float(denom) * 100.0
-                    return f"{n_int} ({fmt_percent_br(pct_val)})"
-                return f"{n_int}"
+            piv_oport  = _piv("oport")
+            piv_agend  = _piv("agend")
+            piv_comp   = _piv("comp")
+            piv_vendas = _piv("vendas")
 
-            def _fmt_n_pct_cost(n, denom, label: str) -> str:
-                base = _fmt_n_pct(n, denom)
-                if not mostrar_custo_oport:
-                    return base
-                try:
-                    n_int = int(n) if pd.notna(n) else 0
-                except (TypeError, ValueError):
-                    n_int = 0
-                if n_int <= 0:
-                    return base
-                custo = custos_medios_oport.get(label, 0.0)
-                inv = investimento_estimado_sdr(n_int, custo)
-                if inv == "—":
-                    return base
-                if "(" in base and base.endswith(")"):
-                    num_part, pct_part = base.split(" (", 1)
-                    return f"{num_part} ({inv}) ({pct_part}"
-                return f"{base} ({inv})"
+            tabela = pd.DataFrame({
+                "SDR / Pré-vendas":           piv_oport.index,
+                "oport_total":                piv_oport.sum(axis=1).values,
+                "oport_+12":                  piv_oport["+12"].values,
+                "oport_-12":                  piv_oport["-12"].values,
+                "oport_nao_atua":             piv_oport["Não atua"].values,
+                "oport_sem_classif":          piv_oport["Sem classif"].values,
+                "agend_+12":                  piv_agend["+12"].values,
+                "agend_-12":                  piv_agend["-12"].values,
+                "agend_nao_atua":             piv_agend["Não atua"].values,
+                "agend_total":                piv_agend.sum(axis=1).values,
+                "comp_+12":                   piv_comp["+12"].values,
+                "comp_-12":                   piv_comp["-12"].values,
+                "comp_nao_atua":              piv_comp["Não atua"].values,
+                "comp_total":                 piv_comp.sum(axis=1).values,
+                "vendas_+12":                 piv_vendas["+12"].values,
+                "vendas_-12":                 piv_vendas["-12"].values,
+                "vendas_nao_atua":            piv_vendas["Não atua"].values,
+                "vendas_total":               piv_vendas.sum(axis=1).values,
+            })
 
-            # Denominadores do modo híbrido (inalterados).
-            _denom_hibrido: dict[str, pd.Series] = {
-                "Op. +12": tabela["oport_total"],
-                "Op. -12": tabela["oport_total"],
-                "Op. Não atua": tabela["oport_total"],
-                "Ag.": tabela["oport_total"],
-                "Ag. +12": tabela["oport_+12"],
-                "Ag. -12": tabela["oport_-12"],
-                "Ag. Não atua": tabela["oport_nao_atua"],
-                "Comp.": tabela["agend_total"],
-                "Comp. +12": tabela["agend_+12"],
-                "Comp. -12": tabela["agend_-12"],
-                "Comp. Não atua": tabela["agend_nao_atua"],
-                "Vendas": tabela["agend_total"],
-                "Vendas +12": tabela["agend_+12"],
-                "Vendas -12": tabela["agend_-12"],
-                "Vendas Não atua": tabela["agend_nao_atua"],
-            }
+            # 3) Tipo SDR (para filtro global Tipo SDR).
+            tabela["tipo_sdr"] = tabela["SDR / Pré-vendas"].apply(classify_sdr)
 
-            # 7) Renderização — colunas variam conforme `modo_view`.
-            if modo_view == "Números":
-                dados: dict = {"SDR / Pré-vendas": tabela["SDR / Pré-vendas"]}
-                for label, col, wide in INDICADORES_OPORT_METRIC_COLS:
-                    vals = tabela[col].fillna(0)
-                    if mostrar_custo_oport:
-                        custo = custos_medios_oport[label]
-                        dados[label] = [
-                            fmt_celula_indicador_com_custo(
-                                v, custo, show_cost=True,
-                            )
-                            for v in vals
-                        ]
+            # 4) Aplicar filtros globais (SDR / Tipo SDR).
+            if sdr_sel_global:
+                tabela = tabela[tabela["SDR / Pré-vendas"].isin(sdr_sel_global)]
+            if tipo_sdr_sel_global:
+                tabela = tabela[tabela["tipo_sdr"].isin(tipo_sdr_sel_global)]
+
+            if tabela.empty:
+                st.info("Sem SDRs no recorte dos filtros SDR / Tipo SDR.")
+            else:
+                # 5) Métricas Looker-style. Pré-calculadas pra usar tanto no
+                #    modo "Percentuais" quanto nos totais do caption.
+                #    % Agendamento  = Agend / Oport
+                #    % Ag. +12      = Agend +12 / Oport +12
+                #    % Ag. -12      = Agend -12 / Oport -12
+                #    % Ag. Não atua = Agend Não atua / Oport Não atua
+                #    % Conversão    = Vendas / Agendamentos       (padrão Looker)
+                #    % Conv. +12    = Vendas +12 / Agend +12
+                def _ratio(num, den):
+                    return (num / den * 100.0) if den else None
+
+                tabela["pct_agend"]          = tabela.apply(
+                    lambda r: _ratio(r["agend_total"],   r["oport_total"]),    axis=1)
+                tabela["pct_agend_+12"]      = tabela.apply(
+                    lambda r: _ratio(r["agend_+12"],     r["oport_+12"]),      axis=1)
+                tabela["pct_agend_-12"]      = tabela.apply(
+                    lambda r: _ratio(r["agend_-12"],     r["oport_-12"]),      axis=1)
+                tabela["pct_agend_nao_atua"] = tabela.apply(
+                    lambda r: _ratio(r["agend_nao_atua"], r["oport_nao_atua"]), axis=1)
+                tabela["pct_conversao"]      = tabela.apply(
+                    lambda r: _ratio(r["vendas_total"],  r["agend_total"]),    axis=1)
+                tabela["pct_conv_+12"]       = tabela.apply(
+                    lambda r: _ratio(r["vendas_+12"],    r["agend_+12"]),      axis=1)
+
+                tabela = tabela.sort_values(
+                    "oport_total", ascending=False,
+                ).reset_index(drop=True)
+
+                # 6) Controles — modo de visualização + custo (só Números / híbrido).
+                opcoes_view = ["Números", "Percentuais", "Números + Percentuais"]
+                ctrl_modo, ctrl_custo = st.columns([2.2, 1.0], gap="medium")
+                with ctrl_modo:
+                    if hasattr(st, "segmented_control"):
+                        modo_view = st.segmented_control(
+                            "Visualizar indicadores como",
+                            options=opcoes_view,
+                            default="Números",
+                            key="prevendas_overview_oport_modo",
+                        )
                     else:
-                        dados[label] = vals.astype(int)
-                tabela_view = pd.DataFrame(dados)
-                column_config_oport = {
-                    "SDR / Pré-vendas": _sdr_col_cfg,
-                    **{
-                        label: _cfg_metrica(label, wide=wide)
-                        for label, _, wide in INDICADORES_OPORT_METRIC_COLS
-                    },
+                        modo_view = st.radio(
+                            "Visualizar indicadores como",
+                            options=opcoes_view,
+                            index=0,
+                            horizontal=True,
+                            key="prevendas_overview_oport_modo",
+                        )
+                with ctrl_custo:
+                    if modo_view == "Percentuais":
+                        mostrar_custo_oport = False
+                        st.checkbox(
+                            "Exibir custo ao lado do valor",
+                            value=False,
+                            disabled=True,
+                            key="prevendas_overview_oport_show_cost",
+                            help="Disponível nos modos Números e Números + Percentuais.",
+                        )
+                    else:
+                        mostrar_custo_oport = st.checkbox(
+                            "Exibir custo ao lado do valor",
+                            value=False,
+                            key="prevendas_overview_oport_show_cost",
+                            help=(
+                                "Investimento estimado por SDR = valor × custo "
+                                "médio da métrica (investido ÷ total da coluna)."
+                            ),
+                        )
+
+                if modo_view not in opcoes_view:
+                    modo_view = "Números"
+
+                custos_medios_oport = custos_medios_indicadores_oport(
+                    tabela, _investido_total,
+                )
+
+                _sdr_col_cfg = st.column_config.TextColumn(
+                    "SDR / Pré-vendas",
+                    width=260,
+                    pinned=True,
+                    alignment="left",
+                )
+                _w_num = 145 if mostrar_custo_oport else 100
+                _w_wide = 155 if mostrar_custo_oport else 125
+
+                def _cfg_metrica(label: str, *, wide: bool = False):
+                    w = _w_wide if wide else _w_num
+                    if modo_view == "Números" and not mostrar_custo_oport:
+                        return st.column_config.NumberColumn(
+                            label, format="%d", width=w, alignment="center",
+                        )
+                    return st.column_config.TextColumn(
+                        label, width=w, alignment="center",
+                    )
+
+                def _fmt_n_pct(n, denom) -> str:
+                    """Formata 'N (P,P%)'. Denominador zero → só o número."""
+                    try:
+                        n_int = int(n) if pd.notna(n) else 0
+                    except (TypeError, ValueError):
+                        n_int = 0
+                    if denom and denom > 0:
+                        pct_val = n_int / float(denom) * 100.0
+                        return f"{n_int} ({fmt_percent_br(pct_val)})"
+                    return f"{n_int}"
+
+                def _fmt_n_pct_cost(n, denom, label: str) -> str:
+                    base = _fmt_n_pct(n, denom)
+                    if not mostrar_custo_oport:
+                        return base
+                    try:
+                        n_int = int(n) if pd.notna(n) else 0
+                    except (TypeError, ValueError):
+                        n_int = 0
+                    if n_int <= 0:
+                        return base
+                    custo = custos_medios_oport.get(label, 0.0)
+                    inv = investimento_estimado_sdr(n_int, custo)
+                    if inv == "—":
+                        return base
+                    if "(" in base and base.endswith(")"):
+                        num_part, pct_part = base.split(" (", 1)
+                        return f"{num_part} ({inv}) ({pct_part}"
+                    return f"{base} ({inv})"
+
+                # Denominadores do modo híbrido (inalterados).
+                _denom_hibrido: dict[str, pd.Series] = {
+                    "Op. +12": tabela["oport_total"],
+                    "Op. -12": tabela["oport_total"],
+                    "Op. Não atua": tabela["oport_total"],
+                    "Ag.": tabela["oport_total"],
+                    "Ag. +12": tabela["oport_+12"],
+                    "Ag. -12": tabela["oport_-12"],
+                    "Ag. Não atua": tabela["oport_nao_atua"],
+                    "Comp.": tabela["agend_total"],
+                    "Comp. +12": tabela["agend_+12"],
+                    "Comp. -12": tabela["agend_-12"],
+                    "Comp. Não atua": tabela["agend_nao_atua"],
+                    "Vendas": tabela["agend_total"],
+                    "Vendas +12": tabela["agend_+12"],
+                    "Vendas -12": tabela["agend_-12"],
+                    "Vendas Não atua": tabela["agend_nao_atua"],
                 }
-            elif modo_view == "Percentuais":
-                tabela_view = _format_table_br(pd.DataFrame({
-                    "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
-                    "% Agendamento":    tabela["pct_agend"],
-                    "% Ag. +12":        tabela["pct_agend_+12"],
-                    "% Ag. -12":        tabela["pct_agend_-12"],
-                    "% Ag. Não atua":   tabela["pct_agend_nao_atua"],
-                    "% Conversão":      tabela["pct_conversao"],
-                    "% Conversão +12":  tabela["pct_conv_+12"],
-                }))
-                _w_pct = 115
-                column_config_oport = {
-                    "SDR / Pré-vendas": _sdr_col_cfg,
-                    "% Agendamento": st.column_config.TextColumn(
-                        "% Agendamento", width=_w_pct, alignment="center",
-                    ),
-                    "% Ag. +12": st.column_config.TextColumn(
-                        "% Ag. +12", width=_w_pct, alignment="center",
-                    ),
-                    "% Ag. -12": st.column_config.TextColumn(
-                        "% Ag. -12", width=_w_pct, alignment="center",
-                    ),
-                    "% Ag. Não atua": st.column_config.TextColumn(
-                        "% Ag. Não atua", width=125, alignment="center",
-                    ),
-                    "% Conversão": st.column_config.TextColumn(
-                        "% Conversão", width=_w_pct, alignment="center",
-                    ),
-                    "% Conversão +12": st.column_config.TextColumn(
-                        "% Conversão +12", width=125, alignment="center",
-                    ),
-                }
-            else:  # "Números + Percentuais"
-                dados_h: dict = {"SDR / Pré-vendas": tabela["SDR / Pré-vendas"]}
-                for label, col, wide in INDICADORES_OPORT_METRIC_COLS:
-                    vals = tabela[col].fillna(0)
-                    if label == "Op.":
+
+                # 7) Renderização — colunas variam conforme `modo_view`.
+                if modo_view == "Números":
+                    dados: dict = {"SDR / Pré-vendas": tabela["SDR / Pré-vendas"]}
+                    for label, col, wide in INDICADORES_OPORT_METRIC_COLS:
+                        vals = tabela[col].fillna(0)
                         if mostrar_custo_oport:
-                            dados_h[label] = [
+                            custo = custos_medios_oport[label]
+                            dados[label] = [
                                 fmt_celula_indicador_com_custo(
-                                    v, custos_medios_oport[label], show_cost=True,
+                                    v, custo, show_cost=True,
                                 )
                                 for v in vals
                             ]
                         else:
-                            dados_h[label] = vals.astype(int).astype(str)
-                    else:
-                        denom = _denom_hibrido[label]
-                        dados_h[label] = [
-                            _fmt_n_pct_cost(n, d, label)
-                            for n, d in zip(vals, denom)
-                        ]
-                tabela_view = pd.DataFrame(dados_h)
-                column_config_oport = {
-                    "SDR / Pré-vendas": _sdr_col_cfg,
-                    **{
-                        label: _cfg_metrica(label, wide=wide)
-                        for label, _, wide in INDICADORES_OPORT_METRIC_COLS
-                    },
-                }
+                            dados[label] = vals.astype(int)
+                    tabela_view = pd.DataFrame(dados)
+                    column_config_oport = {
+                        "SDR / Pré-vendas": _sdr_col_cfg,
+                        **{
+                            label: _cfg_metrica(label, wide=wide)
+                            for label, _, wide in INDICADORES_OPORT_METRIC_COLS
+                        },
+                    }
+                elif modo_view == "Percentuais":
+                    tabela_view = _format_table_br(pd.DataFrame({
+                        "SDR / Pré-vendas": tabela["SDR / Pré-vendas"],
+                        "% Agendamento":    tabela["pct_agend"],
+                        "% Ag. +12":        tabela["pct_agend_+12"],
+                        "% Ag. -12":        tabela["pct_agend_-12"],
+                        "% Ag. Não atua":   tabela["pct_agend_nao_atua"],
+                        "% Conversão":      tabela["pct_conversao"],
+                        "% Conversão +12":  tabela["pct_conv_+12"],
+                    }))
+                    _w_pct = 115
+                    column_config_oport = {
+                        "SDR / Pré-vendas": _sdr_col_cfg,
+                        "% Agendamento": st.column_config.TextColumn(
+                            "% Agendamento", width=_w_pct, alignment="center",
+                        ),
+                        "% Ag. +12": st.column_config.TextColumn(
+                            "% Ag. +12", width=_w_pct, alignment="center",
+                        ),
+                        "% Ag. -12": st.column_config.TextColumn(
+                            "% Ag. -12", width=_w_pct, alignment="center",
+                        ),
+                        "% Ag. Não atua": st.column_config.TextColumn(
+                            "% Ag. Não atua", width=125, alignment="center",
+                        ),
+                        "% Conversão": st.column_config.TextColumn(
+                            "% Conversão", width=_w_pct, alignment="center",
+                        ),
+                        "% Conversão +12": st.column_config.TextColumn(
+                            "% Conversão +12", width=125, alignment="center",
+                        ),
+                    }
+                else:  # "Números + Percentuais"
+                    dados_h: dict = {"SDR / Pré-vendas": tabela["SDR / Pré-vendas"]}
+                    for label, col, wide in INDICADORES_OPORT_METRIC_COLS:
+                        vals = tabela[col].fillna(0)
+                        if label == "Op.":
+                            if mostrar_custo_oport:
+                                dados_h[label] = [
+                                    fmt_celula_indicador_com_custo(
+                                        v, custos_medios_oport[label], show_cost=True,
+                                    )
+                                    for v in vals
+                                ]
+                            else:
+                                dados_h[label] = vals.astype(int).astype(str)
+                        else:
+                            denom = _denom_hibrido[label]
+                            dados_h[label] = [
+                                _fmt_n_pct_cost(n, d, label)
+                                for n, d in zip(vals, denom)
+                            ]
+                    tabela_view = pd.DataFrame(dados_h)
+                    column_config_oport = {
+                        "SDR / Pré-vendas": _sdr_col_cfg,
+                        **{
+                            label: _cfg_metrica(label, wide=wide)
+                            for label, _, wide in INDICADORES_OPORT_METRIC_COLS
+                        },
+                    }
 
-            st.dataframe(
-                tabela_view,
-                use_container_width=True,
-                hide_index=True,
-                column_config=column_config_oport,
-            )
+                st.dataframe(
+                    tabela_view,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=column_config_oport,
+                )
 
-            # 7) Totais + caption explicativo.
-            total_oport  = int(tabela["oport_total"].sum())
-            total_agend  = int(tabela["agend_total"].sum())
-            total_comp   = int(tabela["comp_total"].sum())
-            total_vendas = int(tabela["vendas_total"].sum())
-            pct_agend_g  = (total_agend  / total_oport  * 100.0) if total_oport  else 0.0
-            pct_conv_g   = (total_vendas / total_agend  * 100.0) if total_agend  else 0.0
-            st.caption(
-                f"**{int_br(len(tabela))} SDR(s)** · "
-                f"**{int_br(total_oport)} oport.** · "
-                f"**{int_br(total_agend)} agend.** · "
-                f"**{int_br(total_comp)} comp.** · "
-                f"**{int_br(total_vendas)} vendas** · "
-                f"% Agendamento **{fmt_percent_br(pct_agend_g)}** · "
-                f"% Conversão **{fmt_percent_br(pct_conv_g)}**. "
-                "**% Conversão = Vendas / Agendamentos** (padrão Looker). "
-                "Oportunidades = `zoho_deals` criados no período; "
-                "agendamentos = activities Consulta/Indicação no período; "
-                "comparecimentos = activities concluídas no período "
-                "(status Concluída/Concluído); "
-                "vendas = deals ganhos no período (stage Ganho · tipo "
-                "Novo cliente). SDR atribuído via cascata "
-                "`activity.prevendas > deal.sdr_ss`. Apenas SDRs do cadastro "
-                "oficial. Conversões com denominador zero ficam em branco."
-            )
+                # 7) Totais + caption explicativo.
+                total_oport  = int(tabela["oport_total"].sum())
+                total_agend  = int(tabela["agend_total"].sum())
+                total_comp   = int(tabela["comp_total"].sum())
+                total_vendas = int(tabela["vendas_total"].sum())
+                pct_agend_g  = (total_agend  / total_oport  * 100.0) if total_oport  else 0.0
+                pct_conv_g   = (total_vendas / total_agend  * 100.0) if total_agend  else 0.0
+                st.caption(
+                    f"**{int_br(len(tabela))} SDR(s)** · "
+                    f"**{int_br(total_oport)} oport.** · "
+                    f"**{int_br(total_agend)} agend.** · "
+                    f"**{int_br(total_comp)} comp.** · "
+                    f"**{int_br(total_vendas)} vendas** · "
+                    f"% Agendamento **{fmt_percent_br(pct_agend_g)}** · "
+                    f"% Conversão **{fmt_percent_br(pct_conv_g)}**. "
+                    "**% Conversão = Vendas / Agendamentos** (padrão Looker). "
+                    "Oportunidades = `zoho_deals` criados no período; "
+                    "agendamentos = activities Consulta/Indicação no período; "
+                    "comparecimentos = activities concluídas no período "
+                    "(status Concluída/Concluído); "
+                    "vendas = deals ganhos no período (stage Ganho · tipo "
+                    "Novo cliente). SDR atribuído via cascata "
+                    "`activity.prevendas > deal.sdr_ss`. Apenas SDRs do cadastro "
+                    "oficial. Conversões com denominador zero ficam em branco."
+                )
 
 with st.expander("Ver dados do período (diário, semanal ou mensal)"):
     if df_diario.empty:
@@ -1568,8 +1616,7 @@ with st.expander("Ver dados do período (diário, semanal ou mensal)"):
 
         # Detalhe anotado com tipo_sdr — fonte das opções de filtro e da
         # recomposição da série diária quando algum filtro estiver ativo.
-        df_det_norm_full = prevendas_normalizar_detalhe(df_detalhe)
-        df_det_norm_full = prevendas_anotar_tipo_sdr_detalhe(df_det_norm_full)
+        df_det_norm_full = df_det_norm_global
 
         if df_det_norm_full is not None and not df_det_norm_full.empty:
             opcoes_sdr_local = sorted(
@@ -2117,243 +2164,257 @@ with st.expander("Ver leads/agendamentos detalhados"):
 # Toggle Leads (default) vs Oportunidades. Linha por data de geração ·
 # Colunas D0..D7 acumuladas (% do cohort que teve primeiro agendamento
 # até D+n). Filtros globais SDR/Tipo SDR aplicados em Python.
+carregar_cohort = st.checkbox(
+    "Carregar análise de cohort",
+    value=False,
+    key="prevendas_overview_carregar_cohort",
+    help=(
+        "Executa a consulta de cohort de agendamentos somente quando ativado."
+    ),
+)
 with st.expander(
-    "Cohort de agendamentos por dia de geração", expanded=True
+    "Cohort de agendamentos por dia de geração", expanded=False
 ):
-    # Toggle de base — Leads = visão principal.
-    base_opcoes = ["Leads", "Oportunidades"]
-    if hasattr(st, "segmented_control"):
-        cohort_base = st.segmented_control(
-            "Base do cohort",
-            options=base_opcoes,
-            default="Leads",
-            key="prevendas_overview_cohort_base",
+    if not carregar_cohort:
+        st.info(
+            "Ative **Carregar análise de cohort** acima para executar a "
+            "consulta e exibir a tabela."
         )
     else:
-        cohort_base = st.radio(
-            "Base do cohort",
-            options=base_opcoes,
-            index=0,
-            horizontal=True,
-            key="prevendas_overview_cohort_base",
-        )
-    if cohort_base not in base_opcoes:
-        cohort_base = "Leads"
-
-    # Carrega a fonte conforme escolha. Cada loader devolve grão "1 row
-    # por unidade (lead-daily-distinct ou deal) com (data_geracao, sdr,
-    # lag_dias)". Padronizamos as colunas para a lógica de pivot ser igual.
-    try:
-        if cohort_base == "Leads":
-            df_cohort_raw = get_prevendas_cohort_leads(
-                ctx.data_ini, ctx.data_fim
+        # Toggle de base — Leads = visão principal.
+        base_opcoes = ["Leads", "Oportunidades"]
+        if hasattr(st, "segmented_control"):
+            cohort_base = st.segmented_control(
+                "Base do cohort",
+                options=base_opcoes,
+                default="Leads",
+                key="prevendas_overview_cohort_base",
             )
+        else:
+            cohort_base = st.radio(
+                "Base do cohort",
+                options=base_opcoes,
+                index=0,
+                horizontal=True,
+                key="prevendas_overview_cohort_base",
+            )
+        if cohort_base not in base_opcoes:
+            cohort_base = "Leads"
+
+        # Carrega a fonte conforme escolha. Cada loader devolve grão "1 row
+        # por unidade (lead-daily-distinct ou deal) com (data_geracao, sdr,
+        # lag_dias)". Padronizamos as colunas para a lógica de pivot ser igual.
+        try:
+            if cohort_base == "Leads":
+                df_cohort_raw = get_prevendas_cohort_leads(
+                    ctx.data_ini, ctx.data_fim
+                )
+                data_col_origem = "data_lead"
+                denom_label = "Leads"
+            else:
+                df_cohort_raw = get_prevendas_cohort_agendamentos(
+                    ctx.data_ini, ctx.data_fim
+                )
+                data_col_origem = "data_geracao"
+                denom_label = "Oportunidades"
+        except Exception as e:
+            st.error(f"Falha ao consultar cohort: {e}")
+            df_cohort_raw = pd.DataFrame()
             data_col_origem = "data_lead"
             denom_label = "Leads"
+
+        if df_cohort_raw.empty:
+            st.info(f"Sem {denom_label.lower()} no período selecionado.")
         else:
-            df_cohort_raw = get_prevendas_cohort_agendamentos(
-                ctx.data_ini, ctx.data_fim
-            )
-            data_col_origem = "data_geracao"
-            denom_label = "Oportunidades"
-    except Exception as e:
-        st.error(f"Falha ao consultar cohort: {e}")
-        df_cohort_raw = pd.DataFrame()
-        data_col_origem = "data_lead"
-        denom_label = "Leads"
+            # Filtros globais SDR/Tipo SDR — mesma regra das demais seções.
+            df_coh = df_cohort_raw.copy()
+            df_coh["sdr"] = df_coh["sdr"].astype(str)
+            df_coh["tipo_sdr"] = df_coh["sdr"].apply(classify_sdr)
 
-    if df_cohort_raw.empty:
-        st.info(f"Sem {denom_label.lower()} no período selecionado.")
-    else:
-        # Filtros globais SDR/Tipo SDR — mesma regra das demais seções.
-        df_coh = df_cohort_raw.copy()
-        df_coh["sdr"] = df_coh["sdr"].astype(str)
-        df_coh["tipo_sdr"] = df_coh["sdr"].apply(classify_sdr)
+            if sdr_sel_global:
+                df_coh = df_coh[df_coh["sdr"].isin(sdr_sel_global)]
+            if tipo_sdr_sel_global:
+                df_coh = df_coh[df_coh["tipo_sdr"].isin(tipo_sdr_sel_global)]
 
-        if sdr_sel_global:
-            df_coh = df_coh[df_coh["sdr"].isin(sdr_sel_global)]
-        if tipo_sdr_sel_global:
-            df_coh = df_coh[df_coh["tipo_sdr"].isin(tipo_sdr_sel_global)]
-
-        if df_coh.empty:
-            st.info(
-                f"Sem {denom_label.lower()} no recorte dos filtros "
-                "SDR / Tipo SDR."
-            )
-        else:
-            from datetime import date as _date_cls
-            hoje = _date_cls.today()
-            COHORT_DIAS = list(range(0, 8))  # D0..D7
-
-            # Padroniza coluna de data — ambas as fontes ficam como `data_ref`.
-            df_coh["data_ref"] = pd.to_datetime(
-                df_coh[data_col_origem]
-            ).dt.date
-            # Negativo → 0 (clip em D0). NaN (sem agendamento) → None.
-            df_coh["lag_dias_eff"] = df_coh["lag_dias"].apply(
-                lambda v: int(max(v, 0)) if pd.notna(v) else None
-            )
-
-            # Por (data_ref): conta unidades e quantas agendaram até D_n.
-            grupos = df_coh.groupby("data_ref", dropna=False)
-            linhas = []
-            for dt, g in grupos:
-                denom = len(g)
-                lags = g["lag_dias_eff"].dropna()
-                row = {"cohort_dt": dt, denom_label: denom}
-                idade_dias = (hoje - dt).days if isinstance(
-                    dt, _date_cls) else None
-                for n in COHORT_DIAS:
-                    if idade_dias is not None and idade_dias < n:
-                        row[f"D{n}"] = None  # ainda não maturou
-                    elif denom == 0:
-                        row[f"D{n}"] = None
-                    else:
-                        row[f"D{n}"] = int((lags <= n).sum()) / denom * 100.0
-                linhas.append(row)
-
-            cohort_df = pd.DataFrame(linhas).sort_values(
-                "cohort_dt", ascending=False
-            ).reset_index(drop=True)
-
-            # Overall — denominador ajustado por maturidade.
-            total_uni = len(df_coh)
-            overall = {"cohort_dt": None,
-                       denom_label: total_uni,
-                       "Cohort": "Overall"}
-            for n in COHORT_DIAS:
-                maturos_mask = df_coh["data_ref"].apply(
-                    lambda d: (hoje - d).days >= n
-                              if isinstance(d, _date_cls) else False
-                )
-                denom = int(maturos_mask.sum())
-                if denom == 0:
-                    overall[f"D{n}"] = None
-                else:
-                    num = int(
-                        (df_coh.loc[maturos_mask, "lag_dias_eff"]
-                                .fillna(99999) <= n).sum()
-                    )
-                    overall[f"D{n}"] = num / denom * 100.0
-
-            cohort_df["Cohort"] = cohort_df["cohort_dt"].apply(
-                lambda d: d.strftime("%d/%m") if isinstance(d, _date_cls) else "—"
-            )
-
-            cols_ordem = ["Cohort", denom_label] + [
-                f"D{n}" for n in COHORT_DIAS]
-            cohort_view = pd.concat(
-                [pd.DataFrame([overall]), cohort_df],
-                ignore_index=True,
-            )[cols_ordem]
-
-            # ----- Formatação de percentual (pt-BR, 2 casas) -----
-            # NaN / não maturado → "" (célula vazia). 0% → "0,00%" (não
-            # confunde com vazio, recebe cor clara).
-            def _fmt_pct(v):
-                if v is None or pd.isna(v):
-                    return ""
-                return fmt_percent_br(v)
-
-            # ----- Paleta azul progressiva (claro → escuro) -----
-            # NaN → "" (fundo padrão escuro do dataframe).
-            # 0% exato → azul quase branco (#EFF6FF).
-            # Texto: quase-preto nas faixas claras, branco bold a partir
-            # do azul médio (50%).
-            def _bg_color(v):
-                if v is None or pd.isna(v):
-                    return ""
-                if v == 0:
-                    return "background-color: #EFF6FF; color: #0F172A"
-                if v <= 10:
-                    return "background-color: #DBEAFE; color: #0F172A"
-                if v <= 20:
-                    return "background-color: #BFDBFE; color: #0F172A"
-                if v <= 35:
-                    return "background-color: #93C5FD; color: #0F172A"
-                if v <= 50:
-                    return "background-color: #60A5FA; color: #0F172A"
-                if v <= 65:
-                    return ("background-color: #3B82F6; color: #ffffff; "
-                            "font-weight: 600")
-                if v <= 80:
-                    return ("background-color: #2563EB; color: #ffffff; "
-                            "font-weight: 600")
-                return ("background-color: #1D4ED8; color: #ffffff; "
-                        "font-weight: 700")
-
-            cols_pct = [f"D{n}" for n in COHORT_DIAS]
-
-            # ----- Estratégia robusta: pré-formatar células em string -----
-            # Algumas versões/contextos do Streamlit ignoram Styler.format
-            # quando o subset cobre colunas de dtype 'object' com mistura
-            # float/None. Para garantir que a célula renderize SEMPRE como
-            # texto "6,83%" (e nunca como "6.831120"), formato as colunas
-            # D_n diretamente para string no DataFrame de exibição. Mantém
-            # `cohort_view` com valores numéricos para alimentar a paleta.
-            cohort_display = cohort_view.copy()
-            for c in cols_pct:
-                cohort_display[c] = cohort_view[c].apply(_fmt_pct)
-
-            # Cor por célula puxando o valor NUMÉRICO de cohort_view via
-            # DataFrame paralelo. `Styler.apply(axis=0)` recebe a Series
-            # da coluna e devolve list[str] de CSS, uma por linha.
-            def _color_col(s_display):
-                nums = cohort_view[s_display.name]
-                return [_bg_color(v) for v in nums]
-
-            styler = (
-                cohort_display.style
-                    .format({denom_label: "{:,.0f}".format})
-                    .apply(_color_col, subset=cols_pct, axis=0)
-            )
-
-            st.caption(
-                "**Bases.** *Leads* = **todos os leads válidos** que entraram "
-                "no funil (daily-distinct por email, sem filtro de "
-                "classificação). *Oportunidades* = leads/deals classificados "
-                "como **Atua +12 ou Atua -12** (regra combinada das 4 fontes: "
-                "`lead_classification` / `qualificacao` / `classificado_cal` / "
-                "`ext.classificado`). **Não atua** e **sem classificação** "
-                "ficam fora da base Oportunidades."
-            )
-            st.caption(
-                f"**Como ler.** Linha = data de geração do {denom_label[:-1].lower() if denom_label.endswith('s') else denom_label.lower()}. "
-                "**D_n** = % daquele cohort que teve **primeiro agendamento "
-                "até D+n** (acumulado). Linha **Overall** consolida todos os "
-                "cohorts do período, com denominador ajustado por maturidade "
-                "(cohorts ainda não maturados não entram em D_n). Células "
-                "em branco = cohort ainda não maturou para esse D_n."
-            )
-
-            st.dataframe(
-                styler,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            if cohort_base == "Leads":
-                rodape = (
-                    f"**{int_br(total_uni)} lead(s)** no recorte. "
-                    "Universo: `ext_reconecta.leads` daily-distinct por "
-                    "`(dia, email)` com filtros canônicos de e-mail teste/"
-                    "interno. Lead pareado ao deal via cascata `zoho_id > "
-                    "session_id > email`. Agendamento = `MIN(start_datetime)` "
-                    "de activity Consulta/Indicação com `status_reuniao IS "
-                    "NOT NULL`. Leads sem deal pareado ficam com `sdr = "
-                    "'Sem SDR'` — saem do recorte quando o filtro de SDR "
-                    "específico está ativo."
+            if df_coh.empty:
+                st.info(
+                    f"Sem {denom_label.lower()} no recorte dos filtros "
+                    "SDR / Tipo SDR."
                 )
             else:
-                rodape = (
-                    f"**{int_br(total_uni)} oportunidade(s)** no recorte. "
-                    "Universo: `zoho_deals` criados no período **classificados "
-                    "como Atua +12 ou Atua -12** pela regra combinada das 4 "
-                    "fontes (CRM + ext.leads). Deals em **Não atua** ou **sem "
-                    "classificação** ficam de fora. "
-                    "Agendamento = 1ª activity Consulta/Indicação com "
-                    "`status_reuniao IS NOT NULL`, deduplicada por "
-                    "`activity_id`, ordenada por `start_datetime ASC`. "
+                from datetime import date as _date_cls
+                hoje = _date_cls.today()
+                COHORT_DIAS = list(range(0, 8))  # D0..D7
+
+                # Padroniza coluna de data — ambas as fontes ficam como `data_ref`.
+                df_coh["data_ref"] = pd.to_datetime(
+                    df_coh[data_col_origem]
+                ).dt.date
+                # Negativo → 0 (clip em D0). NaN (sem agendamento) → None.
+                df_coh["lag_dias_eff"] = df_coh["lag_dias"].apply(
+                    lambda v: int(max(v, 0)) if pd.notna(v) else None
+                )
+
+                # Por (data_ref): conta unidades e quantas agendaram até D_n.
+                grupos = df_coh.groupby("data_ref", dropna=False)
+                linhas = []
+                for dt, g in grupos:
+                    denom = len(g)
+                    lags = g["lag_dias_eff"].dropna()
+                    row = {"cohort_dt": dt, denom_label: denom}
+                    idade_dias = (hoje - dt).days if isinstance(
+                        dt, _date_cls) else None
+                    for n in COHORT_DIAS:
+                        if idade_dias is not None and idade_dias < n:
+                            row[f"D{n}"] = None  # ainda não maturou
+                        elif denom == 0:
+                            row[f"D{n}"] = None
+                        else:
+                            row[f"D{n}"] = int((lags <= n).sum()) / denom * 100.0
+                    linhas.append(row)
+
+                cohort_df = pd.DataFrame(linhas).sort_values(
+                    "cohort_dt", ascending=False
+                ).reset_index(drop=True)
+
+                # Overall — denominador ajustado por maturidade.
+                total_uni = len(df_coh)
+                overall = {"cohort_dt": None,
+                           denom_label: total_uni,
+                           "Cohort": "Overall"}
+                for n in COHORT_DIAS:
+                    maturos_mask = df_coh["data_ref"].apply(
+                        lambda d: (hoje - d).days >= n
+                                  if isinstance(d, _date_cls) else False
+                    )
+                    denom = int(maturos_mask.sum())
+                    if denom == 0:
+                        overall[f"D{n}"] = None
+                    else:
+                        num = int(
+                            (df_coh.loc[maturos_mask, "lag_dias_eff"]
+                                    .fillna(99999) <= n).sum()
+                        )
+                        overall[f"D{n}"] = num / denom * 100.0
+
+                cohort_df["Cohort"] = cohort_df["cohort_dt"].apply(
+                    lambda d: d.strftime("%d/%m") if isinstance(d, _date_cls) else "—"
+                )
+
+                cols_ordem = ["Cohort", denom_label] + [
+                    f"D{n}" for n in COHORT_DIAS]
+                cohort_view = pd.concat(
+                    [pd.DataFrame([overall]), cohort_df],
+                    ignore_index=True,
+                )[cols_ordem]
+
+                # ----- Formatação de percentual (pt-BR, 2 casas) -----
+                # NaN / não maturado → "" (célula vazia). 0% → "0,00%" (não
+                # confunde com vazio, recebe cor clara).
+                def _fmt_pct(v):
+                    if v is None or pd.isna(v):
+                        return ""
+                    return fmt_percent_br(v)
+
+                # ----- Paleta azul progressiva (claro → escuro) -----
+                # NaN → "" (fundo padrão escuro do dataframe).
+                # 0% exato → azul quase branco (#EFF6FF).
+                # Texto: quase-preto nas faixas claras, branco bold a partir
+                # do azul médio (50%).
+                def _bg_color(v):
+                    if v is None or pd.isna(v):
+                        return ""
+                    if v == 0:
+                        return "background-color: #EFF6FF; color: #0F172A"
+                    if v <= 10:
+                        return "background-color: #DBEAFE; color: #0F172A"
+                    if v <= 20:
+                        return "background-color: #BFDBFE; color: #0F172A"
+                    if v <= 35:
+                        return "background-color: #93C5FD; color: #0F172A"
+                    if v <= 50:
+                        return "background-color: #60A5FA; color: #0F172A"
+                    if v <= 65:
+                        return ("background-color: #3B82F6; color: #ffffff; "
+                                "font-weight: 600")
+                    if v <= 80:
+                        return ("background-color: #2563EB; color: #ffffff; "
+                                "font-weight: 600")
+                    return ("background-color: #1D4ED8; color: #ffffff; "
+                            "font-weight: 700")
+
+                cols_pct = [f"D{n}" for n in COHORT_DIAS]
+
+                # ----- Estratégia robusta: pré-formatar células em string -----
+                # Algumas versões/contextos do Streamlit ignoram Styler.format
+                # quando o subset cobre colunas de dtype 'object' com mistura
+                # float/None. Para garantir que a célula renderize SEMPRE como
+                # texto "6,83%" (e nunca como "6.831120"), formato as colunas
+                # D_n diretamente para string no DataFrame de exibição. Mantém
+                # `cohort_view` com valores numéricos para alimentar a paleta.
+                cohort_display = cohort_view.copy()
+                for c in cols_pct:
+                    cohort_display[c] = cohort_view[c].apply(_fmt_pct)
+
+                # Cor por célula puxando o valor NUMÉRICO de cohort_view via
+                # DataFrame paralelo. `Styler.apply(axis=0)` recebe a Series
+                # da coluna e devolve list[str] de CSS, uma por linha.
+                def _color_col(s_display):
+                    nums = cohort_view[s_display.name]
+                    return [_bg_color(v) for v in nums]
+
+                styler = (
+                    cohort_display.style
+                        .format({denom_label: "{:,.0f}".format})
+                        .apply(_color_col, subset=cols_pct, axis=0)
+                )
+
+                st.caption(
+                    "**Bases.** *Leads* = **todos os leads válidos** que entraram "
+                    "no funil (daily-distinct por email, sem filtro de "
+                    "classificação). *Oportunidades* = leads/deals classificados "
+                    "como **Atua +12 ou Atua -12** (regra combinada das 4 fontes: "
+                    "`lead_classification` / `qualificacao` / `classificado_cal` / "
+                    "`ext.classificado`). **Não atua** e **sem classificação** "
+                    "ficam fora da base Oportunidades."
+                )
+                st.caption(
+                    f"**Como ler.** Linha = data de geração do {denom_label[:-1].lower() if denom_label.endswith('s') else denom_label.lower()}. "
+                    "**D_n** = % daquele cohort que teve **primeiro agendamento "
+                    "até D+n** (acumulado). Linha **Overall** consolida todos os "
+                    "cohorts do período, com denominador ajustado por maturidade "
+                    "(cohorts ainda não maturados não entram em D_n). Células "
+                    "em branco = cohort ainda não maturou para esse D_n."
+                )
+
+                st.dataframe(
+                    styler,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                if cohort_base == "Leads":
+                    rodape = (
+                        f"**{int_br(total_uni)} lead(s)** no recorte. "
+                        "Universo: `ext_reconecta.leads` daily-distinct por "
+                        "`(dia, email)` com filtros canônicos de e-mail teste/"
+                        "interno. Lead pareado ao deal via cascata `zoho_id > "
+                        "session_id > email`. Agendamento = `MIN(start_datetime)` "
+                        "de activity Consulta/Indicação com `status_reuniao IS "
+                        "NOT NULL`. Leads sem deal pareado ficam com `sdr = "
+                        "'Sem SDR'` — saem do recorte quando o filtro de SDR "
+                        "específico está ativo."
+                    )
+                else:
+                    rodape = (
+                        f"**{int_br(total_uni)} oportunidade(s)** no recorte. "
+                        "Universo: `zoho_deals` criados no período **classificados "
+                        "como Atua +12 ou Atua -12** pela regra combinada das 4 "
+                        "fontes (CRM + ext.leads). Deals em **Não atua** ou **sem "
+                        "classificação** ficam de fora. "
+                        "Agendamento = 1ª activity Consulta/Indicação com "
+                        "`status_reuniao IS NOT NULL`, deduplicada por "
+                        "`activity_id`, ordenada por `start_datetime ASC`. "
                     "`lag_dias` negativos (agendamento datado antes do "
                     "deal) são tratados como D0."
                 )

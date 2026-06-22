@@ -470,8 +470,10 @@ def get_prevendas_overview_diario_por_sdr(data_ini: date,
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas por SDR…")
 def get_prevendas_por_sdr(data_ini: date, data_fim: date) -> pd.DataFrame:
+    # CP3-B: v2 otimizada (escopo de deals/leads no período). Legado:
+    # `prevendas_por_sdr.sql` — regressão via scripts/benchmark_prevendas_por_sdr.py
     return run_sql_file(
-        "prevendas_por_sdr.sql", _date_params(data_ini, data_fim)
+        "prevendas_por_sdr_v2.sql", _date_params(data_ini, data_fim)
     )
 
 
