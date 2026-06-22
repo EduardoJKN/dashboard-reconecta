@@ -19,6 +19,7 @@ _DEBUG_PARAM = "debug_perf"
 
 PAGE_OVERVIEW = "marketing_overview"
 PAGE_CAMPAIGNS = "marketing_campaigns"
+PAGE_CREATIVES = "marketing_creatives"
 
 
 def _session_key(page: str) -> str:
@@ -41,6 +42,7 @@ def perf_reset_run(page: str = PAGE_OVERVIEW) -> None:
         "kpi_render_seconds": None,
         "selector_render_seconds": None,
         "funil_render_seconds": None,
+        "top12_render_seconds": None,
         "page_total_seconds": None,
         "run_started": time.perf_counter(),
         "context": {},
@@ -58,6 +60,8 @@ def perf_set_context(
     data_fim: date | None = None,
     canais: list[str] | None = None,
     funil_item: str | None = None,
+    campanha: list[str] | None = None,
+    status: list[str] | None = None,
 ) -> None:
     """Registra contexto do rerun (sem dados sensíveis)."""
     if not perf_debug_enabled():
@@ -71,6 +75,10 @@ def perf_set_context(
         ctx["canais"] = list(canais)
     if funil_item is not None:
         ctx["funil_item"] = funil_item
+    if campanha is not None:
+        ctx["campanha"] = list(campanha)
+    if status is not None:
+        ctx["status"] = list(status)
     _state(page)["context"] = ctx
 
 
@@ -133,6 +141,10 @@ def perf_mark_funil_rendered(page: str = PAGE_CAMPAIGNS) -> None:
     _mark_elapsed(page, "funil_render_seconds")
 
 
+def perf_mark_top12_rendered(page: str = PAGE_CREATIVES) -> None:
+    _mark_elapsed(page, "top12_render_seconds")
+
+
 def perf_finalize_page(page: str = PAGE_OVERVIEW) -> None:
     import time
 
@@ -181,6 +193,10 @@ def perf_render_panel(page: str = PAGE_OVERVIEW) -> None:
                 parts.append(f"**Canais:** {', '.join(ctx['canais']) or 'todos'}")
             if ctx.get("funil_item"):
                 parts.append(f"**Funil:** `{ctx['funil_item']}`")
+            if ctx.get("campanha") is not None:
+                parts.append(f"**Campanha:** {', '.join(ctx['campanha']) or 'todas'}")
+            if ctx.get("status") is not None:
+                parts.append(f"**Status:** {', '.join(ctx['status']) or 'todos'}")
             st.caption(" · ".join(parts))
         for q in queries:
             err = f" · **erro:** {q['error']}" if q.get("error") else ""
@@ -191,18 +207,33 @@ def perf_render_panel(page: str = PAGE_OVERVIEW) -> None:
             )
         kpi_t = state.get("kpi_render_seconds")
         if kpi_t is not None:
+            kpi_label = (
+                "Performance Meta"
+                if page_name == PAGE_CREATIVES
+                else "Financeiro/Volume"
+            )
             st.caption(
-                f"**Tempo ate Financeiro/Volume** (aprox.): **{kpi_t:.3f}s**"
+                f"**Tempo ate {kpi_label}** (aprox.): **{kpi_t:.3f}s**"
             )
         sel_t = state.get("selector_render_seconds")
         if sel_t is not None:
+            sel_label = (
+                "seletor de criativo"
+                if page_name == PAGE_CREATIVES
+                else "seletor de campanha"
+            )
             st.caption(
-                f"**Tempo ate seletor de campanha** (aprox.): **{sel_t:.3f}s**"
+                f"**Tempo ate {sel_label}** (aprox.): **{sel_t:.3f}s**"
             )
         funil_t = state.get("funil_render_seconds")
         if funil_t is not None:
             st.caption(
                 f"**Tempo ate cards do funil** (aprox.): **{funil_t:.3f}s**"
+            )
+        top12_t = state.get("top12_render_seconds")
+        if top12_t is not None:
+            st.caption(
+                f"**Tempo ate Top 12** (aprox.): **{top12_t:.3f}s**"
             )
         total = state.get("page_total_seconds")
         if total is not None:

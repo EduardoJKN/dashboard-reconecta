@@ -1709,6 +1709,30 @@ def criativos_por_quality(df: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values("investimento", ascending=False).reset_index(drop=True)
 
 
+_MEDIA_URL_COLS = ("thumbnail_url", "image_url", "permalink_url")
+
+
+def _criativos_ranking_agg(df: pd.DataFrame) -> pd.DataFrame:
+    """Agrega por ad_id usando somente colunas presentes em df."""
+    agg_spec: dict[str, tuple[str, str]] = {
+        "ad_name": ("ad_name", "first"),
+        "campaign_name": ("campaign_name", "first"),
+        "investimento": ("investimento", "sum"),
+        "impressoes": ("impressoes", "sum"),
+        "cliques": ("cliques", "sum"),
+        "alcance": ("alcance", "sum"),
+        "effective_status": ("effective_status", "first"),
+    }
+    for col in _MEDIA_URL_COLS:
+        if col in df.columns:
+            agg_spec[col] = (col, "first")
+    agg = df.groupby("ad_id", as_index=False).agg(**agg_spec)
+    for col in _MEDIA_URL_COLS:
+        if col not in agg.columns:
+            agg[col] = pd.NA
+    return agg
+
+
 def criativos_ranking(df: pd.DataFrame,
                       sort_by: str = "investimento",
                       ascending: bool = False,
@@ -1743,18 +1767,7 @@ def criativos_ranking(df: pd.DataFrame,
     if df.empty:
         return pd.DataFrame(columns=cols)
 
-    agg = df.groupby("ad_id", as_index=False).agg(
-        ad_name=("ad_name", "first"),
-        campaign_name=("campaign_name", "first"),
-        investimento=("investimento", "sum"),
-        impressoes=("impressoes", "sum"),
-        cliques=("cliques", "sum"),
-        alcance=("alcance", "sum"),
-        thumbnail_url=("thumbnail_url", "first"),
-        image_url=("image_url", "first"),
-        permalink_url=("permalink_url", "first"),
-        effective_status=("effective_status", "first"),
-    )
+    agg = _criativos_ranking_agg(df)
     agg = agg[agg["investimento"] > 0].copy()
     if agg.empty:
         return pd.DataFrame(columns=cols)

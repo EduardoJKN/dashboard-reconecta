@@ -6,11 +6,28 @@ thumbnails · tabela detalhada com rankings (quality, engagement, conversion).""
 from __future__ import annotations
 
 import html as html_lib
-from datetime import timedelta
+import logging
+import time
+from datetime import date, timedelta
+from typing import Callable
 
 import pandas as pd
 import streamlit as st
 
+from src.marketing_perf import (
+    PAGE_CREATIVES,
+    perf_debug_enabled,
+    perf_finalize_page,
+    perf_mark_funil_rendered,
+    perf_mark_kpi_rendered,
+    perf_mark_selector_rendered,
+    perf_mark_top12_rendered,
+    perf_record_query,
+    perf_render_panel,
+    perf_reset_run,
+    perf_set_context,
+    perf_timed_block,
+)
 from src.marketing_queries import (
     get_mkt_criativo_funil,
     get_mkt_criativos,
@@ -22,9 +39,9 @@ from src.marketing_queries import (
 )
 from src.marketing_safe import safe_run
 from src.repositories import (
-    get_executivas,
     get_investimento_diario,
     get_leads_visao_geral,
+    get_mkt_campanhas_vendas_oficiais,
     get_prevendas_overview_diario,
 )
 from src.marketing_transforms import (
@@ -49,65 +66,67 @@ from src.transforms import delta_pct
 from src.ui.charts import donut
 from src.ui.components import metric_card_v2, section_title
 from src.ui.marketing_components import render_funil_selecionado
-from src.ui.page import start_page
+from src.ui.page import PageContext, start_page
 from src.ui.theme import PALETTE, brl, int_br, pct
 
-# ---------------------------------------------------------------------------
-# Header + filtros (período + campanha + status)
-# ---------------------------------------------------------------------------
-ctx = start_page(
-    title="Criativos",
-    subtitle="Performance dos anúncios Meta",
-    filters=["campanha", "status"],
+logger = logging.getLogger("reconecta.marketing.creatives")
+
+_TODOS_NORM = "__todos__"
+
+_COL_MAP = {"campanha": "campaign_name", "status": "status_label"}
+
+_FUNIL_EXPANDER_MD = (
+    "- **Universo do funil:** `ext_reconecta.leads` no período, com "
+    "  `utm_content` definindo o criativo do lead.\n"
+    "- **Match lead → deal (vendas):** prioridade `e-mail` "
+    "  (primário) → `telefone` limpo ≥ 8 dígitos (fallback). "
+    "  `zoho_id` e `session_id` foram REMOVIDOS — operação validou "
+    "  que e-mail é mais confiável.\n"
+    "- **Atribuição cross-período:** a venda fica no período de "
+    "  `data_hora_compra`, mas o lead atribuído pode ter sido criado "
+    "  ANTES. Para cada deal ganho, o sistema busca o lead histórico "
+    "  com `created_at <= data_hora_compra`.\n"
+    "- **Desempate quando >1 lead casa o mesmo deal:**\n"
+    "  1. match por e-mail vence telefone;\n"
+    "  2. lead com origem útil (utm/link_in_bio/social) vence;\n"
+    "  3. aparição mais recente antes da venda;\n"
+    "  4. `lead_id` (determinístico).\n"
+    "- **'Todos os resultados':** totais oficiais do período — leads "
+    "  daily-distinct por e-mail (regra Visão Geral), vendas novas do "
+    "  CRM, investimento total de mídia.\n"
+    "- **'Totais vinculados aos leads':** soma per-criativo do funil "
+    "  — só o que foi de fato vinculado/atribuído (útil pra auditoria "
+    "  vs. universo oficial).\n"
+    "- **Leads / +12 / -12 / Agendamentos / Comparecimentos:** "
+    "  lead-centric, 1 e-mail conta 1× por criativo "
+    "  (`COUNT(DISTINCT email_norm)`).\n"
+    "- **Agendamentos:** atividades `Consulta` ou `Indicação` em "
+    "  `zoho_activities` no período, **excluindo `status_reuniao` "
+    "  vencido** (`COALESCE(status_reuniao,'') NOT ILIKE '%vencid%'`) — "
+    "  alinhado com a regra da Visão Geral comercial.\n"
+    "- **Comparecimentos:** subset dos agendamentos com "
+    "  `status_reuniao = 'Concluída'`.\n"
+    "- **Vendas novas:** deal-centric — 1 row por deal (sem "
+    "  duplicação), `stage IN ('Ganho','Fechado Ganho')` e "
+    "  `tipo_venda = 'Novo cliente'`.\n"
+    "- **Filtros de e-mail de teste:** `@teste`, `teste@`, `smarts`, "
+    "  `reconecta` removidos do universo de leads em todas as etapas.\n"
+    "- **Aplicações (etapa do funil):** "
+    "`fdw_reconecta.typeform_aplicacoes` cruzado por e-mail dos leads "
+    "do criativo/seleção (`dados_completos = TRUE`, dedupe e-mail/dia; "
+    "leads `timestamp::date`, typeform `created_at::date`). Em **Todos os resultados**, "
+    "aplicações = todas do Typeform no período (igual One Page); em "
+    "criativo específico, só aplicações com lead no criativo. "
+    "Exibimos total, % sobre leads, +12/-12, CPA e CPA +12."
 )
 
-# ---------------------------------------------------------------------------
-# Carga (período atual + período anterior para deltas dos KPIs)
-# ---------------------------------------------------------------------------
-df_all = safe_run(
-    lambda: get_mkt_criativos(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_criativos",
-)
 
-# normaliza status_label antes do filtro categórico — o filtro mostra labels PT
-if not df_all.empty:
-    df_all = df_all.copy()
-    df_all["status_label"] = df_all["effective_status"].apply(normalize_status)
-
-col_map = {"campanha": "campaign_name", "status": "status_label"}
-df = ctx.apply_filters(df_all, col_map)
-
-# Período anterior para deltas
-dias = (ctx.data_fim - ctx.data_ini).days + 1
-prev_fim = ctx.data_ini - timedelta(days=1)
-prev_ini = prev_fim - timedelta(days=dias - 1)
-
-df_prev_all = safe_run(
-    lambda: get_mkt_criativos(prev_ini, prev_fim),
-    view_label="bi.vw_mkt_criativos",
-)
-if not df_prev_all.empty:
-    df_prev_all = df_prev_all.copy()
-    df_prev_all["status_label"] = df_prev_all["effective_status"].apply(normalize_status)
-df_prev = (
-    ctx.refilter(df_prev_all, col_map) if not df_prev_all.empty else df_prev_all
-)
-
-# Resultados atribuídos via mart (por ad_id) — período atual e anterior
-df_resultados = safe_run(
-    lambda: get_mkt_criativos_resultados(ctx.data_ini, ctx.data_fim),
-    view_label="odam.mart_ad_funnel_daily (criativos)",
-)
-df_resultados_prev = safe_run(
-    lambda: get_mkt_criativos_resultados(prev_ini, prev_fim),
-    view_label="odam.mart_ad_funnel_daily (criativos)",
-)
-
-# Cards gerais somam mart filtrando aos ad_ids visíveis após filtro de
-# campanha/status na página. Restringimos df_resultados aos ad_ids filtrados.
-def _restrict_resultados_aos_ads(df_resultados, df_view):
+def _restrict_resultados_aos_ads(
+    df_resultados: pd.DataFrame | None,
+    df_view: pd.DataFrame,
+) -> pd.DataFrame:
     if df_resultados is None or df_resultados.empty or df_view.empty:
-        return df_resultados
+        return df_resultados if df_resultados is not None else pd.DataFrame()
     ads_visiveis = set(df_view["ad_id"].dropna().astype(str).unique())
     if not ads_visiveis:
         return df_resultados.iloc[0:0]
@@ -115,251 +134,343 @@ def _restrict_resultados_aos_ads(df_resultados, df_view):
     res["ad_id"] = res["ad_id"].astype(str)
     return res[res["ad_id"].isin(ads_visiveis)]
 
-df_resultados_filtered = _restrict_resultados_aos_ads(df_resultados, df)
-df_resultados_prev_filtered = _restrict_resultados_aos_ads(df_resultados_prev, df_prev)
 
-df_top_nome = safe_run(
-    lambda: get_mkt_top_criativos_por_nome(ctx.data_ini, ctx.data_fim),
-    view_label="mkt_top_criativos_por_nome.sql (fdw anuncios + ext_reconecta.leads)",
-    log_sql_error=True,
-)
+def _fetch_df(
+    name: str,
+    fetch_fn: Callable[[], pd.DataFrame],
+    data_ini: date,
+    data_fim: date,
+) -> tuple[pd.DataFrame, str | None]:
+    """Executa consulta com safe_run, registra perf e devolve (df, erro)."""
+    t0 = time.perf_counter()
+    err: str | None = None
+    df = pd.DataFrame()
+    try:
+        df = safe_run(fetch_fn, view_label=name)
+    except Exception as exc:
+        err = str(exc)
+        logger.exception("Falha em %s", name)
+    elapsed = time.perf_counter() - t0
+    if perf_debug_enabled():
+        cols = len(df.columns) if not df.empty else 0
+        perf_record_query(
+            name, data_ini, data_fim, elapsed, len(df),
+            page=PAGE_CREATIVES, cols=cols, error=err,
+        )
+    return df, err
 
-k = criativos_kpis(df, df_resultados_filtered)
-kp = criativos_kpis(df_prev, df_resultados_prev_filtered)
 
-# ---------------------------------------------------------------------------
-# KPIs
-# ---------------------------------------------------------------------------
-section_title(
-    "Performance Meta",
-    f"{ctx.data_ini.strftime('%d/%m/%Y')} → {ctx.data_fim.strftime('%d/%m/%Y')}",
-)
+def _prev_period(data_ini: date, data_fim: date) -> tuple[date, date]:
+    dias = (data_fim - data_ini).days + 1
+    prev_fim = data_ini - timedelta(days=1)
+    prev_ini = prev_fim - timedelta(days=dias - 1)
+    return prev_ini, prev_fim
 
-c1, c2, c3, c4, c5 = st.columns(5, gap="small")
-with c1:
-    metric_card_v2(
-        "Anúncios ativos",
-        int_br(k["anuncios_ativos"]),
-        delta_pct=delta_pct(k["anuncios_ativos"], kp["anuncios_ativos"]),
-        hint="ad_ids distintos com invest > 0",
-        accent=True,
+
+def _normalize_criativos_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    out["status_label"] = out["effective_status"].apply(normalize_status)
+    return out
+
+
+def _load_p1_data(
+    ctx: PageContext,
+) -> tuple[
+    pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
+    pd.DataFrame, pd.DataFrame, dict, dict, str | None,
+]:
+    """Performance Meta: view + mart (atual e anterior para deltas)."""
+    errors: list[str] = []
+    prev_ini, prev_fim = _prev_period(ctx.data_ini, ctx.data_fim)
+
+    df_all, e1 = _fetch_df(
+        "bi.vw_mkt_criativos",
+        lambda: get_mkt_criativos(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini, ctx.data_fim,
     )
-with c2:
-    metric_card_v2(
-        "Investimento",
-        brl(k["investimento"], casas=2),
-        delta_pct=delta_pct(k["investimento"], kp["investimento"]),
-        hint="Meta · período filtrado",
+    df_all = _normalize_criativos_df(df_all)
+    df = ctx.apply_filters(df_all, _COL_MAP)
+
+    df_prev_all, e2 = _fetch_df(
+        "bi.vw_mkt_criativos (periodo anterior)",
+        lambda: get_mkt_criativos(prev_ini, prev_fim),
+        prev_ini, prev_fim,
     )
-with c3:
-    metric_card_v2(
-        "Impressões",
-        int_br(k["impressoes"]),
-        delta_pct=delta_pct(k["impressoes"], kp["impressoes"]),
-        hint=f"alcance: {int_br(k['alcance'])} · "
-             f"freq.: {k['frequencia']:.2f}".replace(".", ","),
-    )
-with c4:
-    metric_card_v2(
-        "CTR",
-        pct(k["ctr"], casas=2),
-        delta_pct=delta_pct(k["ctr"], kp["ctr"]),
-        hint=f"{int_br(k['cliques'])} cliques",
-    )
-with c5:
-    metric_card_v2(
-        "CPC",
-        brl(k["cpc"], casas=2),
-        delta_pct=delta_pct(k["cpc"], kp["cpc"]),
-        hint="invest ÷ cliques",
-    )
-
-# ---------------------------------------------------------------------------
-# Funil do criativo selecionado — usa helper compartilhado com a página
-# Campanhas. Match `ad_name = utm_content`. Granularidade `ad_name`
-# consolida múltiplos `ad_id` (CBO/A-B). Lead → deal por priority
-# `zoho_id > session_id > email`; deal → activity via what_id (regra
-# oficial Visão Geral / Growth).
-# ---------------------------------------------------------------------------
-df_cri_funil = safe_run(
-    lambda: get_mkt_criativo_funil(ctx.data_ini, ctx.data_fim),
-    view_label="mkt_criativo_funil",
-)
-
-# Totais OFICIAIS do período (alinham 'Todos os resultados' do funil com
-# os cards da Visão Geral comercial).
-#   - leads:  COUNT(DISTINCT (timestamp::date, lower(trim(email)))) via
-#             get_leads_visao_geral (mesma fonte do card "Leads Totais").
-#   - vendas: SUM(vendas) da bi.vw_dashboard_comercial_executivas_rw
-#             (= total Novo cliente Ganho do período).
-#   - invest: SUM(investimento_total) da bi.vw_investimento_diario
-#             (Meta + Google + Pinterest agregados por dia).
-# Os 3 caem pra None em caso de falha → 'Todos os resultados' segue como
-# soma do df_funil (fallback silencioso).
-_df_leads_oficial = safe_run(
-    lambda: get_leads_visao_geral(ctx.data_ini, ctx.data_fim),
-    view_label="leads_visao_geral",
-)
-_leads_totais_oficial = (
-    int(len(_df_leads_oficial))
-    if _df_leads_oficial is not None and not _df_leads_oficial.empty
-    else None
-)
-
-_df_exec_oficial = safe_run(
-    lambda: get_executivas(ctx.data_ini, ctx.data_fim),
-    view_label="dashboard_executivas",
-)
-_vendas_novas_oficial = (
-    int(_df_exec_oficial["vendas"].fillna(0).sum())
-    if (_df_exec_oficial is not None and not _df_exec_oficial.empty
-        and "vendas" in _df_exec_oficial.columns) else None
-)
-
-_df_inv_oficial = safe_run(
-    lambda: get_investimento_diario(ctx.data_ini, ctx.data_fim),
-    view_label="investimento_diario",
-)
-_df_prev_oficial = safe_run(
-    lambda: get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim),
-    view_label="prevendas_overview_diario",
-)
-_agendamentos_oficial = agendamentos_one_page_oficial(_df_prev_oficial)
-_comparecimentos_oficial = comparecimentos_one_page_oficial(_df_prev_oficial)
-_vendas_oficial = vendas_one_page_oficial(_df_prev_oficial)
-_investimento_oficial = (
-    float(_df_inv_oficial["investimento_total"].fillna(0).sum())
-    if (_df_inv_oficial is not None and not _df_inv_oficial.empty
-        and "investimento_total" in _df_inv_oficial.columns) else None
-)
-
-# Caption diagnóstica — sinaliza quando algum total oficial não carregou.
-# Sem isso, 'Todos os resultados' cai pra soma do df sem aviso, e a
-# operação não consegue distinguir "está certo" de "está em fallback".
-_oficiais_status_cri = [
-    ("leads",       _leads_totais_oficial),
-    ("vendas",      _vendas_novas_oficial),
-    ("investimento", _investimento_oficial),
-    ("agendamentos", _agendamentos_oficial),
-    ("comparecimentos", _comparecimentos_oficial),
-    ("vendas", _vendas_oficial or _vendas_novas_oficial),
-]
-_oficiais_faltando_cri = [k for k, v in _oficiais_status_cri if v is None]
-if _oficiais_faltando_cri:
-    st.caption(
-        "⚠ Fonte oficial indisponível para: "
-        + ", ".join(f"`{k}`" for k in _oficiais_faltando_cri)
-        + ". 'Todos os resultados' está em modo soma do df (= 'Totais "
-        "vinculados aos leads')."
+    df_prev_all = _normalize_criativos_df(df_prev_all)
+    df_prev = (
+        ctx.refilter(df_prev_all, _COL_MAP)
+        if not df_prev_all.empty else df_prev_all
     )
 
-render_funil_selecionado(
-    df_funil=df_cri_funil,
-    key_col="ad_name_norm",
-    entity_label="Criativo",
-    section_title_text="Funil do criativo selecionado",
-    sel_state_key="cri_funil_selecionado",
-    lista_fn=lambda df, sb: lista_criativos_funil(
-        df, sb,
-        leads_totais_oficial=_leads_totais_oficial,
-        vendas_novas_oficial=_vendas_novas_oficial,
-        investimento_oficial=_investimento_oficial,
-    ),
-    kpis_fn=lambda df, sel: criativo_funil_kpis(
-        df, sel,
-        leads_totais_oficial=_leads_totais_oficial,
-        vendas_novas_oficial=_vendas_novas_oficial,
-        investimento_oficial=_investimento_oficial,
-        agendamentos_oficial=_agendamentos_oficial,
-        comparecimentos_oficial=_comparecimentos_oficial,
-        vendas_oficial=_vendas_oficial,
-    ),
-    etapas_fn=criativo_funil_etapas,
-    marketing_funil_unico=True,
-    data_ini=ctx.data_ini,
-    data_fim=ctx.data_fim,
-    nivel="criativo",
-    auditoria_state_key="cri_funil_auditoria",
-    empty_msg="Sem criativos com investimento ou leads no período.",
-    caption=(
-        "Criativos usam `utm_content` como origem principal. Vendas são "
-        "atribuídas ao lead histórico por e-mail/telefone antes da compra."
-    ),
-    expander_md=(
-        "- **Universo do funil:** `ext_reconecta.leads` no período, com "
-        "  `utm_content` definindo o criativo do lead.\n"
-        "- **Match lead → deal (vendas):** prioridade `e-mail` "
-        "  (primário) → `telefone` limpo ≥ 8 dígitos (fallback). "
-        "  `zoho_id` e `session_id` foram REMOVIDOS — operação validou "
-        "  que e-mail é mais confiável.\n"
-        "- **Atribuição cross-período:** a venda fica no período de "
-        "  `data_hora_compra`, mas o lead atribuído pode ter sido criado "
-        "  ANTES. Para cada deal ganho, o sistema busca o lead histórico "
-        "  com `created_at <= data_hora_compra`.\n"
-        "- **Desempate quando >1 lead casa o mesmo deal:**\n"
-        "  1. match por e-mail vence telefone;\n"
-        "  2. lead com origem útil (utm/link_in_bio/social) vence;\n"
-        "  3. aparição mais recente antes da venda;\n"
-        "  4. `lead_id` (determinístico).\n"
-        "- **'Todos os resultados':** totais oficiais do período — leads "
-        "  daily-distinct por e-mail (regra Visão Geral), vendas novas do "
-        "  CRM, investimento total de mídia.\n"
-        "- **'Totais vinculados aos leads':** soma per-criativo do funil "
-        "  — só o que foi de fato vinculado/atribuído (útil pra auditoria "
-        "  vs. universo oficial).\n"
-        "- **Leads / +12 / -12 / Agendamentos / Comparecimentos:** "
-        "  lead-centric, 1 e-mail conta 1× por criativo "
-        "  (`COUNT(DISTINCT email_norm)`).\n"
-        "- **Agendamentos:** atividades `Consulta` ou `Indicação` em "
-        "  `zoho_activities` no período, **excluindo `status_reuniao` "
-        "  vencido** (`COALESCE(status_reuniao,'') NOT ILIKE '%vencid%'`) — "
-        "  alinhado com a regra da Visão Geral comercial.\n"
-        "- **Comparecimentos:** subset dos agendamentos com "
-        "  `status_reuniao = 'Concluída'`.\n"
-        "- **Vendas novas:** deal-centric — 1 row por deal (sem "
-        "  duplicação), `stage IN ('Ganho','Fechado Ganho')` e "
-        "  `tipo_venda = 'Novo cliente'`.\n"
-        "- **Filtros de e-mail de teste:** `@teste`, `teste@`, `smarts`, "
-        "  `reconecta` removidos do universo de leads em todas as etapas.\n"
-        "- **Aplicações (etapa do funil):** "
-        "`fdw_reconecta.typeform_aplicacoes` cruzado por e-mail dos leads "
-        "do criativo/seleção (`dados_completos = TRUE`, dedupe e-mail/dia; "
-        "leads `timestamp::date`, typeform `created_at::date`). Em **Todos os resultados**, "
-        "aplicações = todas do Typeform no período (igual One Page); em "
-        "criativo específico, só aplicações com lead no criativo. "
-        "Exibimos total, % sobre leads, +12/-12, CPA e CPA +12."
-    ),
-)
+    df_resultados, e3 = _fetch_df(
+        "odam.mart_ad_funnel_daily (criativos)",
+        lambda: get_mkt_criativos_resultados(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini, ctx.data_fim,
+    )
+    df_resultados_prev, e4 = _fetch_df(
+        "odam.mart_ad_funnel_daily (criativos, periodo anterior)",
+        lambda: get_mkt_criativos_resultados(prev_ini, prev_fim),
+        prev_ini, prev_fim,
+    )
+    for e in (e1, e2, e3, e4):
+        if e:
+            errors.append(e)
 
-# ---------------------------------------------------------------------------
-# Distribuições — Status × Quality Ranking
-# ---------------------------------------------------------------------------
-col_st, col_q = st.columns(2, gap="large")
+    df_res_f = _restrict_resultados_aos_ads(df_resultados, df)
+    df_res_prev_f = _restrict_resultados_aos_ads(df_resultados_prev, df_prev)
+    k = criativos_kpis(df, df_res_f)
+    kp = criativos_kpis(df_prev, df_res_prev_f)
+    return (
+        df_all, df, df_prev, df_res_f, df_res_prev_f,
+        df_resultados, k, kp, "; ".join(errors) or None,
+    )
 
-with col_st:
-    section_title("Por status", "investimento agrupado por status do anúncio")
-    by_status = criativos_por_status(df)
-    if by_status.empty:
-        st.info("Sem investimento Meta no período para os filtros aplicados.")
-    else:
-        st.plotly_chart(
-            donut(by_status, names="status_label", values="investimento",
-                  height=300, total_label="Invest. total"),
-            use_container_width=True,
+
+def _resolve_vendas_novas_oficial(
+    vendas_count: int | None,
+    *,
+    leads_totais: int | None,
+    investimento: float | None,
+    agendamentos: int | None,
+    comparecimentos: int | None,
+) -> int | None:
+    if vendas_count is None:
+        return None
+    if vendas_count == 0 and all(
+        v is None
+        for v in (leads_totais, investimento, agendamentos, comparecimentos)
+    ):
+        return None
+    return vendas_count
+
+
+def _load_oficiais_todos(ctx: PageContext) -> dict:
+    """Fontes oficiais — somente para __todos__."""
+    _df_leads, _ = _fetch_df(
+        "leads_visao_geral",
+        lambda: get_leads_visao_geral(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini, ctx.data_fim,
+    )
+    _leads_totais = (
+        int(len(_df_leads))
+        if _df_leads is not None and not _df_leads.empty
+        else None
+    )
+
+    _df_vendas, err_vendas = _fetch_df(
+        "mkt_campanhas_vendas_oficiais",
+        lambda: get_mkt_campanhas_vendas_oficiais(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini, ctx.data_fim,
+    )
+    _vendas_count: int | None = None
+    if (
+        not err_vendas
+        and _df_vendas is not None
+        and not _df_vendas.empty
+        and "vendas" in _df_vendas.columns
+    ):
+        _vendas_count = int(_df_vendas["vendas"].fillna(0).iloc[0])
+
+    _df_inv, _ = _fetch_df(
+        "investimento_diario",
+        lambda: get_investimento_diario(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini, ctx.data_fim,
+    )
+    _df_prev, _ = _fetch_df(
+        "prevendas_overview_diario",
+        lambda: get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini, ctx.data_fim,
+    )
+    _agendamentos = agendamentos_one_page_oficial(_df_prev)
+    _comparecimentos = comparecimentos_one_page_oficial(_df_prev)
+    _vendas = vendas_one_page_oficial(_df_prev)
+    _investimento = (
+        float(_df_inv["investimento_total"].fillna(0).sum())
+        if (_df_inv is not None and not _df_inv.empty
+            and "investimento_total" in _df_inv.columns)
+        else None
+    )
+    _vendas_novas = _resolve_vendas_novas_oficial(
+        _vendas_count,
+        leads_totais=_leads_totais,
+        investimento=_investimento,
+        agendamentos=_agendamentos,
+        comparecimentos=_comparecimentos,
+    )
+
+    _oficiais_status = [
+        ("leads", _leads_totais),
+        ("vendas", _vendas_novas),
+        ("investimento", _investimento),
+        ("agendamentos", _agendamentos),
+        ("comparecimentos", _comparecimentos),
+        ("vendas", _vendas or _vendas_novas),
+    ]
+    _faltando = [k for k, v in _oficiais_status if v is None]
+    if _faltando:
+        st.caption(
+            "⚠ Fonte oficial indisponível para: "
+            + ", ".join(f"`{k}`" for k in _faltando)
+            + ". 'Todos os resultados' está em modo soma do df (= 'Totais "
+            "vinculados aos leads')."
         )
 
-with col_q:
-    section_title("Por quality ranking",
-                  "diagnóstico Meta · qualidade do criativo")
-    by_q = criativos_por_quality(df)
-    if by_q.empty:
-        st.info("Sem dados de quality ranking no período.")
-    else:
-        st.plotly_chart(
-            donut(by_q, names="quality_label", values="investimento",
-                  height=300, total_label="Invest. total"),
-            use_container_width=True,
+    return {
+        "leads_totais_oficial": _leads_totais,
+        "vendas_novas_oficial": _vendas_novas,
+        "investimento_oficial": _investimento,
+        "agendamentos_oficial": _agendamentos,
+        "comparecimentos_oficial": _comparecimentos,
+        "vendas_oficial": _vendas,
+    }
+
+
+def _oficiais_loader_factory(ctx: PageContext) -> Callable[[str], dict]:
+    def _loader(sel: str) -> dict:
+        if sel != _TODOS_NORM:
+            return {}
+        with st.spinner("Carregando totais oficiais do período…"):
+            with perf_timed_block("Fontes oficiais (__todos__)", page=PAGE_CREATIVES):
+                return _load_oficiais_todos(ctx)
+
+    return _loader
+
+
+def _render_performance_meta(
+    ctx: PageContext,
+    k: dict,
+    kp: dict,
+) -> None:
+    section_title(
+        "Performance Meta",
+        f"{ctx.data_ini.strftime('%d/%m/%Y')} → {ctx.data_fim.strftime('%d/%m/%Y')}",
+    )
+    c1, c2, c3, c4, c5 = st.columns(5, gap="small")
+    with c1:
+        metric_card_v2(
+            "Anúncios ativos",
+            int_br(k["anuncios_ativos"]),
+            delta_pct=delta_pct(k["anuncios_ativos"], kp["anuncios_ativos"]),
+            hint="ad_ids distintos com invest > 0",
+            accent=True,
         )
+    with c2:
+        metric_card_v2(
+            "Investimento",
+            brl(k["investimento"], casas=2),
+            delta_pct=delta_pct(k["investimento"], kp["investimento"]),
+            hint="Meta · período filtrado",
+        )
+    with c3:
+        metric_card_v2(
+            "Impressões",
+            int_br(k["impressoes"]),
+            delta_pct=delta_pct(k["impressoes"], kp["impressoes"]),
+            hint=f"alcance: {int_br(k['alcance'])} · "
+                 f"freq.: {k['frequencia']:.2f}".replace(".", ","),
+        )
+    with c4:
+        metric_card_v2(
+            "CTR",
+            pct(k["ctr"], casas=2),
+            delta_pct=delta_pct(k["ctr"], kp["ctr"]),
+            hint=f"{int_br(k['cliques'])} cliques",
+        )
+    with c5:
+        metric_card_v2(
+            "CPC",
+            brl(k["cpc"], casas=2),
+            delta_pct=delta_pct(k["cpc"], kp["cpc"]),
+            hint="invest ÷ cliques",
+        )
+
+
+def _render_funil_section(ctx: PageContext) -> None:
+    try:
+        with st.spinner("Carregando funil por criativo…"):
+            with perf_timed_block("Funil criativo_funil", page=PAGE_CREATIVES):
+                df_cri_funil, err = _fetch_df(
+                    "mkt_criativo_funil",
+                    lambda: get_mkt_criativo_funil(ctx.data_ini, ctx.data_fim),
+                    ctx.data_ini, ctx.data_fim,
+                )
+        if err:
+            section_title(
+                "Funil do criativo selecionado",
+                "investimento → vendas novas",
+            )
+            st.error(
+                "Não foi possível carregar o funil de criativos. "
+                "Os cards superiores permanecem disponíveis."
+            )
+            if perf_debug_enabled():
+                st.caption(f"Detalhe técnico: {err}")
+            return
+
+        render_funil_selecionado(
+            df_funil=df_cri_funil,
+            key_col="ad_name_norm",
+            entity_label="Criativo",
+            section_title_text="Funil do criativo selecionado",
+            sel_state_key="cri_funil_selecionado",
+            lista_fn=lambda df, sb: lista_criativos_funil(df, sb),
+            kpis_fn=criativo_funil_kpis,
+            etapas_fn=criativo_funil_etapas,
+            oficiais_loader=_oficiais_loader_factory(ctx),
+            on_selector_rendered=lambda: perf_mark_selector_rendered(PAGE_CREATIVES),
+            on_funil_cards_rendered=lambda: perf_mark_funil_rendered(PAGE_CREATIVES),
+            marketing_funil_unico=True,
+            data_ini=ctx.data_ini,
+            data_fim=ctx.data_fim,
+            nivel="criativo",
+            auditoria_state_key="cri_funil_auditoria",
+            empty_msg="Sem criativos com investimento ou leads no período.",
+            caption=(
+                "Criativos usam `utm_content` como origem principal. Vendas são "
+                "atribuídas ao lead histórico por e-mail/telefone antes da compra."
+            ),
+            expander_md=_FUNIL_EXPANDER_MD,
+        )
+    except Exception as exc:
+        logger.exception("Falha na secao Funil do criativo")
+        section_title(
+            "Funil do criativo selecionado",
+            "investimento → vendas novas",
+        )
+        st.error("Não foi possível renderizar o funil do criativo selecionado.")
+        if perf_debug_enabled():
+            st.caption(f"Detalhe técnico: {exc}")
+
+
+def _render_distribuicoes(df: pd.DataFrame) -> None:
+    col_st, col_q = st.columns(2, gap="large")
+    with col_st:
+        section_title("Por status", "investimento agrupado por status do anúncio")
+        by_status = criativos_por_status(df)
+        if by_status.empty:
+            st.info("Sem investimento Meta no período para os filtros aplicados.")
+        else:
+            st.plotly_chart(
+                donut(by_status, names="status_label", values="investimento",
+                      height=300, total_label="Invest. total"),
+                use_container_width=True,
+            )
+
+    with col_q:
+        section_title("Por quality ranking",
+                      "diagnóstico Meta · qualidade do criativo")
+        by_q = criativos_por_quality(df)
+        if by_q.empty:
+            st.info("Sem dados de quality ranking no período.")
+        else:
+            st.plotly_chart(
+                donut(by_q, names="quality_label", values="investimento",
+                      height=300, total_label="Invest. total"),
+                use_container_width=True,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Top criativos — grid 4×3 com thumbnails
@@ -579,52 +690,6 @@ def _render_resultado_atribuido_top12(top: pd.DataFrame) -> None:
     _emit_row(row2)
 
 
-head_l, head_r = st.columns([3, 1.2], vertical_alignment="bottom")
-with head_l:
-    section_title(
-        "Top 12 criativos",
-        "por nome (utm_content = ad_name) · mídia fdw + leads ext_reconecta + "
-        "aplicações typeform · investimento no período",
-    )
-with head_r:
-    sort_choice = st.selectbox(
-        "Ordenar por",
-        list(SORT_OPTIONS.keys()),
-        index=0, key="creatives_sort",
-        label_visibility="collapsed",
-    )
-
-sort_field, ascending = SORT_OPTIONS[sort_choice]
-if not df_top_nome.empty:
-    top = criativos_top_por_nome_ranking(
-        df,
-        df_top_nome,
-        df_resultados_filtered,
-        sort_by=sort_field,
-        ascending=ascending,
-        top_n=12,
-    )
-    _top12_modo = "por_nome_sql"
-else:
-    top = criativos_ranking(
-        df,
-        sort_by=sort_field,
-        ascending=ascending,
-        top_n=12,
-        df_resultados=df_resultados_filtered,
-    )
-    _top12_modo = "legacy_vw_mart"
-
-print(
-    f"[Top12] modo={_top12_modo} df_top_nome.shape={getattr(df_top_nome, 'shape', None)} "
-    f"df_resultados_filtered.shape={getattr(df_resultados_filtered, 'shape', None)} "
-    f"top.shape={getattr(top, 'shape', None)}",
-)
-if not df_top_nome.empty:
-    print("[Top12] df_top_nome.head(3)\n", df_top_nome.head(3))
-print("[Top12] top.head(3)\n", top.head(3) if not top.empty else top)
-
-
 def _creative_card_html(row) -> str:
     # pandas devolve NaN (float) em colunas vazias. `bool(NaN) == True` em
     # Python, então `or` NÃO cai no fallback — html_lib.escape(NaN) explode
@@ -798,82 +863,169 @@ def _creative_card_html(row) -> str:
     )
 
 
-if top.empty:
-    st.info("Nenhum criativo com investimento no período para os filtros aplicados.")
-else:
-    rows = top.to_dict("records")
-    # Renderiza em linhas de 4 colunas
-    for i in range(0, len(rows), 4):
-        cols_grid = st.columns(4, gap="small")
-        for col, row in zip(cols_grid, rows[i:i + 4]):
-            with col:
-                st.markdown(_creative_card_html(row), unsafe_allow_html=True)
-    _render_resultado_atribuido_top12(top)
+def _render_top12(
+    ctx: PageContext,
+    df: pd.DataFrame,
+    df_resultados_filtered: pd.DataFrame,
+) -> None:
+    head_l, head_r = st.columns([3, 1.2], vertical_alignment="bottom")
+    with head_l:
+        section_title(
+            "Top 12 criativos",
+            "por nome (utm_content = ad_name) · mídia fdw + leads ext_reconecta + "
+            "aplicações typeform · investimento no período",
+        )
+    with head_r:
+        sort_choice = st.selectbox(
+            "Ordenar por",
+            list(SORT_OPTIONS.keys()),
+            index=0, key="creatives_sort",
+            label_visibility="collapsed",
+        )
 
-# ---------------------------------------------------------------------------
-# Comparar criativos (V2 — modelo herdado do "Comparar campanhas")
-# Match: lower(btrim(ad_name)) = lower(btrim(utm_content)). Mesma fonte de
-# leads/CRM da Comparar campanhas (df_pv_raw = mkt_paginas_variantes.sql);
-# plataforma vem de bi.vw_mkt_criativos. Filtros origem/mídia/fuso/
-# dispositivo afetam SOMENTE este bloco.
-# ---------------------------------------------------------------------------
-section_title("Comparar criativos",
-              "plataforma + leads/CRM · grão utm_content (= ad_name)")
+    sort_field, ascending = SORT_OPTIONS[sort_choice]
+    top = pd.DataFrame()
+    top_err: str | None = None
 
-# DF email-level — base pros filtros desta seção e pra agregação Python.
-df_pv_raw_cri = safe_run(
-    lambda: get_mkt_paginas_variantes(ctx.data_ini, ctx.data_fim),
-    view_label="ext_reconecta.leads (email-level pra Comparar criativos)",
-)
+    try:
+        with st.spinner("Carregando ranking Top 12 por nome…"):
+            with perf_timed_block("Top 12 criativos", page=PAGE_CREATIVES):
+                df_top_nome, top_err = _fetch_df(
+                    "mkt_top_criativos_por_nome",
+                    lambda: get_mkt_top_criativos_por_nome(
+                        ctx.data_ini, ctx.data_fim,
+                    ),
+                    ctx.data_ini, ctx.data_fim,
+                )
+        if top_err:
+            st.warning(
+                "Não foi possível carregar o ranking por nome. "
+                "Exibindo fallback a partir da view de criativos."
+            )
+            if perf_debug_enabled():
+                st.caption(f"Detalhe técnico: {top_err}")
 
-# Opções de filtro vêm do DF email-level no período.
-def _opts_cri(col: str, default: str = "Todas") -> list[str]:
-    if df_pv_raw_cri.empty or col not in df_pv_raw_cri.columns:
-        return [default]
-    vals = sorted(df_pv_raw_cri[col].dropna().astype(str).unique().tolist())
-    return [default] + vals
+        if not df_top_nome.empty:
+            top = criativos_top_por_nome_ranking(
+                df,
+                df_top_nome,
+                df_resultados_filtered,
+                sort_by=sort_field,
+                ascending=ascending,
+                top_n=12,
+            )
+        else:
+            top = criativos_ranking(
+                df,
+                sort_by=sort_field,
+                ascending=ascending,
+                top_n=12,
+                df_resultados=df_resultados_filtered,
+            )
+    except Exception as exc:
+        logger.exception("Falha na secao Top 12")
+        st.error(
+            "Não foi possível renderizar o Top 12. "
+            "As seções superiores permanecem disponíveis."
+        )
+        if perf_debug_enabled():
+            st.caption(f"Detalhe técnico: {exc}")
+        try:
+            top = criativos_ranking(
+                df,
+                sort_by=sort_field,
+                ascending=ascending,
+                top_n=12,
+                df_resultados=df_resultados_filtered,
+            )
+        except Exception:
+            top = pd.DataFrame()
+        return
 
-# Filtros que afetam SOMENTE essa seção (não tocam cards/Top 12/Funil).
-_HELP_CRI = ("Filtra apenas a comparação de criativos — não afeta os cards "
-             "superiores, Top 12 nem Funil do criativo selecionado.")
+    perf_mark_top12_rendered(PAGE_CREATIVES)
 
-flt_cri_l1_a, flt_cri_l1_b = st.columns(2, gap="small")
-with flt_cri_l1_a:
-    sel_origem_cri = st.selectbox(
-        "Origem", options=_opts_cri("utm_source", "Todas"),
-        index=0, key="cmp_cri_origem", help=_HELP_CRI,
+    if top.empty:
+        st.info("Nenhum criativo com investimento no período para os filtros aplicados.")
+    else:
+        rows = top.to_dict("records")
+        for i in range(0, len(rows), 4):
+            cols_grid = st.columns(4, gap="small")
+            for col, row in zip(cols_grid, rows[i:i + 4]):
+                with col:
+                    st.markdown(_creative_card_html(row), unsafe_allow_html=True)
+        _render_resultado_atribuido_top12(top)
+
+
+def _render_comparar_criativos(ctx: PageContext, df: pd.DataFrame) -> None:
+    section_title("Comparar criativos",
+                  "plataforma + leads/CRM · grão utm_content (= ad_name)")
+
+    try:
+        with st.spinner("Carregando base de leads para comparação…"):
+            df_pv_raw_cri, cmp_err = _fetch_df(
+                "ext_reconecta.leads (email-level pra Comparar criativos)",
+                lambda: get_mkt_paginas_variantes(ctx.data_ini, ctx.data_fim),
+                ctx.data_ini, ctx.data_fim,
+            )
+        if cmp_err:
+            st.error("Não foi possível carregar a comparação de criativos.")
+            if perf_debug_enabled():
+                st.caption(f"Detalhe técnico: {cmp_err}")
+            return
+    except Exception as exc:
+        logger.exception("Falha ao carregar paginas_variantes")
+        st.error("Não foi possível carregar a comparação de criativos.")
+        if perf_debug_enabled():
+            st.caption(f"Detalhe técnico: {exc}")
+        return
+
+    def _opts_cri(col: str, default: str = "Todas") -> list[str]:
+        if df_pv_raw_cri.empty or col not in df_pv_raw_cri.columns:
+            return [default]
+        vals = sorted(df_pv_raw_cri[col].dropna().astype(str).unique().tolist())
+        return [default] + vals
+
+    _HELP_CRI = (
+        "Filtra apenas a comparação de criativos — não afeta os cards "
+        "superiores, Top 12 nem Funil do criativo selecionado."
     )
-with flt_cri_l1_b:
-    sel_midia_cri = st.selectbox(
-        "Mídia", options=_opts_cri("utm_medium", "Todas"),
-        index=0, key="cmp_cri_midia", help=_HELP_CRI,
-    )
-flt_cri_l2_a, flt_cri_l2_b = st.columns(2, gap="small")
-with flt_cri_l2_a:
-    sel_timezone_cri = st.selectbox(
-        "Fuso / região", options=_opts_cri("timezone", "Todos"),
-        index=0, key="cmp_cri_timezone", help=_HELP_CRI,
-    )
-with flt_cri_l2_b:
-    sel_device_cri = st.selectbox(
-        "Dispositivo", options=_opts_cri("device_type", "Todos"),
-        index=0, key="cmp_cri_device", help=_HELP_CRI,
-    )
 
-df_cri_utm_agg = agregar_criativos_por_utm_content(
-    df_pv_raw_cri, df,
-    origem=sel_origem_cri, midia=sel_midia_cri,
-    timezone=sel_timezone_cri, device_type=sel_device_cri,
-)
-cri_list = lista_criativos_utm_content(df_cri_utm_agg)
+    flt_cri_l1_a, flt_cri_l1_b = st.columns(2, gap="small")
+    with flt_cri_l1_a:
+        sel_origem_cri = st.selectbox(
+            "Origem", options=_opts_cri("utm_source", "Todas"),
+            index=0, key="cmp_cri_origem", help=_HELP_CRI,
+        )
+    with flt_cri_l1_b:
+        sel_midia_cri = st.selectbox(
+            "Mídia", options=_opts_cri("utm_medium", "Todas"),
+            index=0, key="cmp_cri_midia", help=_HELP_CRI,
+        )
+    flt_cri_l2_a, flt_cri_l2_b = st.columns(2, gap="small")
+    with flt_cri_l2_a:
+        sel_timezone_cri = st.selectbox(
+            "Fuso / região", options=_opts_cri("timezone", "Todos"),
+            index=0, key="cmp_cri_timezone", help=_HELP_CRI,
+        )
+    with flt_cri_l2_b:
+        sel_device_cri = st.selectbox(
+            "Dispositivo", options=_opts_cri("device_type", "Todos"),
+            index=0, key="cmp_cri_device", help=_HELP_CRI,
+        )
 
-if cri_list.empty:
-    st.caption("Sem criativos para os filtros selecionados.")
-else:
+    df_cri_utm_agg = agregar_criativos_por_utm_content(
+        df_pv_raw_cri, df,
+        origem=sel_origem_cri, midia=sel_midia_cri,
+        timezone=sel_timezone_cri, device_type=sel_device_cri,
+    )
+    cri_list = lista_criativos_utm_content(df_cri_utm_agg)
+
+    if cri_list.empty:
+        st.caption("Sem criativos para os filtros selecionados.")
+        return
+
     options = cri_list["ad_name_norm"].tolist()
     labels_map = dict(zip(cri_list["ad_name_norm"], cri_list["label"]))
-
-    # Defaults: top 1 e top 2 por investimento (lista já vem ordenada)
     idx_default_b = 1 if len(options) > 1 else 0
 
     sel_col_a, sel_col_b = st.columns(2, gap="small")
@@ -897,8 +1049,6 @@ else:
     kA = criativo_utm_content_kpis(df_cri_utm_agg, sel_a)
     kB = criativo_utm_content_kpis(df_cri_utm_agg, sel_b)
 
-    # Badge sutil sob cada select indicando se o criativo tem leads
-    # atribuídos via UTM (i.e. tem cobertura no DF de leads).
     def _tem_leads(k: dict) -> bool:
         return bool(k.get("leads_totais") or 0)
 
@@ -916,20 +1066,20 @@ else:
 
     cmp = compara_criativos_utm_content(kA, kB)
 
-    # ---- Formatadores (mesmo padrão do Comparar campanhas) ---------------
     _MONEY_METRICS = {"Investimento", "CPC", "CPL", "CPL +12", "CAC"}
-    _PCT_METRICS   = {"CTR", "Taxa qualificação", "Taxa +12",
-                       "Taxa Lead → Venda nova"}
+    _PCT_METRICS = {"CTR", "Taxa qualificação", "Taxa +12", "Taxa Lead → Venda nova"}
     _FLOAT_METRICS = {"Frequência"}
-    _STR_METRICS   = {"Campanha principal", "Adset principal", "Status",
-                       "Quality ranking", "Engagement ranking",
-                       "Conversion ranking", "URL exemplo"}
+    _STR_METRICS = {
+        "Campanha principal", "Adset principal", "Status",
+        "Quality ranking", "Engagement ranking",
+        "Conversion ranking", "URL exemplo",
+    }
 
     def _fmt_value(metrica: str, val) -> str:
         if val is None:
             return "—"
         try:
-            if isinstance(val, float) and val != val:  # NaN
+            if isinstance(val, float) and val != val:
                 return "—"
         except Exception:
             pass
@@ -942,8 +1092,6 @@ else:
             return pct(float(val), casas=2)
         if metrica in _FLOAT_METRICS:
             return f"{float(val):.2f}".replace(".", ",")
-        # Inteiros (Impressões/Cliques/Link clicks/Alcance/Leads*/Vendas/
-        # Qtd. ad_ids)
         return int_br(float(val))
 
     def _fmt_delta(d) -> str:
@@ -986,11 +1134,10 @@ else:
         },
     )
 
-    # Links clicáveis para abrir as URLs de exemplo em nova aba.
     def _url_valido(u) -> str | None:
         if u is None:
             return None
-        if isinstance(u, float) and u != u:  # NaN
+        if isinstance(u, float) and u != u:
             return None
         s = str(u).strip()
         if not s or s == "—":
@@ -1029,6 +1176,7 @@ else:
         "\"—\" indica ausência de atribuição via UTM ou denominador zero. "
         "**Filtros** (Origem/Mídia/Fuso/Dispositivo) afetam SOMENTE este bloco."
     )
+
 
 # ---------------------------------------------------------------------------
 # Tabelas de auditoria — fdw (mídia) + leads (UTM)
@@ -1149,94 +1297,219 @@ def _prep_leads_utm_audit(
     return out
 
 
-df_an_fdw = safe_run(
-    lambda: get_mkt_criativos_anuncios_fdw(ctx.data_ini, ctx.data_fim),
-    view_label="fdw_reconecta.anuncios (audit)",
-    log_sql_error=True,
-)
+def _load_fdw_audit_df(ctx: PageContext) -> pd.DataFrame:
+    """FDW para auditorias — cache @st.cache_data; uma execucao real por chave."""
+    df, _err = _fetch_df(
+        "fdw_reconecta.anuncios (audit)",
+        lambda: get_mkt_criativos_anuncios_fdw(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini, ctx.data_fim,
+    )
+    return df
 
-with st.expander("Tabela detalhada — anúncios do período"):
-    st.caption("fonte: **fdw_reconecta.anuncios** (mesma janela do dashboard).")
-    if df_an_fdw.empty:
-        st.info("Sem linhas em fdw_reconecta.anuncios para o período ou fonte indisponível.")
-    else:
-        df_an_disp = df_an_fdw
-        if (
-            not df.empty
-            and "ad_id" in df.columns
-            and "ad_id" in df_an_fdw.columns
-        ):
-            ads_ok = set(df["ad_id"].dropna().astype(str).unique())
-            df_an_disp = df_an_fdw[
-                df_an_fdw["ad_id"].astype(str).isin(ads_ok)
-            ].copy()
+
+def _render_auditorias(
+    ctx: PageContext,
+    df: pd.DataFrame,
+    df_all: pd.DataFrame,
+) -> None:
+    exp_fdw = st.expander(
+        "Tabela detalhada — anúncios do período",
+        expanded=False,
+        on_change="rerun",
+    )
+    if exp_fdw.open:
+        with exp_fdw:
+            try:
+                with st.spinner("Carregando auditoria fdw_reconecta.anuncios…"):
+                    df_an_fdw = _load_fdw_audit_df(ctx)
+            except Exception as exc:
+                logger.exception("Falha na auditoria fdw anuncios")
+                st.error("Não foi possível carregar a tabela de anúncios fdw.")
+                if perf_debug_enabled():
+                    st.caption(f"Detalhe técnico: {exc}")
+                df_an_fdw = pd.DataFrame()
+
             st.caption(
-                "Filtros de **campanha** e **status** da página aplicados via "
-                "interseção com os `ad_id` visíveis em `bi.vw_mkt_criativos`."
+                "fonte: **fdw_reconecta.anuncios** (mesma janela do dashboard)."
             )
-        else:
-            st.caption(
-                "Sem filtro de campanha/status (nenhum anúncio na view filtrada); "
-                "exibindo todos os registros fdw no período."
-            )
-        primary = [c for c in _ANUNCIOS_AUDIT_COLS_FIRST if c in df_an_disp.columns]
-        extra = [c for c in df_an_disp.columns if c not in primary]
-        st.dataframe(
-            df_an_disp[primary] if primary else df_an_disp,
-            use_container_width=True,
-            hide_index=True,
-        )
-        if extra:
-            with st.expander(f"Demais colunas fdw ({len(extra)})"):
+            if df_an_fdw.empty:
+                st.info(
+                    "Sem linhas em fdw_reconecta.anuncios para o período "
+                    "ou fonte indisponível."
+                )
+            else:
+                df_an_disp = df_an_fdw
+                if (
+                    not df.empty
+                    and "ad_id" in df.columns
+                    and "ad_id" in df_an_fdw.columns
+                ):
+                    ads_ok = set(df["ad_id"].dropna().astype(str).unique())
+                    df_an_disp = df_an_fdw[
+                        df_an_fdw["ad_id"].astype(str).isin(ads_ok)
+                    ].copy()
+                    st.caption(
+                        "Filtros de **campanha** e **status** da página aplicados via "
+                        "interseção com os `ad_id` visíveis em `bi.vw_mkt_criativos`."
+                    )
+                else:
+                    st.caption(
+                        "Sem filtro de campanha/status (nenhum anúncio na view filtrada); "
+                        "exibindo todos os registros fdw no período."
+                    )
+                primary = [
+                    c for c in _ANUNCIOS_AUDIT_COLS_FIRST if c in df_an_disp.columns
+                ]
+                extra = [c for c in df_an_disp.columns if c not in primary]
                 st.dataframe(
-                    df_an_disp[extra],
+                    df_an_disp[primary] if primary else df_an_disp,
                     use_container_width=True,
                     hide_index=True,
                 )
+                if extra:
+                    with st.expander(f"Demais colunas fdw ({len(extra)})"):
+                        st.dataframe(
+                            df_an_disp[extra],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
 
-with st.expander("Tabela de leads — UTMs e associação com criativos"):
-    df_leads_raw, fonte_leads = get_mkt_criativos_leads_utm_audit(
-        ctx.data_ini, ctx.data_fim
+    exp_leads = st.expander(
+        "Tabela de leads — UTMs e associação com criativos",
+        expanded=False,
+        on_change="rerun",
     )
-    sub_leads = (
-        f"fonte: **{fonte_leads}**; associação via `utm_campaign` ↔ "
-        "`campaign_name` e `utm_content` ↔ `ad_name` "
-        "(normalizado `LOWER(TRIM(·))` vs **fdw** no período)."
-    )
-    st.caption(sub_leads)
-    if df_leads_raw.empty:
-        st.info("Sem leads no período para os critérios de e-mail, ou fonte indisponível.")
-    else:
-        df_leads_enr = _prep_leads_utm_audit(
-            df_leads_raw,
-            df_an_fdw,
-            df_all,
-            ctx,
-            col_map,
-        )
-        front = [c for c in _LEADS_AUDIT_COLS_FIRST if c in df_leads_enr.columns]
-        tail = [
-            "utm_campaign_norm",
-            "utm_content_norm",
-            "tem_utm_campaign",
-            "tem_utm_content",
-            "tem_ad_id",
-            "match_campaign_name",
-            "match_ad_name",
-        ]
-        tail = [c for c in tail if c in df_leads_enr.columns]
-        used = set(front) | set(tail)
-        mid = [c for c in df_leads_enr.columns if c not in used]
-        show_cols = front + tail
-        st.dataframe(
-            df_leads_enr[show_cols],
-            use_container_width=True,
-            hide_index=True,
-        )
-        if mid:
-            with st.expander(f"Demais colunas de leads ({len(mid)})"):
+    if exp_leads.open:
+        with exp_leads:
+            try:
+                df_leads_raw, fonte_leads = get_mkt_criativos_leads_utm_audit(
+                    ctx.data_ini, ctx.data_fim,
+                )
+            except Exception as exc:
+                logger.exception("Falha na auditoria leads UTM")
+                st.error("Não foi possível carregar a tabela de leads.")
+                if perf_debug_enabled():
+                    st.caption(f"Detalhe técnico: {exc}")
+                return
+
+            sub_leads = (
+                f"fonte: **{fonte_leads}**; associação via `utm_campaign` ↔ "
+                "`campaign_name` e `utm_content` ↔ `ad_name` "
+                "(normalizado `LOWER(TRIM(·))` vs **fdw** no período)."
+            )
+            st.caption(sub_leads)
+            if df_leads_raw.empty:
+                st.info(
+                    "Sem leads no período para os critérios de e-mail, "
+                    "ou fonte indisponível."
+                )
+            else:
+                df_fdw_match = _load_fdw_audit_df(ctx)
+                df_leads_enr = _prep_leads_utm_audit(
+                    df_leads_raw,
+                    df_fdw_match,
+                    df_all,
+                    ctx,
+                    _COL_MAP,
+                )
+                front = [
+                    c for c in _LEADS_AUDIT_COLS_FIRST if c in df_leads_enr.columns
+                ]
+                tail = [
+                    "utm_campaign_norm",
+                    "utm_content_norm",
+                    "tem_utm_campaign",
+                    "tem_utm_content",
+                    "tem_ad_id",
+                    "match_campaign_name",
+                    "match_ad_name",
+                ]
+                tail = [c for c in tail if c in df_leads_enr.columns]
+                used = set(front) | set(tail)
+                mid = [c for c in df_leads_enr.columns if c not in used]
+                show_cols = front + tail
                 st.dataframe(
-                    df_leads_enr[mid],
+                    df_leads_enr[show_cols],
                     use_container_width=True,
                     hide_index=True,
                 )
+                if mid:
+                    with st.expander(f"Demais colunas de leads ({len(mid)})"):
+                        st.dataframe(
+                            df_leads_enr[mid],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+
+def main() -> None:
+    if perf_debug_enabled():
+        perf_reset_run(PAGE_CREATIVES)
+
+    ctx = start_page(
+        title="Criativos",
+        subtitle="Performance dos anúncios Meta",
+        filters=["campanha", "status"],
+    )
+
+    perf_set_context(
+        PAGE_CREATIVES,
+        data_ini=ctx.data_ini,
+        data_fim=ctx.data_fim,
+        campanha=list(ctx.selections.get("campanha") or []),
+        status=list(ctx.selections.get("status") or []),
+        funil_item=st.session_state.get("cri_funil_selecionado"),
+    )
+
+    df_all = pd.DataFrame()
+    df = pd.DataFrame()
+    df_res_f = pd.DataFrame()
+
+    # --- P1: Performance Meta ---
+    try:
+        with perf_timed_block("Performance Meta (criativos + resultados)", page=PAGE_CREATIVES):
+            (
+                df_all, df, _df_prev, df_res_f, _df_res_prev_f,
+                _df_resultados, k, kp, p1_err,
+            ) = _load_p1_data(ctx)
+        if p1_err:
+            st.error(
+                "Não foi possível carregar os indicadores superiores. "
+                "Os cards podem exibir zeros até a consulta ser concluída."
+            )
+            if perf_debug_enabled():
+                st.caption(f"Detalhe técnico: {p1_err}")
+        _render_performance_meta(ctx, k, kp)
+        perf_mark_kpi_rendered(PAGE_CREATIVES)
+    except Exception as exc:
+        logger.exception("Falha nos cards Performance Meta")
+        section_title(
+            "Performance Meta",
+            f"{ctx.data_ini.strftime('%d/%m/%Y')} → {ctx.data_fim.strftime('%d/%m/%Y')}",
+        )
+        st.error("Não foi possível renderizar Performance Meta.")
+        if perf_debug_enabled():
+            st.caption(f"Detalhe técnico: {exc}")
+
+    # --- Funil (deferido apos KPIs) ---
+    _render_funil_section(ctx)
+
+    # --- Distribuicoes (memoria) ---
+    if not df.empty:
+        _render_distribuicoes(df)
+
+    # --- Top 12 (deferido) ---
+    _render_top12(ctx, df, df_res_f)
+
+    # --- Comparar criativos (deferido) ---
+    _render_comparar_criativos(ctx, df)
+
+    # --- Auditorias (lazy) ---
+    _render_auditorias(ctx, df, df_all)
+
+    perf_finalize_page(PAGE_CREATIVES)
+    perf_render_panel(PAGE_CREATIVES)
+
+
+if __name__ == "__main__":
+    main()
