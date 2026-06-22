@@ -556,8 +556,11 @@ def get_prevendas_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
 @st.cache_data(ttl=_TTL, show_spinner="Lendo classificação de comparecimentos…")
 def get_prevendas_comparecimentos_classif(data_ini: date,
                                           data_fim: date) -> pd.DataFrame:
+    # CP3-B: v2 otimizada (escopo de deals/leads no período). Legado:
+    # `prevendas_comparecimentos_classif.sql` — regressão via
+    # scripts/benchmark_prevendas_comparecimentos_classif.py
     return run_sql_file(
-        "prevendas_comparecimentos_classif.sql",
+        "prevendas_comparecimentos_classif_v2.sql",
         _date_params(data_ini, data_fim),
     )
 
