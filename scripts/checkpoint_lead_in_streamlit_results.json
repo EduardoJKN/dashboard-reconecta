@@ -1,0 +1,572 @@
+[
+  {
+    "scenario": "ultimos_7_dias",
+    "period": "2026-06-16\u21922026-06-22",
+    "page_total_seconds": 8.8319,
+    "sql_prep_seconds": 8.1903,
+    "main_query": {
+      "name": "get_lead_in_reunioes_consultas_v2",
+      "data_ini": "2026-06-16",
+      "data_fim": "2026-06-22",
+      "seconds": 3.7506,
+      "rows": 124,
+      "error": null,
+      "cols": 19
+    },
+    "slow_blocks": [
+      {
+        "kind": "query",
+        "name": "get_lead_in_reunioes_consultas_v2",
+        "seconds": 3.7506
+      },
+      {
+        "kind": "query",
+        "name": "get_lead_in_email_sdr_lookup",
+        "seconds": 1.6971
+      }
+    ],
+    "visual": {
+      "sem_erro_streamlit": true,
+      "cards_metric": false,
+      "matriz_dataframe": true,
+      "rankings_dataframes": true,
+      "agenda_plotly": true,
+      "expander_detalhe": true,
+      "expander_diagnostico": true,
+      "expander_perf": true
+    },
+    "queries": [
+      {
+        "name": "get_lead_in_reunioes_consultas_v2",
+        "data_ini": "2026-06-16",
+        "data_fim": "2026-06-22",
+        "seconds": 3.7506,
+        "rows": 124,
+        "error": null,
+        "cols": 19
+      },
+      {
+        "name": "get_prevendas_sdrs_oficiais",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.6677,
+        "rows": 12,
+        "error": null,
+        "cols": 4
+      },
+      {
+        "name": "get_lead_in_email_sdr_lookup",
+        "data_ini": "2026-06-16",
+        "data_fim": "2026-06-22",
+        "seconds": 1.6971,
+        "rows": 7290,
+        "error": null,
+        "cols": 5
+      },
+      {
+        "name": "get_executivas_churn_pos_venda",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.7012,
+        "rows": 208,
+        "error": null,
+        "cols": 19
+      },
+      {
+        "name": "get_executivas_oficiais",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.6668,
+        "rows": 6,
+        "error": null,
+        "cols": 5
+      },
+      {
+        "name": "get_lead_in_churn_deal_pre",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.7069,
+        "rows": 208,
+        "error": null,
+        "cols": 3
+      }
+    ],
+    "blocks": [
+      {
+        "block": "pandas: churn filtrar + agregar",
+        "seconds": 0.0024
+      },
+      {
+        "block": "pandas: lead_in_aplicar_pre",
+        "seconds": 0.2
+      },
+      {
+        "block": "pandas: lead_in_kpis + lead_in_diagnostico",
+        "seconds": 0.0143
+      },
+      {
+        "block": "pandas: lead_in_matriz",
+        "seconds": 0.0028
+      },
+      {
+        "block": "agenda: lead_in_preparar_agenda",
+        "seconds": 0.0133
+      },
+      {
+        "block": "agenda: kpis + diagnostico",
+        "seconds": 0.0006
+      },
+      {
+        "block": "agenda: filtrar + tabela + styler",
+        "seconds": 0.0702
+      },
+      {
+        "block": "agenda: pivot + plotly",
+        "seconds": 0.0498
+      },
+      {
+        "block": "pandas: lead_in_preparar_agenda (diagn\u00f3stico expander)",
+        "seconds": 0.0107
+      },
+      {
+        "block": "pandas: rankings closer + pr\u00e9 (com churn)",
+        "seconds": 0.0094
+      },
+      {
+        "block": "pandas: lead_in_tabela_detalhe",
+        "seconds": 0.0028
+      }
+    ],
+    "milestones": {
+      "cards resumo do per\u00edodo": 8.6351,
+      "matriz principal": 8.6416,
+      "se\u00e7\u00e3o agenda": 8.7803,
+      "rankings closer e pr\u00e9-venda": 8.8137
+    }
+  },
+  {
+    "scenario": "mes_atual",
+    "period": "2026-06-01\u21922026-06-22",
+    "page_total_seconds": 3.2189,
+    "sql_prep_seconds": 2.226,
+    "main_query": {
+      "name": "get_lead_in_reunioes_consultas_v2",
+      "data_ini": "2026-06-01",
+      "data_fim": "2026-06-22",
+      "seconds": 0.9056,
+      "rows": 407,
+      "error": null,
+      "cols": 19
+    },
+    "slow_blocks": [
+      {
+        "kind": "query",
+        "name": "get_lead_in_email_sdr_lookup",
+        "seconds": 1.3183
+      }
+    ],
+    "visual": {
+      "sem_erro_streamlit": true,
+      "cards_metric": false,
+      "matriz_dataframe": true,
+      "rankings_dataframes": true,
+      "agenda_plotly": true,
+      "expander_detalhe": true,
+      "expander_diagnostico": true,
+      "expander_perf": true
+    },
+    "queries": [
+      {
+        "name": "get_lead_in_reunioes_consultas_v2",
+        "data_ini": "2026-06-01",
+        "data_fim": "2026-06-22",
+        "seconds": 0.9056,
+        "rows": 407,
+        "error": null,
+        "cols": 19
+      },
+      {
+        "name": "get_prevendas_sdrs_oficiais",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0003,
+        "rows": 12,
+        "error": null,
+        "cols": 4
+      },
+      {
+        "name": "get_lead_in_email_sdr_lookup",
+        "data_ini": "2026-06-01",
+        "data_fim": "2026-06-22",
+        "seconds": 1.3183,
+        "rows": 7290,
+        "error": null,
+        "cols": 5
+      },
+      {
+        "name": "get_executivas_churn_pos_venda",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.001,
+        "rows": 208,
+        "error": null,
+        "cols": 19
+      },
+      {
+        "name": "get_executivas_oficiais",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0004,
+        "rows": 6,
+        "error": null,
+        "cols": 5
+      },
+      {
+        "name": "get_lead_in_churn_deal_pre",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0004,
+        "rows": 208,
+        "error": null,
+        "cols": 3
+      }
+    ],
+    "blocks": [
+      {
+        "block": "pandas: churn filtrar + agregar",
+        "seconds": 0.0215
+      },
+      {
+        "block": "pandas: lead_in_aplicar_pre",
+        "seconds": 0.7519
+      },
+      {
+        "block": "pandas: lead_in_kpis + lead_in_diagnostico",
+        "seconds": 0.0144
+      },
+      {
+        "block": "pandas: lead_in_matriz",
+        "seconds": 0.0031
+      },
+      {
+        "block": "agenda: lead_in_preparar_agenda",
+        "seconds": 0.0171
+      },
+      {
+        "block": "agenda: kpis + diagnostico",
+        "seconds": 0.0007
+      },
+      {
+        "block": "agenda: filtrar + tabela + styler",
+        "seconds": 0.0655
+      },
+      {
+        "block": "agenda: pivot + plotly",
+        "seconds": 0.0288
+      },
+      {
+        "block": "pandas: lead_in_preparar_agenda (diagn\u00f3stico expander)",
+        "seconds": 0.0193
+      },
+      {
+        "block": "pandas: rankings closer + pr\u00e9 (com churn)",
+        "seconds": 0.0228
+      },
+      {
+        "block": "pandas: lead_in_tabela_detalhe",
+        "seconds": 0.0029
+      }
+    ],
+    "milestones": {
+      "cards resumo do per\u00edodo": 3.0189,
+      "matriz principal": 3.0235,
+      "se\u00e7\u00e3o agenda": 3.1421,
+      "rankings closer e pr\u00e9-venda": 3.1971
+    }
+  },
+  {
+    "scenario": "mes_anterior",
+    "period": "2026-05-01\u21922026-05-31",
+    "page_total_seconds": 3.196,
+    "sql_prep_seconds": 2.0513,
+    "main_query": {
+      "name": "get_lead_in_reunioes_consultas_v2",
+      "data_ini": "2026-05-01",
+      "data_fim": "2026-05-31",
+      "seconds": 0.8843,
+      "rows": 536,
+      "error": null,
+      "cols": 19
+    },
+    "slow_blocks": [
+      {
+        "kind": "query",
+        "name": "get_lead_in_email_sdr_lookup",
+        "seconds": 1.1655
+      }
+    ],
+    "visual": {
+      "sem_erro_streamlit": true,
+      "cards_metric": false,
+      "matriz_dataframe": true,
+      "rankings_dataframes": true,
+      "agenda_plotly": true,
+      "expander_detalhe": true,
+      "expander_diagnostico": true,
+      "expander_perf": true
+    },
+    "queries": [
+      {
+        "name": "get_lead_in_reunioes_consultas_v2",
+        "data_ini": "2026-05-01",
+        "data_fim": "2026-05-31",
+        "seconds": 0.8843,
+        "rows": 536,
+        "error": null,
+        "cols": 19
+      },
+      {
+        "name": "get_prevendas_sdrs_oficiais",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0003,
+        "rows": 12,
+        "error": null,
+        "cols": 4
+      },
+      {
+        "name": "get_lead_in_email_sdr_lookup",
+        "data_ini": "2026-05-01",
+        "data_fim": "2026-05-31",
+        "seconds": 1.1655,
+        "rows": 6229,
+        "error": null,
+        "cols": 5
+      },
+      {
+        "name": "get_executivas_churn_pos_venda",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0007,
+        "rows": 208,
+        "error": null,
+        "cols": 19
+      },
+      {
+        "name": "get_executivas_oficiais",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0002,
+        "rows": 6,
+        "error": null,
+        "cols": 5
+      },
+      {
+        "name": "get_lead_in_churn_deal_pre",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0003,
+        "rows": 208,
+        "error": null,
+        "cols": 3
+      }
+    ],
+    "blocks": [
+      {
+        "block": "pandas: churn filtrar + agregar",
+        "seconds": 0.0229
+      },
+      {
+        "block": "pandas: lead_in_aplicar_pre",
+        "seconds": 0.8136
+      },
+      {
+        "block": "pandas: lead_in_kpis + lead_in_diagnostico",
+        "seconds": 0.0154
+      },
+      {
+        "block": "pandas: lead_in_matriz",
+        "seconds": 0.0024
+      },
+      {
+        "block": "agenda: lead_in_preparar_agenda",
+        "seconds": 0.021
+      },
+      {
+        "block": "agenda: kpis + diagnostico",
+        "seconds": 0.0008
+      },
+      {
+        "block": "agenda: filtrar + tabela + styler",
+        "seconds": 0.1369
+      },
+      {
+        "block": "agenda: pivot + plotly",
+        "seconds": 0.0298
+      },
+      {
+        "block": "pandas: lead_in_preparar_agenda (diagn\u00f3stico expander)",
+        "seconds": 0.025
+      },
+      {
+        "block": "pandas: rankings closer + pr\u00e9 (com churn)",
+        "seconds": 0.0291
+      },
+      {
+        "block": "pandas: lead_in_tabela_detalhe",
+        "seconds": 0.0028
+      }
+    ],
+    "milestones": {
+      "cards resumo do per\u00edodo": 2.9075,
+      "matriz principal": 2.9112,
+      "se\u00e7\u00e3o agenda": 3.107,
+      "rankings closer e pr\u00e9-venda": 3.1743
+    }
+  },
+  {
+    "scenario": "ultimos_90_dias",
+    "period": "2026-03-25\u21922026-06-22",
+    "page_total_seconds": 5.5983,
+    "sql_prep_seconds": 2.1899,
+    "main_query": {
+      "name": "get_lead_in_reunioes_consultas_v2",
+      "data_ini": "2026-03-25",
+      "data_fim": "2026-06-22",
+      "seconds": 0.9477,
+      "rows": 1632,
+      "error": null,
+      "cols": 19
+    },
+    "slow_blocks": [
+      {
+        "kind": "block",
+        "name": "pandas: lead_in_aplicar_pre",
+        "seconds": 2.1295
+      },
+      {
+        "kind": "query",
+        "name": "get_lead_in_email_sdr_lookup",
+        "seconds": 1.2409
+      }
+    ],
+    "visual": {
+      "sem_erro_streamlit": true,
+      "cards_metric": false,
+      "matriz_dataframe": true,
+      "rankings_dataframes": true,
+      "agenda_plotly": true,
+      "expander_detalhe": true,
+      "expander_diagnostico": true,
+      "expander_perf": true
+    },
+    "queries": [
+      {
+        "name": "get_lead_in_reunioes_consultas_v2",
+        "data_ini": "2026-03-25",
+        "data_fim": "2026-06-22",
+        "seconds": 0.9477,
+        "rows": 1632,
+        "error": null,
+        "cols": 19
+      },
+      {
+        "name": "get_prevendas_sdrs_oficiais",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0003,
+        "rows": 12,
+        "error": null,
+        "cols": 4
+      },
+      {
+        "name": "get_lead_in_email_sdr_lookup",
+        "data_ini": "2026-03-25",
+        "data_fim": "2026-06-22",
+        "seconds": 1.2409,
+        "rows": 7290,
+        "error": null,
+        "cols": 5
+      },
+      {
+        "name": "get_executivas_churn_pos_venda",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0006,
+        "rows": 208,
+        "error": null,
+        "cols": 19
+      },
+      {
+        "name": "get_executivas_oficiais",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0002,
+        "rows": 6,
+        "error": null,
+        "cols": 5
+      },
+      {
+        "name": "get_lead_in_churn_deal_pre",
+        "data_ini": null,
+        "data_fim": null,
+        "seconds": 0.0002,
+        "rows": 208,
+        "error": null,
+        "cols": 3
+      }
+    ],
+    "blocks": [
+      {
+        "block": "pandas: churn filtrar + agregar",
+        "seconds": 0.1701
+      },
+      {
+        "block": "pandas: lead_in_aplicar_pre",
+        "seconds": 2.1295
+      },
+      {
+        "block": "pandas: lead_in_kpis + lead_in_diagnostico",
+        "seconds": 0.0294
+      },
+      {
+        "block": "pandas: lead_in_matriz",
+        "seconds": 0.0068
+      },
+      {
+        "block": "agenda: lead_in_preparar_agenda",
+        "seconds": 0.2367
+      },
+      {
+        "block": "agenda: kpis + diagnostico",
+        "seconds": 0.0015
+      },
+      {
+        "block": "agenda: filtrar + tabela + styler",
+        "seconds": 0.4093
+      },
+      {
+        "block": "agenda: pivot + plotly",
+        "seconds": 0.0496
+      },
+      {
+        "block": "pandas: lead_in_preparar_agenda (diagn\u00f3stico expander)",
+        "seconds": 0.1047
+      },
+      {
+        "block": "pandas: rankings closer + pr\u00e9 (com churn)",
+        "seconds": 0.2003
+      },
+      {
+        "block": "pandas: lead_in_tabela_detalhe",
+        "seconds": 0.0044
+      }
+    ],
+    "milestones": {
+      "cards resumo do per\u00edodo": 4.5249,
+      "matriz principal": 4.5339,
+      "se\u00e7\u00e3o agenda": 5.2489,
+      "rankings closer e pr\u00e9-venda": 5.5671
+    }
+  }
+]

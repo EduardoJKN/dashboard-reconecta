@@ -353,7 +353,15 @@ def get_lead_in_reunioes_consultas(data_ini: date, data_fim: date) -> pd.DataFra
 
 
 def _load_lead_in_reunioes_consultas(data_ini: date, data_fim: date) -> pd.DataFrame:
-    df = run_sql_file("lead_in_reunioes_consultas.sql", _date_params(data_ini, data_fim))
+    return _load_lead_in_reunioes_consultas_sql(
+        "lead_in_reunioes_consultas.sql", data_ini, data_fim,
+    )
+
+
+def _load_lead_in_reunioes_consultas_sql(
+    sql_file: str, data_ini: date, data_fim: date,
+) -> pd.DataFrame:
+    df = run_sql_file(sql_file, _date_params(data_ini, data_fim))
     if df.empty:
         return df
     for col in (
@@ -368,10 +376,26 @@ def _load_lead_in_reunioes_consultas(data_ini: date, data_fim: date) -> pd.DataF
     return df
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo Lead In & Reuniões…")
+def get_lead_in_reunioes_consultas_v2(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Consultas v2 — mesma semântica da v1, SQL otimizado."""
+    return _load_lead_in_reunioes_consultas_sql(
+        "lead_in_reunioes_consultas_v2.sql", data_ini, data_fim,
+    )
+
+
 @st.cache_data(ttl=_TTL_AGENDA_RT, show_spinner=False)
 def get_lead_in_reunioes_consultas_agenda(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Consultas para agenda em tempo real — TTL curto (60s)."""
     return _load_lead_in_reunioes_consultas(data_ini, data_fim)
+
+
+@st.cache_data(ttl=_TTL_AGENDA_RT, show_spinner=False)
+def get_lead_in_reunioes_consultas_agenda_v2(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """Consultas v2 para agenda em tempo real — TTL curto (60s)."""
+    return _load_lead_in_reunioes_consultas_sql(
+        "lead_in_reunioes_consultas_v2.sql", data_ini, data_fim,
+    )
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo campos de pré (deals Churn)…")

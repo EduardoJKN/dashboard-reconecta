@@ -9,6 +9,16 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.lead_in_perf import (
+    perf_debug_enabled,
+    perf_fetch_df,
+    perf_finalize_page,
+    perf_mark_milestone,
+    perf_render_panel,
+    perf_reset_run,
+    perf_set_context,
+    perf_timed_block,
+)
 from src.lead_in_transforms import (
     AGENDA_BUCKET_CHART_COLORS,
     AGENDA_BUCKET_CHART_ORDER,
@@ -57,8 +67,8 @@ from src.repositories import (
     get_executivas_oficiais,
     get_lead_in_churn_deal_pre,
     get_lead_in_email_sdr_lookup,
-    get_lead_in_reunioes_consultas,
-    get_lead_in_reunioes_consultas_agenda,
+    get_lead_in_reunioes_consultas_v2,
+    get_lead_in_reunioes_consultas_agenda_v2,
     get_prevendas_sdrs_oficiais,
 )
 from src.transforms import (
@@ -70,42 +80,81 @@ from src.ui.components import metric_card_v2, ranking_column_config, section_tit
 from src.ui.page import start_page
 from src.ui.theme import PALETTE, int_br, pct
 
+if perf_debug_enabled():
+    perf_reset_run()
+
 ctx = start_page(
     title="Lead In & Reuniões",
     subtitle="Acompanhamento diário de reuniões, pré-vendas e autoagendamentos",
     right_text="v1 diagnóstica",
 )
 
+perf_set_context(data_ini=ctx.data_ini, data_fim=ctx.data_fim)
+
 try:
-    df_raw = get_lead_in_reunioes_consultas(ctx.data_ini, ctx.data_fim)
-    df_pre = get_prevendas_sdrs_oficiais()
-    df_email_sdr = get_lead_in_email_sdr_lookup(ctx.data_ini, ctx.data_fim)
-    df_churn_all = get_executivas_churn_pos_venda()
-    df_oficiais = get_executivas_oficiais()
-    df_churn_deal_pre = get_lead_in_churn_deal_pre()
+    df_raw = perf_fetch_df(
+        "get_lead_in_reunioes_consultas_v2",
+        lambda: get_lead_in_reunioes_consultas_v2(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini,
+        ctx.data_fim,
+    )
+    df_pre = perf_fetch_df(
+        "get_prevendas_sdrs_oficiais",
+        get_prevendas_sdrs_oficiais,
+        None,
+        None,
+    )
+    df_email_sdr = perf_fetch_df(
+        "get_lead_in_email_sdr_lookup",
+        lambda: get_lead_in_email_sdr_lookup(ctx.data_ini, ctx.data_fim),
+        ctx.data_ini,
+        ctx.data_fim,
+    )
+    df_churn_all = perf_fetch_df(
+        "get_executivas_churn_pos_venda",
+        get_executivas_churn_pos_venda,
+        None,
+        None,
+    )
+    df_oficiais = perf_fetch_df(
+        "get_executivas_oficiais",
+        get_executivas_oficiais,
+        None,
+        None,
+    )
+    df_churn_deal_pre = perf_fetch_df(
+        "get_lead_in_churn_deal_pre",
+        get_lead_in_churn_deal_pre,
+        None,
+        None,
+    )
 except Exception as e:
     st.error(f"Falha ao consultar Lead In & Reuniões: {e}")
     st.stop()
 
-df_churn_period = churn_pos_filtrar_periodo(df_churn_all, ctx.data_ini, ctx.data_fim)
-churn_por_executiva = executivas_churn_agregar_por_executiva(
-    df_churn_period, df_oficiais,
-)
-df_churn_pre = lead_in_churn_preparar(
-    df_churn_period, df_churn_deal_pre, df_pre, df_email_sdr,
-)
-churn_por_pre = lead_in_churn_agregar_por_pre(df_churn_pre)
-churn_diag = lead_in_churn_diagnostico(
-    df_churn_period, df_churn_pre, churn_por_executiva, churn_por_pre,
-)
+with perf_timed_block("pandas: churn filtrar + agregar"):
+    df_churn_period = churn_pos_filtrar_periodo(df_churn_all, ctx.data_ini, ctx.data_fim)
+    churn_por_executiva = executivas_churn_agregar_por_executiva(
+        df_churn_period, df_oficiais,
+    )
+    df_churn_pre = lead_in_churn_preparar(
+        df_churn_period, df_churn_deal_pre, df_pre, df_email_sdr,
+    )
+    churn_por_pre = lead_in_churn_agregar_por_pre(df_churn_pre)
+    churn_diag = lead_in_churn_diagnostico(
+        df_churn_period, df_churn_pre, churn_por_executiva, churn_por_pre,
+    )
 
 if df_raw.empty:
     st.warning("Sem consultas no período (activity_type = Consulta).")
     st.stop()
 
-df = lead_in_aplicar_pre(df_raw, df_pre, df_email_sdr)
-kpi = lead_in_kpis(df)
-diag = lead_in_diagnostico(df, df_pre)
+with perf_timed_block("pandas: lead_in_aplicar_pre"):
+    df = lead_in_aplicar_pre(df_raw, df_pre, df_email_sdr)
+
+with perf_timed_block("pandas: lead_in_kpis + lead_in_diagnostico"):
+    kpi = lead_in_kpis(df)
+    diag = lead_in_diagnostico(df, df_pre)
 
 # ---------------------------------------------------------------------------
 # Cards principais
@@ -149,6 +198,8 @@ with c6:
         hint="inclui status sem bucket oficial (ex.: reagendamento)",
     )
 
+perf_mark_milestone("cards resumo do período")
+
 # ---------------------------------------------------------------------------
 # Matriz status × tipo de qualificação
 # ---------------------------------------------------------------------------
@@ -157,7 +208,8 @@ section_title(
     f"{TIPO_COM_PRE} vs {TIPO_SEM_PRE}",
 )
 
-matriz = lead_in_matriz(df)
+with perf_timed_block("pandas: lead_in_matriz"):
+    matriz = lead_in_matriz(df)
 st.dataframe(
     matriz,
     use_container_width=True,
@@ -168,6 +220,8 @@ st.dataframe(
         "Total": st.column_config.NumberColumn(format="%d"),
     },
 )
+
+perf_mark_milestone("matriz principal")
 
 def _render_lead_in_agenda_content(
     df_ag: pd.DataFrame,
@@ -180,27 +234,29 @@ def _render_lead_in_agenda_content(
     autorefresh: bool = False,
 ) -> None:
     """Tabela, cards e gráfico da seção Agenda (dia ou histórico)."""
-    agenda, ref_date, is_today, agenda_now, modo_historico, periodo_completo = (
-        lead_in_preparar_agenda(
-            df_ag,
-            data_ini,
-            data_fim,
-            ref_date=ref_date_agenda,
-            periodo_completo=periodo_completo_agenda,
-            now=lead_in_agenda_now() if autorefresh else None,
+    with perf_timed_block("agenda: lead_in_preparar_agenda"):
+        agenda, ref_date, is_today, agenda_now, modo_historico, periodo_completo = (
+            lead_in_preparar_agenda(
+                df_ag,
+                data_ini,
+                data_fim,
+                ref_date=ref_date_agenda,
+                periodo_completo=periodo_completo_agenda,
+                now=lead_in_agenda_now() if autorefresh else None,
+            )
         )
-    )
-    agenda_kpi = (
-        lead_in_agenda_kpis_historico(agenda) if modo_historico else lead_in_agenda_kpis(agenda)
-    )
-    agenda_diag = lead_in_agenda_diagnostico(
-        agenda,
-        agenda_now,
-        ref_date,
-        is_today,
-        modo_historico=modo_historico,
-        periodo_completo=periodo_completo,
-    )
+    with perf_timed_block("agenda: kpis + diagnostico"):
+        agenda_kpi = (
+            lead_in_agenda_kpis_historico(agenda) if modo_historico else lead_in_agenda_kpis(agenda)
+        )
+        agenda_diag = lead_in_agenda_diagnostico(
+            agenda,
+            agenda_now,
+            ref_date,
+            is_today,
+            modo_historico=modo_historico,
+            periodo_completo=periodo_completo,
+        )
 
     if modo_historico:
         if periodo_completo:
@@ -300,134 +356,136 @@ def _render_lead_in_agenda_content(
             key="lead_in_agenda_visualizar",
         )
         st.caption("Agenda do período" if periodo_completo else "Agenda do dia")
-        agenda_tab = lead_in_agenda_filtrar(
-            agenda, visualizar_agenda, modo_historico=modo_historico,
-        )
-        if agenda.empty:
-            if modo_historico:
-                if periodo_completo:
-                    st.info("Nenhuma reunião no período selecionado.")
-                else:
-                    st.info(
-                        f"Nenhuma reunião em {ref_date.strftime('%d/%m/%Y')} "
-                        f"no período selecionado."
-                    )
-            else:
-                st.info("Nenhuma reunião agendada para hoje no período selecionado.")
-        elif agenda_tab.empty:
-            _escopo = "período exibido" if periodo_completo else "dia exibido"
-            st.info(f"Nenhuma reunião com filtro **{visualizar_agenda}** no {_escopo}.")
-        else:
-            _agenda_cols_map = [
-                *(
-                    [("data_reuniao_fmt", "Data da reunião")]
-                    if periodo_completo
-                    else []
-                ),
-                ("horario_reuniao", "Horário da reunião"),
-                *([] if modo_historico else [("tempo_restante", "Tempo restante")]),
-                ("nome_cliente", "Lead/cliente"),
-                ("closer", "Closer"),
-                ("pre_venda", "Pré-venda/SDR"),
-                ("status_reuniao", "Status atual da reunião"),
-                ("email", "Email"),
-                ("telefone", "Telefone"),
-                ("motivo_cancelamento", "Motivo cancelamento/não comparecimento"),
-            ]
-            agenda_raw = lead_in_agenda_tabela(
-                agenda_tab,
-                modo_historico=modo_historico,
-                periodo_completo=periodo_completo,
+        with perf_timed_block("agenda: filtrar + tabela + styler"):
+            agenda_tab = lead_in_agenda_filtrar(
+                agenda, visualizar_agenda, modo_historico=modo_historico,
             )
-            _agenda_ok: list[str] = []
-            _agenda_rename: dict[str, str] = {}
-            _agenda_labels_seen: set[str] = set()
-            for col, lbl in _agenda_cols_map:
-                if col not in agenda_raw.columns or lbl in _agenda_labels_seen:
-                    continue
-                _agenda_ok.append(col)
-                _agenda_labels_seen.add(lbl)
-                _agenda_rename[col] = lbl
-            agenda_display = agenda_raw[_agenda_ok].rename(columns=_agenda_rename)
-            styled = lead_in_agenda_styler(agenda_display, agenda_tab, agenda_now)
-            st.dataframe(styled, use_container_width=True, hide_index=True)
+            if agenda.empty:
+                if modo_historico:
+                    if periodo_completo:
+                        st.info("Nenhuma reunião no período selecionado.")
+                    else:
+                        st.info(
+                            f"Nenhuma reunião em {ref_date.strftime('%d/%m/%Y')} "
+                            f"no período selecionado."
+                        )
+                else:
+                    st.info("Nenhuma reunião agendada para hoje no período selecionado.")
+            elif agenda_tab.empty:
+                _escopo = "período exibido" if periodo_completo else "dia exibido"
+                st.info(f"Nenhuma reunião com filtro **{visualizar_agenda}** no {_escopo}.")
+            else:
+                _agenda_cols_map = [
+                    *(
+                        [("data_reuniao_fmt", "Data da reunião")]
+                        if periodo_completo
+                        else []
+                    ),
+                    ("horario_reuniao", "Horário da reunião"),
+                    *([] if modo_historico else [("tempo_restante", "Tempo restante")]),
+                    ("nome_cliente", "Lead/cliente"),
+                    ("closer", "Closer"),
+                    ("pre_venda", "Pré-venda/SDR"),
+                    ("status_reuniao", "Status atual da reunião"),
+                    ("email", "Email"),
+                    ("telefone", "Telefone"),
+                    ("motivo_cancelamento", "Motivo cancelamento/não comparecimento"),
+                ]
+                agenda_raw = lead_in_agenda_tabela(
+                    agenda_tab,
+                    modo_historico=modo_historico,
+                    periodo_completo=periodo_completo,
+                )
+                _agenda_ok: list[str] = []
+                _agenda_rename: dict[str, str] = {}
+                _agenda_labels_seen: set[str] = set()
+                for col, lbl in _agenda_cols_map:
+                    if col not in agenda_raw.columns or lbl in _agenda_labels_seen:
+                        continue
+                    _agenda_ok.append(col)
+                    _agenda_labels_seen.add(lbl)
+                    _agenda_rename[col] = lbl
+                agenda_display = agenda_raw[_agenda_ok].rename(columns=_agenda_rename)
+                styled = lead_in_agenda_styler(agenda_display, agenda_tab, agenda_now)
+                st.dataframe(styled, use_container_width=True, hide_index=True)
 
     with col_chart:
-        if periodo_completo:
-            st.caption("Distribuição das reuniões por dia")
-            st.caption("status do CRM por data da reunião")
-            chart_pivot = lead_in_agenda_por_dia_pivot(agenda)
-            _chart_status_order = list(reversed(lead_in_agenda_bucket_chart_order()))
-            _chart_colors = AGENDA_BUCKET_CHART_COLORS
-            _chart_labels = {s: s for s in lead_in_agenda_bucket_chart_order()}
-            _xaxis_title = "Data da reunião"
-            _legend_rank = {
-                s: i for i, s in enumerate(lead_in_agenda_bucket_chart_order())
-            }
-        else:
-            st.caption("Distribuição das reuniões do dia por horário")
-            if modo_historico and ref_date is not None:
-                st.caption(f"status da data {ref_date.strftime('%d/%m/%Y')}")
+        with perf_timed_block("agenda: pivot + plotly"):
+            if periodo_completo:
+                st.caption("Distribuição das reuniões por dia")
+                st.caption("status do CRM por data da reunião")
+                chart_pivot = lead_in_agenda_por_dia_pivot(agenda)
+                _chart_status_order = list(reversed(lead_in_agenda_bucket_chart_order()))
+                _chart_colors = AGENDA_BUCKET_CHART_COLORS
+                _chart_labels = {s: s for s in lead_in_agenda_bucket_chart_order()}
+                _xaxis_title = "Data da reunião"
+                _legend_rank = {
+                    s: i for i, s in enumerate(lead_in_agenda_bucket_chart_order())
+                }
             else:
-                st.caption("status temporal da agenda em tempo real")
-            chart_pivot = lead_in_agenda_por_hora_pivot(agenda)
-            _chart_status_order = list(reversed(lead_in_agenda_chart_status_order()))
-            _chart_colors = AGENDA_STATUS_COLORS
-            _chart_labels = AGENDA_CHART_STATUS_LABELS
-            _xaxis_title = "Horário"
-            _legend_rank = {
-                s: i for i, s in enumerate(lead_in_agenda_chart_status_order())
-            }
+                st.caption("Distribuição das reuniões do dia por horário")
+                if modo_historico and ref_date is not None:
+                    st.caption(f"status da data {ref_date.strftime('%d/%m/%Y')}")
+                else:
+                    st.caption("status temporal da agenda em tempo real")
+                chart_pivot = lead_in_agenda_por_hora_pivot(agenda)
+                _chart_status_order = list(reversed(lead_in_agenda_chart_status_order()))
+                _chart_colors = AGENDA_STATUS_COLORS
+                _chart_labels = AGENDA_CHART_STATUS_LABELS
+                _xaxis_title = "Horário"
+                _legend_rank = {
+                    s: i for i, s in enumerate(lead_in_agenda_chart_status_order())
+                }
 
-        if chart_pivot.empty:
-            st.info("Sem dados para o gráfico.")
-        else:
-            fig = go.Figure()
-            for status in _chart_status_order:
-                if status not in chart_pivot.columns:
-                    continue
-                vals = chart_pivot[status]
-                fig.add_trace(
-                    go.Bar(
-                        name=_chart_labels.get(status, status),
-                        x=chart_pivot.index.astype(str).tolist(),
-                        y=vals.tolist(),
-                        legendrank=_legend_rank.get(status, 99),
-                        marker=dict(
-                            color=_chart_colors.get(status, PALETTE["gold"]),
-                            line=dict(color=PALETTE["border_strong"], width=0.5),
-                        ),
-                        text=[str(int(v)) if v > 0 else "" for v in vals],
-                        textposition="inside",
-                        insidetextanchor="middle",
-                        hovertemplate=(
-                            f"<b>%{{x}}</b><br>"
-                            f"{_chart_labels.get(status, status)}"
-                            ": %{{y}}<extra></extra>"
-                        ),
+            if chart_pivot.empty:
+                st.info("Sem dados para o gráfico.")
+            else:
+                fig = go.Figure()
+                for status in _chart_status_order:
+                    if status not in chart_pivot.columns:
+                        continue
+                    vals = chart_pivot[status]
+                    fig.add_trace(
+                        go.Bar(
+                            name=_chart_labels.get(status, status),
+                            x=chart_pivot.index.astype(str).tolist(),
+                            y=vals.tolist(),
+                            legendrank=_legend_rank.get(status, 99),
+                            marker=dict(
+                                color=_chart_colors.get(status, PALETTE["gold"]),
+                                line=dict(color=PALETTE["border_strong"], width=0.5),
+                            ),
+                            text=[str(int(v)) if v > 0 else "" for v in vals],
+                            textposition="inside",
+                            insidetextanchor="middle",
+                            hovertemplate=(
+                                f"<b>%{{x}}</b><br>"
+                                f"{_chart_labels.get(status, status)}"
+                                ": %{{y}}<extra></extra>"
+                            ),
+                        )
                     )
+                fig.update_layout(**_base_layout(height=380))
+                fig.update_layout(
+                    barmode="stack",
+                    bargap=0.35,
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.08,
+                        xanchor="left",
+                        x=0,
+                        bgcolor="rgba(0,0,0,0)",
+                        font=dict(color=PALETTE["text_subtle"], size=10),
+                        traceorder="normal",
+                    ),
+                    xaxis_title=_xaxis_title,
+                    yaxis_title="Reuniões",
+                    margin=dict(t=60, b=12, l=12, r=12),
                 )
-            fig.update_layout(**_base_layout(height=380))
-            fig.update_layout(
-                barmode="stack",
-                bargap=0.35,
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.08,
-                    xanchor="left",
-                    x=0,
-                    bgcolor="rgba(0,0,0,0)",
-                    font=dict(color=PALETTE["text_subtle"], size=10),
-                    traceorder="normal",
-                ),
-                xaxis_title=_xaxis_title,
-                yaxis_title="Reuniões",
-                margin=dict(t=60, b=12, l=12, r=12),
-            )
-            _style_axes(fig)
-            st.plotly_chart(fig, use_container_width=True)
+                _style_axes(fig)
+                st.plotly_chart(fig, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +493,11 @@ def _render_lead_in_agenda_content(
 # ---------------------------------------------------------------------------
 _modo_historico_agenda = not lead_in_agenda_periodo_inclui_hoje(
     ctx.data_ini, ctx.data_fim,
+)
+perf_set_context(
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    modo_historico_agenda=_modo_historico_agenda,
 )
 _periodo_completo_agenda = False
 _ref_date_agenda = None
@@ -459,8 +522,8 @@ with hdr_r:
     st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
     if not _modo_historico_agenda:
         if st.button("Atualizar agora", key="lead_in_agenda_refresh", use_container_width=True):
-            get_lead_in_reunioes_consultas.clear()
-            get_lead_in_reunioes_consultas_agenda.clear()
+            get_lead_in_reunioes_consultas_v2.clear()
+            get_lead_in_reunioes_consultas_agenda_v2.clear()
             get_lead_in_email_sdr_lookup.clear()
             get_prevendas_sdrs_oficiais.clear()
             st.rerun()
@@ -496,8 +559,14 @@ else:
 
     @st.fragment(run_every=timedelta(seconds=60))
     def _lead_in_agenda_tempo_real_fragment() -> None:
-        df_rt_raw = get_lead_in_reunioes_consultas_agenda(ctx.data_ini, ctx.data_fim)
-        df_rt = lead_in_aplicar_pre(df_rt_raw, df_pre, df_email_sdr)
+        df_rt_raw = perf_fetch_df(
+            "get_lead_in_reunioes_consultas_agenda_v2 (fragment)",
+            lambda: get_lead_in_reunioes_consultas_agenda_v2(ctx.data_ini, ctx.data_fim),
+            ctx.data_ini,
+            ctx.data_fim,
+        )
+        with perf_timed_block("fragment: lead_in_aplicar_pre"):
+            df_rt = lead_in_aplicar_pre(df_rt_raw, df_pre, df_email_sdr)
         _render_lead_in_agenda_content(
             df_rt,
             ctx.data_ini,
@@ -510,23 +579,26 @@ else:
 
     _lead_in_agenda_tempo_real_fragment()
 
-_agenda_diag_snap, ref_date, is_today, agenda_now, modo_historico, periodo_completo = (
-    lead_in_preparar_agenda(
-        df,
-        ctx.data_ini,
-        ctx.data_fim,
-        ref_date=_ref_date_agenda if _modo_historico_agenda else None,
-        periodo_completo=_periodo_completo_agenda if _modo_historico_agenda else False,
+perf_mark_milestone("seção agenda")
+
+with perf_timed_block("pandas: lead_in_preparar_agenda (diagnóstico expander)"):
+    _agenda_diag_snap, ref_date, is_today, agenda_now, modo_historico, periodo_completo = (
+        lead_in_preparar_agenda(
+            df,
+            ctx.data_ini,
+            ctx.data_fim,
+            ref_date=_ref_date_agenda if _modo_historico_agenda else None,
+            periodo_completo=_periodo_completo_agenda if _modo_historico_agenda else False,
+        )
     )
-)
-agenda_diag = lead_in_agenda_diagnostico(
-    _agenda_diag_snap,
-    agenda_now,
-    ref_date,
-    is_today,
-    modo_historico=modo_historico,
-    periodo_completo=periodo_completo,
-)
+    agenda_diag = lead_in_agenda_diagnostico(
+        _agenda_diag_snap,
+        agenda_now,
+        ref_date,
+        is_today,
+        modo_historico=modo_historico,
+        periodo_completo=periodo_completo,
+    )
 
 # ---------------------------------------------------------------------------
 # Resumo por closer e pré-venda
@@ -540,10 +612,11 @@ st.caption(
     "distinto de **Canceladas** (reunião cancelada no CRM)"
 )
 
-rank_closer = lead_in_ranking_closer_com_churn(df, df_churn_period, df_oficiais)
-rank_pre = lead_in_ranking_pre_com_churn(
-    df, df_churn_period, df_pre, df_email_sdr, df_churn_deal_pre,
-)
+with perf_timed_block("pandas: rankings closer + pré (com churn)"):
+    rank_closer = lead_in_ranking_closer_com_churn(df, df_churn_period, df_oficiais)
+    rank_pre = lead_in_ranking_pre_com_churn(
+        df, df_churn_period, df_pre, df_email_sdr, df_churn_deal_pre,
+    )
 
 rc1, rc2 = st.columns(2, gap="medium")
 
@@ -592,13 +665,16 @@ with rc2:
             column_config=cfg_p,
         )
 
+perf_mark_milestone("rankings closer e pré-venda")
+
 # ---------------------------------------------------------------------------
 # Tabela detalhada
 # ---------------------------------------------------------------------------
 with st.expander("Ver detalhe linha a linha", expanded=False):
     st.caption("todas as consultas do período")
 
-    det = lead_in_tabela_detalhe(df)
+    with perf_timed_block("pandas: lead_in_tabela_detalhe"):
+        det = lead_in_tabela_detalhe(df)
     cols_map = [
         ("data_reuniao", "Data da reunião"),
         ("nome_cliente", "Lead/cliente"),
@@ -868,3 +944,6 @@ with st.expander("Validação das regras e origem dos dados", expanded=False):
             f"- **Aguardando atualização:** {int_br(agenda_diag['aguardando'])}\n"
             f"- **Finalizadas (concl./cancel./reag.):** {int_br(agenda_diag['finalizadas'])}"
         )
+
+perf_finalize_page()
+perf_render_panel()
