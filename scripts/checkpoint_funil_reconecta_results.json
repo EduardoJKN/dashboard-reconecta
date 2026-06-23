@@ -23,17 +23,17 @@
       "cp7_1_baseline_main_sections": 23.0,
       "cold_timing": {
         "runs": [
-          23.1796
+          23.1491
         ],
-        "median": 23.1796,
-        "min": 23.1796,
-        "max": 23.1796
+        "median": 23.1491,
+        "min": 23.1491,
+        "max": 23.1491
       },
       "cold_sem_referencia": {
         "mode": "cold_sem_referencia",
         "scenario": "ultimos_7_dias",
-        "period": "2026-06-16\u21922026-06-22",
-        "main_sections_seconds": 23.1796,
+        "period": "2026-06-16->2026-06-22",
+        "main_sections_seconds": 23.1491,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 7,
@@ -54,19 +54,19 @@
           "legacy_benchmark_batch_enabled": false
         },
         "meta": {
-          "load_seconds": 3.1815,
+          "load_seconds": 3.008,
           "cache_hit": false,
           "session_hit": false,
           "db_configured": true,
           "row_found": true,
           "cache_invalidated": false,
           "batch_enabled": false,
-          "init_seconds": 3.1837
+          "init_seconds": 3.0091
         },
         "legacy_benchmark_batch": {},
         "legacy": {
           "version": "v2",
-          "seconds": 0.8816,
+          "seconds": 0.8037,
           "data_ini": "2026-03-16",
           "data_fim": "2026-03-22",
           "rows": 7,
@@ -75,7 +75,7 @@
         "legacy_runs": [
           {
             "version": "v2",
-            "seconds": 3.3676,
+            "seconds": 3.9036,
             "data_ini": "2026-06-16",
             "data_fim": "2026-06-22",
             "rows": 7,
@@ -83,7 +83,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.8568,
+            "seconds": 0.8499,
             "data_ini": "2026-05-16",
             "data_fim": "2026-05-22",
             "rows": 7,
@@ -91,7 +91,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.8387,
+            "seconds": 0.8438,
             "data_ini": "2026-04-16",
             "data_fim": "2026-04-22",
             "rows": 7,
@@ -99,7 +99,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.8816,
+            "seconds": 0.8037,
             "data_ini": "2026-03-16",
             "data_fim": "2026-03-22",
             "rows": 7,
@@ -108,35 +108,36 @@
         ],
         "executivas": {
           "version": "v2",
-          "seconds": 5.536,
-          "data_ini": "2026-05-16",
-          "data_fim": "2026-03-22",
-          "rows": 0,
-          "cols": 0,
+          "seconds": 5.2288,
+          "data_ini": "2026-03-16",
+          "data_fim": "2026-05-22",
+          "rows": 68,
+          "cols": 11,
           "fallback_error": null
         },
         "parallel": {},
         "blocks": {
-          "atual": 10.26,
-          "meta": 3.1838,
-          "benchmark": 9.6319,
+          "atual": 10.3801,
+          "meta": 3.0092,
+          "benchmark": 9.6485,
           "referencia": null,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 10.2625,
-          "carregamento Meta oficial": 13.4465,
-          "Benchmark hist\u00f3rico": 23.0787,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 23.1776,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 23.1796
+          "init / auth / start_page": 0.0037,
+          "carregamento Atual real": 10.384,
+          "carregamento Meta oficial": 13.3934,
+          "primeira dobra \u00fatil": 13.4399,
+          "Benchmark hist\u00f3rico": 23.1032,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 23.1457,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 23.1491
         },
         "queries": [
           {
             "name": "legacy_diario_v2",
             "data_ini": "2026-06-16",
             "data_fim": "2026-06-22",
-            "seconds": 3.3676,
+            "seconds": 3.9036,
             "rows": 7,
             "error": null
           },
@@ -144,7 +145,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-06-16",
             "data_fim": "2026-06-22",
-            "seconds": 5.1683,
+            "seconds": 4.8684,
             "rows": 7,
             "error": null,
             "cols": 11
@@ -153,24 +154,24 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-06-16",
             "data_fim": "2026-06-22",
-            "seconds": 10.2598,
+            "seconds": 10.3794,
             "rows": 1,
             "error": null
           },
           {
             "name": "executivas_v2",
-            "data_ini": "2026-05-16",
-            "data_fim": "2026-03-22",
-            "seconds": 5.536,
-            "rows": 0,
+            "data_ini": "2026-03-16",
+            "data_fim": "2026-05-22",
+            "seconds": 5.2288,
+            "rows": 68,
             "error": null,
-            "cols": 0
+            "cols": 11
           },
           {
             "name": "legacy_diario_v2",
             "data_ini": "2026-05-16",
             "data_fim": "2026-05-22",
-            "seconds": 0.8568,
+            "seconds": 0.8499,
             "rows": 7,
             "error": null
           },
@@ -178,7 +179,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-04-16",
             "data_fim": "2026-04-22",
-            "seconds": 0.8387,
+            "seconds": 0.8438,
             "rows": 7,
             "error": null
           },
@@ -186,43 +187,33 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-03-16",
             "data_fim": "2026-03-22",
-            "seconds": 0.8816,
+            "seconds": 0.8037,
             "rows": 7,
             "error": null
           }
         ],
         "visual": {
           "sem_erro_streamlit": true,
-          "benchmark_dataframe": true,
           "controles_simulador": true,
-          "expander_perf": true
+          "expander_perf": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "benchmark_dataframe": true,
+          "sem_botao_obrigatorio": true
         }
       },
       "cold_runs": null,
       "warm_rerun": {
         "mode": "warm_rerun",
         "scenario": "ultimos_7_dias",
-        "period": "2026-06-16\u21922026-06-22",
-        "main_sections_seconds": 0.0481,
+        "period": "2026-06-16->2026-06-22",
+        "main_sections_seconds": 0.0601,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 1,
         "referencia_loaded": false,
         "referencia_skipped": true,
         "export_prepared": false,
-        "benchmark": {
-          "version": "v2",
-          "windows": 3,
-          "repo_queries": 6,
-          "funnel_loads_avoided": 9,
-          "used_v2": true,
-          "fallback_error": null,
-          "legacy_benchmark_mode": "per_window",
-          "legacy_benchmark_time": null,
-          "legacy_benchmark_queries": 3,
-          "legacy_benchmark_fallback": null,
-          "legacy_benchmark_batch_enabled": false
-        },
+        "benchmark": {},
         "meta": {
           "session_hit": true,
           "init_seconds": 0.0001
@@ -234,18 +225,18 @@
         "parallel": {},
         "blocks": {
           "atual": 0.0002,
-          "meta": 0.0001,
-          "benchmark": 0.0007,
+          "meta": 0.0002,
+          "benchmark": null,
           "referencia": null,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0022,
-          "carregamento Meta oficial": 0.0023,
-          "Benchmark hist\u00f3rico": 0.0032,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0451,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0481
+          "init / auth / start_page": 0.0024,
+          "carregamento Atual real": 0.0028,
+          "carregamento Meta oficial": 0.003,
+          "Benchmark hist\u00f3rico": 0.0084,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0562,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0601
         },
         "queries": [
           {
@@ -261,8 +252,8 @@
       "cold_com_referencia": {
         "mode": "cold_com_referencia",
         "scenario": "ultimos_7_dias",
-        "period": "2026-06-16\u21922026-06-22",
-        "main_sections_seconds": 0.0588,
+        "period": "2026-06-16->2026-06-22",
+        "main_sections_seconds": 0.1615,
         "page_total_seconds": null,
         "funnel_load_count": 8,
         "query_count": 20,
@@ -283,19 +274,19 @@
           "legacy_benchmark_batch_enabled": false
         },
         "meta": {
-          "load_seconds": 0.0003,
+          "load_seconds": 0.0002,
           "cache_hit": true,
           "session_hit": false,
           "db_configured": true,
           "row_found": true,
           "cache_invalidated": false,
           "batch_enabled": false,
-          "init_seconds": 0.0009
+          "init_seconds": 0.0007
         },
         "legacy_benchmark_batch": {},
         "legacy": {
           "version": "v2",
-          "seconds": 4.426,
+          "seconds": 3.4718,
           "data_ini": "2025-12-25",
           "data_fim": "2026-06-22",
           "rows": 180,
@@ -304,7 +295,7 @@
         "legacy_runs": [
           {
             "version": "v2",
-            "seconds": 1.0731,
+            "seconds": 1.0543,
             "data_ini": "2026-06-01",
             "data_fim": "2026-06-22",
             "rows": 22,
@@ -312,7 +303,7 @@
           },
           {
             "version": "v2",
-            "seconds": 1.0527,
+            "seconds": 0.9753,
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
             "rows": 31,
@@ -320,7 +311,7 @@
           },
           {
             "version": "v2",
-            "seconds": 1.1454,
+            "seconds": 0.9936,
             "data_ini": "2026-04-01",
             "data_fim": "2026-04-30",
             "rows": 30,
@@ -328,7 +319,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.9867,
+            "seconds": 0.8655,
             "data_ini": "2026-03-01",
             "data_fim": "2026-03-31",
             "rows": 31,
@@ -336,7 +327,7 @@
           },
           {
             "version": "v2",
-            "seconds": 2.4973,
+            "seconds": 2.033,
             "data_ini": "2026-03-25",
             "data_fim": "2026-06-22",
             "rows": 90,
@@ -344,7 +335,7 @@
           },
           {
             "version": "v2",
-            "seconds": 4.426,
+            "seconds": 3.4718,
             "data_ini": "2025-12-25",
             "data_fim": "2026-06-22",
             "rows": 180,
@@ -353,7 +344,7 @@
         ],
         "executivas": {
           "version": "v2",
-          "seconds": 5.262,
+          "seconds": 4.7575,
           "data_ini": "2025-12-25",
           "data_fim": "2026-06-22",
           "rows": 180,
@@ -363,18 +354,19 @@
         "parallel": {},
         "blocks": {
           "atual": 0.0003,
-          "meta": 0.0009,
-          "benchmark": 0.0009,
-          "referencia": 56.4036,
+          "meta": 0.0008,
+          "benchmark": 0.1016,
+          "referencia": 47.9265,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0028,
-          "carregamento Meta oficial": 0.0038,
-          "Benchmark hist\u00f3rico": 0.0049,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.056,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0588
+          "init / auth / start_page": 0.0034,
+          "carregamento Atual real": 0.0038,
+          "carregamento Meta oficial": 0.0047,
+          "primeira dobra \u00fatil": 0.0068,
+          "Benchmark hist\u00f3rico": 0.1144,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.1576,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.1615
         },
         "queries": [
           {
@@ -397,7 +389,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-06-01",
             "data_fim": "2026-06-22",
-            "seconds": 1.0731,
+            "seconds": 1.0543,
             "rows": 22,
             "error": null
           },
@@ -405,7 +397,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-06-01",
             "data_fim": "2026-06-22",
-            "seconds": 5.695,
+            "seconds": 4.5259,
             "rows": 22,
             "error": null,
             "cols": 11
@@ -414,7 +406,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-06-01",
             "data_fim": "2026-06-22",
-            "seconds": 8.6424,
+            "seconds": 7.2762,
             "rows": 1,
             "error": null
           },
@@ -422,7 +414,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
-            "seconds": 1.0527,
+            "seconds": 0.9753,
             "rows": 31,
             "error": null
           },
@@ -430,7 +422,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
-            "seconds": 5.788,
+            "seconds": 4.7086,
             "rows": 31,
             "error": null,
             "cols": 11
@@ -439,7 +431,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
-            "seconds": 8.6178,
+            "seconds": 7.4761,
             "rows": 1,
             "error": null
           },
@@ -447,7 +439,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-04-01",
             "data_fim": "2026-04-30",
-            "seconds": 1.1454,
+            "seconds": 0.9936,
             "rows": 30,
             "error": null
           },
@@ -455,7 +447,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-04-01",
             "data_fim": "2026-04-30",
-            "seconds": 5.4028,
+            "seconds": 4.7909,
             "rows": 30,
             "error": null,
             "cols": 11
@@ -464,7 +456,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-04-01",
             "data_fim": "2026-04-30",
-            "seconds": 8.2959,
+            "seconds": 7.4981,
             "rows": 1,
             "error": null
           },
@@ -472,7 +464,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-03-01",
             "data_fim": "2026-03-31",
-            "seconds": 0.9867,
+            "seconds": 0.8655,
             "rows": 31,
             "error": null
           },
@@ -480,7 +472,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-03-01",
             "data_fim": "2026-03-31",
-            "seconds": 6.0108,
+            "seconds": 4.5699,
             "rows": 31,
             "error": null,
             "cols": 11
@@ -489,7 +481,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-03-01",
             "data_fim": "2026-03-31",
-            "seconds": 8.6464,
+            "seconds": 7.0305,
             "rows": 1,
             "error": null
           },
@@ -497,7 +489,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-03-25",
             "data_fim": "2026-06-22",
-            "seconds": 2.4973,
+            "seconds": 2.033,
             "rows": 90,
             "error": null
           },
@@ -505,7 +497,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-03-25",
             "data_fim": "2026-06-22",
-            "seconds": 5.5781,
+            "seconds": 4.5996,
             "rows": 90,
             "error": null,
             "cols": 11
@@ -514,7 +506,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-03-25",
             "data_fim": "2026-06-22",
-            "seconds": 10.1609,
+            "seconds": 8.4286,
             "rows": 1,
             "error": null
           },
@@ -522,7 +514,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2025-12-25",
             "data_fim": "2026-06-22",
-            "seconds": 4.426,
+            "seconds": 3.4718,
             "rows": 180,
             "error": null
           },
@@ -530,7 +522,7 @@
             "name": "executivas_v2",
             "data_ini": "2025-12-25",
             "data_fim": "2026-06-22",
-            "seconds": 5.262,
+            "seconds": 4.7575,
             "rows": 180,
             "error": null,
             "cols": 11
@@ -539,7 +531,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2025-12-25",
             "data_fim": "2026-06-22",
-            "seconds": 12.0387,
+            "seconds": 10.2156,
             "rows": 1,
             "error": null
           }
@@ -551,17 +543,17 @@
       "cp7_1_baseline_main_sections": 17.4,
       "cold_timing": {
         "runs": [
-          9.6605
+          8.9775
         ],
-        "median": 9.6605,
-        "min": 9.6605,
-        "max": 9.6605
+        "median": 8.9775,
+        "min": 8.9775,
+        "max": 8.9775
       },
       "cold_sem_referencia": {
         "mode": "cold_sem_referencia",
         "scenario": "mes_atual",
-        "period": "2026-06-01\u21922026-06-22",
-        "main_sections_seconds": 9.6605,
+        "period": "2026-06-01->2026-06-22",
+        "main_sections_seconds": 8.9775,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 5,
@@ -582,19 +574,19 @@
           "legacy_benchmark_batch_enabled": false
         },
         "meta": {
-          "load_seconds": 0.0003,
+          "load_seconds": 0.0002,
           "cache_hit": true,
           "session_hit": false,
           "db_configured": true,
           "row_found": true,
           "cache_invalidated": false,
           "batch_enabled": false,
-          "init_seconds": 0.0009
+          "init_seconds": 0.0007
         },
         "legacy_benchmark_batch": {},
         "legacy": {
           "version": "v2",
-          "seconds": 0.8942,
+          "seconds": 0.884,
           "data_ini": "2026-03-01",
           "data_fim": "2026-03-22",
           "rows": 22,
@@ -603,7 +595,7 @@
         "legacy_runs": [
           {
             "version": "v2",
-            "seconds": 0.8798,
+            "seconds": 0.8885,
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-22",
             "rows": 22,
@@ -611,7 +603,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.9127,
+            "seconds": 0.8733,
             "data_ini": "2026-04-01",
             "data_fim": "2026-04-22",
             "rows": 22,
@@ -619,7 +611,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.8942,
+            "seconds": 0.884,
             "data_ini": "2026-03-01",
             "data_fim": "2026-03-22",
             "rows": 22,
@@ -628,28 +620,29 @@
         ],
         "executivas": {
           "version": "v2",
-          "seconds": 5.2952,
-          "data_ini": "2026-05-01",
-          "data_fim": "2026-03-22",
-          "rows": 0,
-          "cols": 0,
+          "seconds": 4.3552,
+          "data_ini": "2026-03-01",
+          "data_fim": "2026-05-22",
+          "rows": 83,
+          "cols": 11,
           "fallback_error": null
         },
         "parallel": {},
         "blocks": {
           "atual": 0.0003,
-          "meta": 0.0009,
-          "benchmark": 9.6127,
+          "meta": 0.0008,
+          "benchmark": 8.9014,
           "referencia": null,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0036,
-          "carregamento Meta oficial": 0.0047,
-          "Benchmark hist\u00f3rico": 9.6176,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 9.6584,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 9.6605
+          "init / auth / start_page": 0.0034,
+          "carregamento Atual real": 0.0038,
+          "carregamento Meta oficial": 0.0048,
+          "primeira dobra \u00fatil": 0.0065,
+          "Benchmark hist\u00f3rico": 8.9158,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 8.9742,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 8.9775
         },
         "queries": [
           {
@@ -662,18 +655,18 @@
           },
           {
             "name": "executivas_v2",
-            "data_ini": "2026-05-01",
-            "data_fim": "2026-03-22",
-            "seconds": 5.2952,
-            "rows": 0,
+            "data_ini": "2026-03-01",
+            "data_fim": "2026-05-22",
+            "seconds": 4.3552,
+            "rows": 83,
             "error": null,
-            "cols": 0
+            "cols": 11
           },
           {
             "name": "legacy_diario_v2",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-22",
-            "seconds": 0.8798,
+            "seconds": 0.8885,
             "rows": 22,
             "error": null
           },
@@ -681,7 +674,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-04-01",
             "data_fim": "2026-04-22",
-            "seconds": 0.9127,
+            "seconds": 0.8733,
             "rows": 22,
             "error": null
           },
@@ -689,43 +682,33 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-03-01",
             "data_fim": "2026-03-22",
-            "seconds": 0.8942,
+            "seconds": 0.884,
             "rows": 22,
             "error": null
           }
         ],
         "visual": {
           "sem_erro_streamlit": true,
-          "benchmark_dataframe": true,
           "controles_simulador": true,
-          "expander_perf": true
+          "expander_perf": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "benchmark_dataframe": true,
+          "sem_botao_obrigatorio": true
         }
       },
       "cold_runs": null,
       "warm_rerun": {
         "mode": "warm_rerun",
         "scenario": "mes_atual",
-        "period": "2026-06-01\u21922026-06-22",
-        "main_sections_seconds": 0.0447,
+        "period": "2026-06-01->2026-06-22",
+        "main_sections_seconds": 0.0626,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 1,
         "referencia_loaded": false,
         "referencia_skipped": true,
         "export_prepared": false,
-        "benchmark": {
-          "version": "v2",
-          "windows": 3,
-          "repo_queries": 6,
-          "funnel_loads_avoided": 9,
-          "used_v2": true,
-          "fallback_error": null,
-          "legacy_benchmark_mode": "per_window",
-          "legacy_benchmark_time": null,
-          "legacy_benchmark_queries": 3,
-          "legacy_benchmark_fallback": null,
-          "legacy_benchmark_batch_enabled": false
-        },
+        "benchmark": {},
         "meta": {
           "session_hit": true,
           "init_seconds": 0.0001
@@ -736,26 +719,26 @@
         "executivas": {},
         "parallel": {},
         "blocks": {
-          "atual": 0.0002,
-          "meta": 0.0001,
-          "benchmark": 0.0007,
+          "atual": 0.0003,
+          "meta": 0.0002,
+          "benchmark": null,
           "referencia": null,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0022,
-          "carregamento Meta oficial": 0.0024,
-          "Benchmark hist\u00f3rico": 0.0032,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0426,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0447
+          "init / auth / start_page": 0.0042,
+          "carregamento Atual real": 0.0047,
+          "carregamento Meta oficial": 0.0049,
+          "Benchmark hist\u00f3rico": 0.0112,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0592,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0626
         },
         "queries": [
           {
             "name": "load_one_page_funnel",
             "data_ini": "2026-06-01",
             "data_fim": "2026-06-22",
-            "seconds": 0.0001,
+            "seconds": 0.0002,
             "rows": 1,
             "error": null
           }
@@ -764,8 +747,8 @@
       "cold_com_referencia": {
         "mode": "cold_com_referencia",
         "scenario": "mes_atual",
-        "period": "2026-06-01\u21922026-06-22",
-        "main_sections_seconds": 0.0433,
+        "period": "2026-06-01->2026-06-22",
+        "main_sections_seconds": 0.1607,
         "page_total_seconds": null,
         "funnel_load_count": 8,
         "query_count": 8,
@@ -802,18 +785,19 @@
         "parallel": {},
         "blocks": {
           "atual": 0.0002,
-          "meta": 0.0007,
-          "benchmark": 0.0006,
-          "referencia": 0.0013,
+          "meta": 0.0008,
+          "benchmark": 0.1018,
+          "referencia": 0.0014,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0023,
-          "carregamento Meta oficial": 0.0031,
-          "Benchmark hist\u00f3rico": 0.0038,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.041,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0433
+          "init / auth / start_page": 0.0028,
+          "carregamento Atual real": 0.0031,
+          "carregamento Meta oficial": 0.004,
+          "primeira dobra \u00fatil": 0.0058,
+          "Benchmark hist\u00f3rico": 0.1179,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.158,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.1607
         },
         "queries": [
           {
@@ -888,17 +872,17 @@
       "cp7_1_baseline_main_sections": 19.3,
       "cold_timing": {
         "runs": [
-          9.9414
+          8.6314
         ],
-        "median": 9.9414,
-        "min": 9.9414,
-        "max": 9.9414
+        "median": 8.6314,
+        "min": 8.6314,
+        "max": 8.6314
       },
       "cold_sem_referencia": {
         "mode": "cold_sem_referencia",
         "scenario": "mes_anterior",
-        "period": "2026-05-01\u21922026-05-31",
-        "main_sections_seconds": 9.9414,
+        "period": "2026-05-01->2026-05-31",
+        "main_sections_seconds": 8.6314,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 5,
@@ -919,19 +903,19 @@
           "legacy_benchmark_batch_enabled": false
         },
         "meta": {
-          "load_seconds": 1.3443,
+          "load_seconds": 1.2541,
           "cache_hit": false,
           "session_hit": false,
           "db_configured": true,
           "row_found": false,
           "cache_invalidated": false,
           "batch_enabled": false,
-          "init_seconds": 1.3448
+          "init_seconds": 1.2553
         },
         "legacy_benchmark_batch": {},
         "legacy": {
           "version": "v2",
-          "seconds": 0.0003,
+          "seconds": 0.0005,
           "data_ini": "2026-04-01",
           "data_fim": "2026-04-30",
           "rows": 30,
@@ -940,7 +924,7 @@
         "legacy_runs": [
           {
             "version": "v2",
-            "seconds": 0.8996,
+            "seconds": 0.9153,
             "data_ini": "2026-02-01",
             "data_fim": "2026-02-28",
             "rows": 28,
@@ -948,7 +932,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.0004,
+            "seconds": 0.0013,
             "data_ini": "2026-03-01",
             "data_fim": "2026-03-31",
             "rows": 31,
@@ -956,7 +940,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.0003,
+            "seconds": 0.0005,
             "data_ini": "2026-04-01",
             "data_fim": "2026-04-30",
             "rows": 30,
@@ -965,7 +949,7 @@
         ],
         "executivas": {
           "version": "v2",
-          "seconds": 5.7494,
+          "seconds": 4.4617,
           "data_ini": "2026-02-01",
           "data_fim": "2026-04-30",
           "rows": 89,
@@ -974,26 +958,27 @@
         },
         "parallel": {},
         "blocks": {
-          "atual": 0.0002,
-          "meta": 1.3448,
-          "benchmark": 8.5557,
+          "atual": 0.0003,
+          "meta": 1.2555,
+          "benchmark": 7.3054,
           "referencia": null,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0021,
-          "carregamento Meta oficial": 1.3471,
-          "Benchmark hist\u00f3rico": 9.903,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 9.9394,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 9.9414
+          "init / auth / start_page": 0.003,
+          "carregamento Atual real": 0.0034,
+          "carregamento Meta oficial": 1.26,
+          "primeira dobra \u00fatil": 1.2637,
+          "Benchmark hist\u00f3rico": 8.5784,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 8.6281,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 8.6314
         },
         "queries": [
           {
             "name": "load_one_page_funnel",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
-            "seconds": 0.0001,
+            "seconds": 0.0002,
             "rows": 1,
             "error": null
           },
@@ -1001,7 +986,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-02-01",
             "data_fim": "2026-04-30",
-            "seconds": 5.7494,
+            "seconds": 4.4617,
             "rows": 89,
             "error": null,
             "cols": 11
@@ -1010,7 +995,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-02-01",
             "data_fim": "2026-02-28",
-            "seconds": 0.8996,
+            "seconds": 0.9153,
             "rows": 28,
             "error": null
           },
@@ -1018,7 +1003,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-03-01",
             "data_fim": "2026-03-31",
-            "seconds": 0.0004,
+            "seconds": 0.0013,
             "rows": 31,
             "error": null
           },
@@ -1026,43 +1011,33 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-04-01",
             "data_fim": "2026-04-30",
-            "seconds": 0.0003,
+            "seconds": 0.0005,
             "rows": 30,
             "error": null
           }
         ],
         "visual": {
           "sem_erro_streamlit": true,
-          "benchmark_dataframe": true,
           "controles_simulador": true,
-          "expander_perf": true
+          "expander_perf": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "benchmark_dataframe": true,
+          "sem_botao_obrigatorio": true
         }
       },
       "cold_runs": null,
       "warm_rerun": {
         "mode": "warm_rerun",
         "scenario": "mes_anterior",
-        "period": "2026-05-01\u21922026-05-31",
-        "main_sections_seconds": 0.0642,
+        "period": "2026-05-01->2026-05-31",
+        "main_sections_seconds": 0.0527,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 1,
         "referencia_loaded": false,
         "referencia_skipped": true,
         "export_prepared": false,
-        "benchmark": {
-          "version": "v2",
-          "windows": 3,
-          "repo_queries": 6,
-          "funnel_loads_avoided": 9,
-          "used_v2": true,
-          "fallback_error": null,
-          "legacy_benchmark_mode": "per_window",
-          "legacy_benchmark_time": null,
-          "legacy_benchmark_queries": 3,
-          "legacy_benchmark_fallback": null,
-          "legacy_benchmark_batch_enabled": false
-        },
+        "benchmark": {},
         "meta": {
           "session_hit": true,
           "init_seconds": 0.0001
@@ -1073,26 +1048,26 @@
         "executivas": {},
         "parallel": {},
         "blocks": {
-          "atual": 0.0003,
-          "meta": 0.0001,
-          "benchmark": 0.0008,
+          "atual": 0.0002,
+          "meta": 0.0002,
+          "benchmark": null,
           "referencia": null,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0036,
-          "carregamento Meta oficial": 0.0039,
-          "Benchmark hist\u00f3rico": 0.0049,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0606,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0642
+          "init / auth / start_page": 0.0027,
+          "carregamento Atual real": 0.0031,
+          "carregamento Meta oficial": 0.0033,
+          "Benchmark hist\u00f3rico": 0.0088,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0463,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0527
         },
         "queries": [
           {
             "name": "load_one_page_funnel",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
-            "seconds": 0.0002,
+            "seconds": 0.0001,
             "rows": 1,
             "error": null
           }
@@ -1101,8 +1076,8 @@
       "cold_com_referencia": {
         "mode": "cold_com_referencia",
         "scenario": "mes_anterior",
-        "period": "2026-05-01\u21922026-05-31",
-        "main_sections_seconds": 0.0434,
+        "period": "2026-05-01->2026-05-31",
+        "main_sections_seconds": 0.1642,
         "page_total_seconds": null,
         "funnel_load_count": 8,
         "query_count": 14,
@@ -1123,19 +1098,19 @@
           "legacy_benchmark_batch_enabled": false
         },
         "meta": {
-          "load_seconds": 0.0004,
+          "load_seconds": 0.0006,
           "cache_hit": true,
           "session_hit": false,
           "db_configured": true,
           "row_found": false,
           "cache_invalidated": false,
           "batch_enabled": false,
-          "init_seconds": 0.0008
+          "init_seconds": 0.0013
         },
         "legacy_benchmark_batch": {},
         "legacy": {
           "version": "v2",
-          "seconds": 2.5832,
+          "seconds": 2.7679,
           "data_ini": "2025-12-03",
           "data_fim": "2026-05-31",
           "rows": 180,
@@ -1152,7 +1127,7 @@
           },
           {
             "version": "v2",
-            "seconds": 1.6458,
+            "seconds": 1.6577,
             "data_ini": "2026-03-03",
             "data_fim": "2026-05-31",
             "rows": 90,
@@ -1160,7 +1135,7 @@
           },
           {
             "version": "v2",
-            "seconds": 2.5832,
+            "seconds": 2.7679,
             "data_ini": "2025-12-03",
             "data_fim": "2026-05-31",
             "rows": 180,
@@ -1169,7 +1144,7 @@
         ],
         "executivas": {
           "version": "v2",
-          "seconds": 4.5079,
+          "seconds": 5.0048,
           "data_ini": "2025-12-03",
           "data_fim": "2026-05-31",
           "rows": 180,
@@ -1178,26 +1153,27 @@
         },
         "parallel": {},
         "blocks": {
-          "atual": 0.0002,
-          "meta": 0.0009,
-          "benchmark": 0.0005,
-          "referencia": 24.4129,
+          "atual": 0.0004,
+          "meta": 0.0014,
+          "benchmark": 0.1021,
+          "referencia": 24.5261,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0021,
-          "carregamento Meta oficial": 0.0031,
-          "Benchmark hist\u00f3rico": 0.0038,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.041,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0434
+          "init / auth / start_page": 0.0053,
+          "carregamento Atual real": 0.0059,
+          "carregamento Meta oficial": 0.0075,
+          "primeira dobra \u00fatil": 0.0112,
+          "Benchmark hist\u00f3rico": 0.118,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.1614,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.1642
         },
         "queries": [
           {
             "name": "load_one_page_funnel",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
-            "seconds": 0.0001,
+            "seconds": 0.0003,
             "rows": 1,
             "error": null
           },
@@ -1205,7 +1181,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
-            "seconds": 0.0001,
+            "seconds": 0.0002,
             "rows": 1,
             "error": null
           },
@@ -1245,7 +1221,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-02-01",
             "data_fim": "2026-02-28",
-            "seconds": 5.1262,
+            "seconds": 5.028,
             "rows": 28,
             "error": null,
             "cols": 11
@@ -1254,7 +1230,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-02-01",
             "data_fim": "2026-02-28",
-            "seconds": 6.7269,
+            "seconds": 6.677,
             "rows": 1,
             "error": null
           },
@@ -1262,7 +1238,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-03-03",
             "data_fim": "2026-05-31",
-            "seconds": 1.6458,
+            "seconds": 1.6577,
             "rows": 90,
             "error": null
           },
@@ -1270,7 +1246,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-03-03",
             "data_fim": "2026-05-31",
-            "seconds": 4.9982,
+            "seconds": 4.5884,
             "rows": 90,
             "error": null,
             "cols": 11
@@ -1279,7 +1255,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-03-03",
             "data_fim": "2026-05-31",
-            "seconds": 8.4919,
+            "seconds": 8.0288,
             "rows": 1,
             "error": null
           },
@@ -1287,7 +1263,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2025-12-03",
             "data_fim": "2026-05-31",
-            "seconds": 2.5832,
+            "seconds": 2.7679,
             "rows": 180,
             "error": null
           },
@@ -1295,7 +1271,7 @@
             "name": "executivas_v2",
             "data_ini": "2025-12-03",
             "data_fim": "2026-05-31",
-            "seconds": 4.5079,
+            "seconds": 5.0048,
             "rows": 180,
             "error": null,
             "cols": 11
@@ -1304,7 +1280,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2025-12-03",
             "data_fim": "2026-05-31",
-            "seconds": 9.193,
+            "seconds": 9.8188,
             "rows": 1,
             "error": null
           }
@@ -1316,251 +1292,22 @@
       "cp7_1_baseline_main_sections": 17.5,
       "cold_timing": {
         "runs": [
-          16.5803
+          16.6629
         ],
-        "median": 16.5803,
-        "min": 16.5803,
-        "max": 16.5803
+        "median": 16.6629,
+        "min": 16.6629,
+        "max": 16.6629
       },
       "cold_sem_referencia": {
         "mode": "cold_sem_referencia",
         "scenario": "recorte_jun_2026",
-        "period": "2026-06-01\u21922026-06-17",
-        "main_sections_seconds": 16.5803,
+        "period": "2026-06-01->2026-06-17",
+        "main_sections_seconds": 16.6629,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 7,
         "referencia_loaded": false,
         "referencia_skipped": true,
-        "export_prepared": false,
-        "benchmark": {
-          "version": "v2",
-          "windows": 3,
-          "repo_queries": 6,
-          "funnel_loads_avoided": 9,
-          "used_v2": true,
-          "fallback_error": null,
-          "legacy_benchmark_mode": "per_window",
-          "legacy_benchmark_time": null,
-          "legacy_benchmark_queries": 3,
-          "legacy_benchmark_fallback": null,
-          "legacy_benchmark_batch_enabled": false
-        },
-        "meta": {
-          "load_seconds": 0.0002,
-          "cache_hit": true,
-          "session_hit": false,
-          "db_configured": true,
-          "row_found": true,
-          "cache_invalidated": false,
-          "batch_enabled": false,
-          "init_seconds": 0.0007
-        },
-        "legacy_benchmark_batch": {},
-        "legacy": {
-          "version": "v2",
-          "seconds": 0.8258,
-          "data_ini": "2026-03-01",
-          "data_fim": "2026-03-17",
-          "rows": 17,
-          "fallback_error": null
-        },
-        "legacy_runs": [
-          {
-            "version": "v2",
-            "seconds": 0.9248,
-            "data_ini": "2026-06-01",
-            "data_fim": "2026-06-17",
-            "rows": 17,
-            "fallback_error": null
-          },
-          {
-            "version": "v2",
-            "seconds": 0.8308,
-            "data_ini": "2026-05-01",
-            "data_fim": "2026-05-17",
-            "rows": 17,
-            "fallback_error": null
-          },
-          {
-            "version": "v2",
-            "seconds": 0.8285,
-            "data_ini": "2026-04-01",
-            "data_fim": "2026-04-17",
-            "rows": 17,
-            "fallback_error": null
-          },
-          {
-            "version": "v2",
-            "seconds": 0.8258,
-            "data_ini": "2026-03-01",
-            "data_fim": "2026-03-17",
-            "rows": 17,
-            "fallback_error": null
-          }
-        ],
-        "executivas": {
-          "version": "v2",
-          "seconds": 4.802,
-          "data_ini": "2026-05-01",
-          "data_fim": "2026-03-17",
-          "rows": 0,
-          "cols": 0,
-          "fallback_error": null
-        },
-        "parallel": {},
-        "blocks": {
-          "atual": 7.7765,
-          "meta": 0.0008,
-          "benchmark": 8.7611,
-          "referencia": null,
-          "export": null
-        },
-        "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 7.7784,
-          "carregamento Meta oficial": 7.7793,
-          "Benchmark hist\u00f3rico": 16.5405,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 16.578,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 16.5803
-        },
-        "queries": [
-          {
-            "name": "legacy_diario_v2",
-            "data_ini": "2026-06-01",
-            "data_fim": "2026-06-17",
-            "seconds": 0.9248,
-            "rows": 17,
-            "error": null
-          },
-          {
-            "name": "executivas_v2",
-            "data_ini": "2026-06-01",
-            "data_fim": "2026-06-17",
-            "seconds": 5.2059,
-            "rows": 17,
-            "error": null,
-            "cols": 11
-          },
-          {
-            "name": "load_one_page_funnel",
-            "data_ini": "2026-06-01",
-            "data_fim": "2026-06-17",
-            "seconds": 7.7764,
-            "rows": 1,
-            "error": null
-          },
-          {
-            "name": "executivas_v2",
-            "data_ini": "2026-05-01",
-            "data_fim": "2026-03-17",
-            "seconds": 4.802,
-            "rows": 0,
-            "error": null,
-            "cols": 0
-          },
-          {
-            "name": "legacy_diario_v2",
-            "data_ini": "2026-05-01",
-            "data_fim": "2026-05-17",
-            "seconds": 0.8308,
-            "rows": 17,
-            "error": null
-          },
-          {
-            "name": "legacy_diario_v2",
-            "data_ini": "2026-04-01",
-            "data_fim": "2026-04-17",
-            "seconds": 0.8285,
-            "rows": 17,
-            "error": null
-          },
-          {
-            "name": "legacy_diario_v2",
-            "data_ini": "2026-03-01",
-            "data_fim": "2026-03-17",
-            "seconds": 0.8258,
-            "rows": 17,
-            "error": null
-          }
-        ],
-        "visual": {
-          "sem_erro_streamlit": true,
-          "benchmark_dataframe": true,
-          "controles_simulador": true,
-          "expander_perf": true
-        }
-      },
-      "cold_runs": null,
-      "warm_rerun": {
-        "mode": "warm_rerun",
-        "scenario": "recorte_jun_2026",
-        "period": "2026-06-01\u21922026-06-17",
-        "main_sections_seconds": 0.0423,
-        "page_total_seconds": null,
-        "funnel_load_count": 1,
-        "query_count": 1,
-        "referencia_loaded": false,
-        "referencia_skipped": true,
-        "export_prepared": false,
-        "benchmark": {
-          "version": "v2",
-          "windows": 3,
-          "repo_queries": 6,
-          "funnel_loads_avoided": 9,
-          "used_v2": true,
-          "fallback_error": null,
-          "legacy_benchmark_mode": "per_window",
-          "legacy_benchmark_time": null,
-          "legacy_benchmark_queries": 3,
-          "legacy_benchmark_fallback": null,
-          "legacy_benchmark_batch_enabled": false
-        },
-        "meta": {
-          "session_hit": true,
-          "init_seconds": 0.0001
-        },
-        "legacy_benchmark_batch": {},
-        "legacy": {},
-        "legacy_runs": [],
-        "executivas": {},
-        "parallel": {},
-        "blocks": {
-          "atual": 0.0002,
-          "meta": 0.0001,
-          "benchmark": 0.0006,
-          "referencia": null,
-          "export": null
-        },
-        "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.002,
-          "carregamento Meta oficial": 0.0022,
-          "Benchmark hist\u00f3rico": 0.0029,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0401,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0423
-        },
-        "queries": [
-          {
-            "name": "load_one_page_funnel",
-            "data_ini": "2026-06-01",
-            "data_fim": "2026-06-17",
-            "seconds": 0.0001,
-            "rows": 1,
-            "error": null
-          }
-        ]
-      },
-      "cold_com_referencia": {
-        "mode": "cold_com_referencia",
-        "scenario": "recorte_jun_2026",
-        "period": "2026-06-01\u21922026-06-17",
-        "main_sections_seconds": 0.0492,
-        "page_total_seconds": null,
-        "funnel_load_count": 8,
-        "query_count": 12,
-        "referencia_loaded": true,
-        "referencia_skipped": false,
         "export_prepared": false,
         "benchmark": {
           "version": "v2",
@@ -1583,12 +1330,232 @@
           "row_found": true,
           "cache_invalidated": false,
           "batch_enabled": false,
-          "init_seconds": 0.0009
+          "init_seconds": 0.001
         },
         "legacy_benchmark_batch": {},
         "legacy": {
           "version": "v2",
-          "seconds": 3.7065,
+          "seconds": 0.8875,
+          "data_ini": "2026-03-01",
+          "data_fim": "2026-03-17",
+          "rows": 17,
+          "fallback_error": null
+        },
+        "legacy_runs": [
+          {
+            "version": "v2",
+            "seconds": 0.8943,
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-17",
+            "rows": 17,
+            "fallback_error": null
+          },
+          {
+            "version": "v2",
+            "seconds": 0.8615,
+            "data_ini": "2026-05-01",
+            "data_fim": "2026-05-17",
+            "rows": 17,
+            "fallback_error": null
+          },
+          {
+            "version": "v2",
+            "seconds": 0.9139,
+            "data_ini": "2026-04-01",
+            "data_fim": "2026-04-17",
+            "rows": 17,
+            "fallback_error": null
+          },
+          {
+            "version": "v2",
+            "seconds": 0.8875,
+            "data_ini": "2026-03-01",
+            "data_fim": "2026-03-17",
+            "rows": 17,
+            "fallback_error": null
+          }
+        ],
+        "executivas": {
+          "version": "v2",
+          "seconds": 4.8942,
+          "data_ini": "2026-03-01",
+          "data_fim": "2026-05-17",
+          "rows": 78,
+          "cols": 11,
+          "fallback_error": null
+        },
+        "parallel": {},
+        "blocks": {
+          "atual": 7.1677,
+          "meta": 0.0011,
+          "benchmark": 9.4334,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0036,
+          "carregamento Atual real": 7.1713,
+          "carregamento Meta oficial": 7.1726,
+          "primeira dobra \u00fatil": 7.1755,
+          "Benchmark hist\u00f3rico": 16.6145,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 16.6593,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 16.6629
+        },
+        "queries": [
+          {
+            "name": "legacy_diario_v2",
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-17",
+            "seconds": 0.8943,
+            "rows": 17,
+            "error": null
+          },
+          {
+            "name": "executivas_v2",
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-17",
+            "seconds": 4.5956,
+            "rows": 17,
+            "error": null,
+            "cols": 11
+          },
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-17",
+            "seconds": 7.1675,
+            "rows": 1,
+            "error": null
+          },
+          {
+            "name": "executivas_v2",
+            "data_ini": "2026-03-01",
+            "data_fim": "2026-05-17",
+            "seconds": 4.8942,
+            "rows": 78,
+            "error": null,
+            "cols": 11
+          },
+          {
+            "name": "legacy_diario_v2",
+            "data_ini": "2026-05-01",
+            "data_fim": "2026-05-17",
+            "seconds": 0.8615,
+            "rows": 17,
+            "error": null
+          },
+          {
+            "name": "legacy_diario_v2",
+            "data_ini": "2026-04-01",
+            "data_fim": "2026-04-17",
+            "seconds": 0.9139,
+            "rows": 17,
+            "error": null
+          },
+          {
+            "name": "legacy_diario_v2",
+            "data_ini": "2026-03-01",
+            "data_fim": "2026-03-17",
+            "seconds": 0.8875,
+            "rows": 17,
+            "error": null
+          }
+        ],
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "benchmark_dataframe": true,
+          "sem_botao_obrigatorio": true
+        }
+      },
+      "cold_runs": null,
+      "warm_rerun": {
+        "mode": "warm_rerun",
+        "scenario": "recorte_jun_2026",
+        "period": "2026-06-01->2026-06-17",
+        "main_sections_seconds": 0.055,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {},
+        "meta": {
+          "session_hit": true,
+          "init_seconds": 0.0001
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0004,
+          "meta": 0.0002,
+          "benchmark": null,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0037,
+          "carregamento Atual real": 0.0042,
+          "carregamento Meta oficial": 0.0045,
+          "Benchmark hist\u00f3rico": 0.0106,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0508,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.055
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-17",
+            "seconds": 0.0002,
+            "rows": 1,
+            "error": null
+          }
+        ]
+      },
+      "cold_com_referencia": {
+        "mode": "cold_com_referencia",
+        "scenario": "recorte_jun_2026",
+        "period": "2026-06-01->2026-06-17",
+        "main_sections_seconds": 0.1619,
+        "page_total_seconds": null,
+        "funnel_load_count": 8,
+        "query_count": 12,
+        "referencia_loaded": true,
+        "referencia_skipped": false,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "load_seconds": 0.0002,
+          "cache_hit": true,
+          "session_hit": false,
+          "db_configured": true,
+          "row_found": true,
+          "cache_invalidated": false,
+          "batch_enabled": false,
+          "init_seconds": 0.0008
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {
+          "version": "v2",
+          "seconds": 3.5092,
           "data_ini": "2025-12-20",
           "data_fim": "2026-06-17",
           "rows": 180,
@@ -1597,7 +1564,7 @@
         "legacy_runs": [
           {
             "version": "v2",
-            "seconds": 2.0719,
+            "seconds": 1.9664,
             "data_ini": "2026-03-20",
             "data_fim": "2026-06-17",
             "rows": 90,
@@ -1605,7 +1572,7 @@
           },
           {
             "version": "v2",
-            "seconds": 3.7065,
+            "seconds": 3.5092,
             "data_ini": "2025-12-20",
             "data_fim": "2026-06-17",
             "rows": 180,
@@ -1614,7 +1581,7 @@
         ],
         "executivas": {
           "version": "v2",
-          "seconds": 5.5582,
+          "seconds": 5.0292,
           "data_ini": "2025-12-20",
           "data_fim": "2026-06-17",
           "rows": 180,
@@ -1625,17 +1592,18 @@
         "blocks": {
           "atual": 0.0003,
           "meta": 0.001,
-          "benchmark": 0.0008,
-          "referencia": 20.4656,
+          "benchmark": 0.1019,
+          "referencia": 19.3567,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0032,
-          "carregamento Meta oficial": 0.0043,
-          "Benchmark hist\u00f3rico": 0.0053,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0466,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0492
+          "init / auth / start_page": 0.0037,
+          "carregamento Atual real": 0.0041,
+          "carregamento Meta oficial": 0.0053,
+          "primeira dobra \u00fatil": 0.0071,
+          "Benchmark hist\u00f3rico": 0.1142,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.1594,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.1619
         },
         "queries": [
           {
@@ -1658,7 +1626,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-06-01",
             "data_fim": "2026-06-17",
-            "seconds": 0.0002,
+            "seconds": 0.0001,
             "rows": 1,
             "error": null
           },
@@ -1666,7 +1634,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-05-01",
             "data_fim": "2026-05-31",
-            "seconds": 0.0002,
+            "seconds": 0.0001,
             "rows": 1,
             "error": null
           },
@@ -1690,7 +1658,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2026-03-20",
             "data_fim": "2026-06-17",
-            "seconds": 2.0719,
+            "seconds": 1.9664,
             "rows": 90,
             "error": null
           },
@@ -1698,7 +1666,7 @@
             "name": "executivas_v2",
             "data_ini": "2026-03-20",
             "data_fim": "2026-06-17",
-            "seconds": 4.8154,
+            "seconds": 4.7977,
             "rows": 90,
             "error": null,
             "cols": 11
@@ -1707,7 +1675,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2026-03-20",
             "data_fim": "2026-06-17",
-            "seconds": 8.8898,
+            "seconds": 8.7242,
             "rows": 1,
             "error": null
           },
@@ -1715,7 +1683,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2025-12-20",
             "data_fim": "2026-06-17",
-            "seconds": 3.7065,
+            "seconds": 3.5092,
             "rows": 180,
             "error": null
           },
@@ -1723,7 +1691,7 @@
             "name": "executivas_v2",
             "data_ini": "2025-12-20",
             "data_fim": "2026-06-17",
-            "seconds": 5.5582,
+            "seconds": 5.0292,
             "rows": 180,
             "error": null,
             "cols": 11
@@ -1732,7 +1700,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2025-12-20",
             "data_fim": "2026-06-17",
-            "seconds": 11.5742,
+            "seconds": 10.6304,
             "rows": 1,
             "error": null
           }
@@ -1744,17 +1712,17 @@
       "cp7_1_baseline_main_sections": 17.6,
       "cold_timing": {
         "runs": [
-          18.8863
+          18.1854
         ],
-        "median": 18.8863,
-        "min": 18.8863,
-        "max": 18.8863
+        "median": 18.1854,
+        "min": 18.1854,
+        "max": 18.1854
       },
       "cold_sem_referencia": {
         "mode": "cold_sem_referencia",
         "scenario": "sem_dados",
-        "period": "2099-01-01\u21922099-01-07",
-        "main_sections_seconds": 18.8863,
+        "period": "2099-01-01->2099-01-07",
+        "main_sections_seconds": 18.1854,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 7,
@@ -1775,19 +1743,19 @@
           "legacy_benchmark_batch_enabled": false
         },
         "meta": {
-          "load_seconds": 2.6614,
+          "load_seconds": 2.5182,
           "cache_hit": false,
           "session_hit": false,
           "db_configured": true,
           "row_found": false,
           "cache_invalidated": false,
           "batch_enabled": false,
-          "init_seconds": 2.6621
+          "init_seconds": 2.5194
         },
         "legacy_benchmark_batch": {},
         "legacy": {
           "version": "v2",
-          "seconds": 0.6875,
+          "seconds": 0.7581,
           "data_ini": "2098-10-01",
           "data_fim": "2098-10-07",
           "rows": 0,
@@ -1796,7 +1764,7 @@
         "legacy_runs": [
           {
             "version": "v2",
-            "seconds": 0.6851,
+            "seconds": 0.7171,
             "data_ini": "2099-01-01",
             "data_fim": "2099-01-07",
             "rows": 0,
@@ -1804,7 +1772,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.6835,
+            "seconds": 0.7916,
             "data_ini": "2098-12-01",
             "data_fim": "2098-12-07",
             "rows": 0,
@@ -1812,7 +1780,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.6881,
+            "seconds": 0.8069,
             "data_ini": "2098-11-01",
             "data_fim": "2098-11-07",
             "rows": 0,
@@ -1820,7 +1788,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.6875,
+            "seconds": 0.7581,
             "data_ini": "2098-10-01",
             "data_fim": "2098-10-07",
             "rows": 0,
@@ -1829,35 +1797,36 @@
         ],
         "executivas": {
           "version": "v2",
-          "seconds": 5.4708,
-          "data_ini": "2098-12-01",
-          "data_fim": "2098-10-07",
+          "seconds": 4.7273,
+          "data_ini": "2098-10-01",
+          "data_fim": "2098-12-07",
           "rows": 0,
           "cols": 0,
           "fallback_error": null
         },
         "parallel": {},
         "blocks": {
-          "atual": 7.0793,
-          "meta": 2.6621,
-          "benchmark": 9.0995,
+          "atual": 6.6286,
+          "meta": 2.5196,
+          "benchmark": 8.7432,
           "referencia": null,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 7.0814,
-          "carregamento Meta oficial": 9.7438,
-          "Benchmark hist\u00f3rico": 18.8435,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 18.8843,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 18.8863
+          "init / auth / start_page": 0.0058,
+          "carregamento Atual real": 6.6346,
+          "carregamento Meta oficial": 9.1544,
+          "primeira dobra \u00fatil": 9.1589,
+          "Benchmark hist\u00f3rico": 17.9095,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 18.1753,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 18.1854
         },
         "queries": [
           {
             "name": "legacy_diario_v2",
             "data_ini": "2099-01-01",
             "data_fim": "2099-01-07",
-            "seconds": 0.6851,
+            "seconds": 0.7171,
             "rows": 0,
             "error": null
           },
@@ -1865,7 +1834,7 @@
             "name": "executivas_v2",
             "data_ini": "2099-01-01",
             "data_fim": "2099-01-07",
-            "seconds": 4.8882,
+            "seconds": 4.3571,
             "rows": 0,
             "error": null,
             "cols": 0
@@ -1874,15 +1843,15 @@
             "name": "load_one_page_funnel",
             "data_ini": "2099-01-01",
             "data_fim": "2099-01-07",
-            "seconds": 7.0791,
+            "seconds": 6.6284,
             "rows": 1,
             "error": null
           },
           {
             "name": "executivas_v2",
-            "data_ini": "2098-12-01",
-            "data_fim": "2098-10-07",
-            "seconds": 5.4708,
+            "data_ini": "2098-10-01",
+            "data_fim": "2098-12-07",
+            "seconds": 4.7273,
             "rows": 0,
             "error": null,
             "cols": 0
@@ -1891,7 +1860,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2098-12-01",
             "data_fim": "2098-12-07",
-            "seconds": 0.6835,
+            "seconds": 0.7916,
             "rows": 0,
             "error": null
           },
@@ -1899,7 +1868,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2098-11-01",
             "data_fim": "2098-11-07",
-            "seconds": 0.6881,
+            "seconds": 0.8069,
             "rows": 0,
             "error": null
           },
@@ -1907,43 +1876,33 @@
             "name": "legacy_diario_v2",
             "data_ini": "2098-10-01",
             "data_fim": "2098-10-07",
-            "seconds": 0.6875,
+            "seconds": 0.7581,
             "rows": 0,
             "error": null
           }
         ],
         "visual": {
           "sem_erro_streamlit": true,
-          "benchmark_dataframe": true,
           "controles_simulador": true,
-          "expander_perf": true
+          "expander_perf": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "benchmark_dataframe": true,
+          "sem_botao_obrigatorio": true
         }
       },
       "cold_runs": null,
       "warm_rerun": {
         "mode": "warm_rerun",
         "scenario": "sem_dados",
-        "period": "2099-01-01\u21922099-01-07",
-        "main_sections_seconds": 0.0569,
+        "period": "2099-01-01->2099-01-07",
+        "main_sections_seconds": 0.0715,
         "page_total_seconds": null,
         "funnel_load_count": 1,
         "query_count": 1,
         "referencia_loaded": false,
         "referencia_skipped": true,
         "export_prepared": false,
-        "benchmark": {
-          "version": "v2",
-          "windows": 3,
-          "repo_queries": 6,
-          "funnel_loads_avoided": 9,
-          "used_v2": true,
-          "fallback_error": null,
-          "legacy_benchmark_mode": "per_window",
-          "legacy_benchmark_time": null,
-          "legacy_benchmark_queries": 3,
-          "legacy_benchmark_fallback": null,
-          "legacy_benchmark_batch_enabled": false
-        },
+        "benchmark": {},
         "meta": {
           "session_hit": true,
           "init_seconds": 0.0001
@@ -1954,26 +1913,26 @@
         "executivas": {},
         "parallel": {},
         "blocks": {
-          "atual": 0.0002,
-          "meta": 0.0001,
-          "benchmark": 0.0008,
+          "atual": 0.0004,
+          "meta": 0.0002,
+          "benchmark": null,
           "referencia": null,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0024,
-          "carregamento Meta oficial": 0.0026,
-          "Benchmark hist\u00f3rico": 0.0036,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0544,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0569
+          "init / auth / start_page": 0.0057,
+          "carregamento Atual real": 0.0062,
+          "carregamento Meta oficial": 0.0065,
+          "Benchmark hist\u00f3rico": 0.0133,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0664,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0715
         },
         "queries": [
           {
             "name": "load_one_page_funnel",
             "data_ini": "2099-01-01",
             "data_fim": "2099-01-07",
-            "seconds": 0.0001,
+            "seconds": 0.0002,
             "rows": 1,
             "error": null
           }
@@ -1982,8 +1941,8 @@
       "cold_com_referencia": {
         "mode": "cold_com_referencia",
         "scenario": "sem_dados",
-        "period": "2099-01-01\u21922099-01-07",
-        "main_sections_seconds": 0.046,
+        "period": "2099-01-01->2099-01-07",
+        "main_sections_seconds": 0.1634,
         "page_total_seconds": null,
         "funnel_load_count": 8,
         "query_count": 18,
@@ -2004,19 +1963,19 @@
           "legacy_benchmark_batch_enabled": false
         },
         "meta": {
-          "load_seconds": 0.0004,
+          "load_seconds": 0.0005,
           "cache_hit": true,
           "session_hit": false,
           "db_configured": true,
           "row_found": false,
           "cache_invalidated": false,
           "batch_enabled": false,
-          "init_seconds": 0.0009
+          "init_seconds": 0.0011
         },
         "legacy_benchmark_batch": {},
         "legacy": {
           "version": "v2",
-          "seconds": 0.6824,
+          "seconds": 0.7017,
           "data_ini": "2098-07-12",
           "data_fim": "2099-01-07",
           "rows": 0,
@@ -2025,7 +1984,7 @@
         "legacy_runs": [
           {
             "version": "v2",
-            "seconds": 0.6966,
+            "seconds": 0.7157,
             "data_ini": "2098-12-01",
             "data_fim": "2098-12-31",
             "rows": 0,
@@ -2033,7 +1992,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.6899,
+            "seconds": 0.6994,
             "data_ini": "2098-11-01",
             "data_fim": "2098-11-30",
             "rows": 0,
@@ -2041,7 +2000,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.6993,
+            "seconds": 0.7167,
             "data_ini": "2098-10-01",
             "data_fim": "2098-10-31",
             "rows": 0,
@@ -2049,7 +2008,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.6972,
+            "seconds": 0.6913,
             "data_ini": "2098-10-10",
             "data_fim": "2099-01-07",
             "rows": 0,
@@ -2057,7 +2016,7 @@
           },
           {
             "version": "v2",
-            "seconds": 0.6824,
+            "seconds": 0.7017,
             "data_ini": "2098-07-12",
             "data_fim": "2099-01-07",
             "rows": 0,
@@ -2066,7 +2025,7 @@
         ],
         "executivas": {
           "version": "v2",
-          "seconds": 5.6043,
+          "seconds": 5.1992,
           "data_ini": "2098-07-12",
           "data_fim": "2099-01-07",
           "rows": 0,
@@ -2075,26 +2034,35 @@
         },
         "parallel": {},
         "blocks": {
-          "atual": 0.0005,
-          "meta": 0.001,
-          "benchmark": 0.0007,
-          "referencia": 37.3902,
+          "atual": 0.0002,
+          "meta": 0.0012,
+          "benchmark": 0.1017,
+          "referencia": 34.573,
           "export": null
         },
         "milestones": {
-          "init / auth / start_page": 0.0001,
-          "carregamento Atual real": 0.0024,
-          "carregamento Meta oficial": 0.0036,
-          "Benchmark hist\u00f3rico": 0.0045,
-          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0439,
-          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.046
+          "init / auth / start_page": 0.003,
+          "carregamento Atual real": 0.0034,
+          "carregamento Meta oficial": 0.0048,
+          "primeira dobra \u00fatil": 0.0073,
+          "Benchmark hist\u00f3rico": 0.1143,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.1584,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.1633
         },
         "queries": [
           {
             "name": "load_one_page_funnel",
             "data_ini": "2099-01-01",
             "data_fim": "2099-01-07",
-            "seconds": 0.0003,
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          },
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2099-01-01",
+            "data_fim": "2099-01-07",
+            "seconds": 0.0002,
             "rows": 1,
             "error": null
           },
@@ -2107,18 +2075,10 @@
             "error": null
           },
           {
-            "name": "load_one_page_funnel",
-            "data_ini": "2099-01-01",
-            "data_fim": "2099-01-07",
-            "seconds": 0.0001,
-            "rows": 1,
-            "error": null
-          },
-          {
             "name": "legacy_diario_v2",
             "data_ini": "2098-12-01",
             "data_fim": "2098-12-31",
-            "seconds": 0.6966,
+            "seconds": 0.7157,
             "rows": 0,
             "error": null
           },
@@ -2126,7 +2086,7 @@
             "name": "executivas_v2",
             "data_ini": "2098-12-01",
             "data_fim": "2098-12-31",
-            "seconds": 5.3129,
+            "seconds": 4.492,
             "rows": 0,
             "error": null,
             "cols": 0
@@ -2135,7 +2095,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2098-12-01",
             "data_fim": "2098-12-31",
-            "seconds": 7.5531,
+            "seconds": 6.7922,
             "rows": 1,
             "error": null
           },
@@ -2143,7 +2103,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2098-11-01",
             "data_fim": "2098-11-30",
-            "seconds": 0.6899,
+            "seconds": 0.6994,
             "rows": 0,
             "error": null
           },
@@ -2151,7 +2111,7 @@
             "name": "executivas_v2",
             "data_ini": "2098-11-01",
             "data_fim": "2098-11-30",
-            "seconds": 5.1123,
+            "seconds": 4.6804,
             "rows": 0,
             "error": null,
             "cols": 0
@@ -2160,7 +2120,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2098-11-01",
             "data_fim": "2098-11-30",
-            "seconds": 7.2799,
+            "seconds": 6.8869,
             "rows": 1,
             "error": null
           },
@@ -2168,7 +2128,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2098-10-01",
             "data_fim": "2098-10-31",
-            "seconds": 0.6993,
+            "seconds": 0.7167,
             "rows": 0,
             "error": null
           },
@@ -2176,7 +2136,7 @@
             "name": "executivas_v2",
             "data_ini": "2098-10-01",
             "data_fim": "2098-10-31",
-            "seconds": 5.5012,
+            "seconds": 4.5134,
             "rows": 0,
             "error": null,
             "cols": 0
@@ -2185,7 +2145,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2098-10-01",
             "data_fim": "2098-10-31",
-            "seconds": 7.7029,
+            "seconds": 6.7604,
             "rows": 1,
             "error": null
           },
@@ -2193,7 +2153,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2098-10-10",
             "data_fim": "2099-01-07",
-            "seconds": 0.6972,
+            "seconds": 0.6913,
             "rows": 0,
             "error": null
           },
@@ -2201,7 +2161,7 @@
             "name": "executivas_v2",
             "data_ini": "2098-10-10",
             "data_fim": "2099-01-07",
-            "seconds": 4.8908,
+            "seconds": 4.5148,
             "rows": 0,
             "error": null,
             "cols": 0
@@ -2210,7 +2170,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2098-10-10",
             "data_fim": "2099-01-07",
-            "seconds": 7.0556,
+            "seconds": 6.6978,
             "rows": 1,
             "error": null
           },
@@ -2218,7 +2178,7 @@
             "name": "legacy_diario_v2",
             "data_ini": "2098-07-12",
             "data_fim": "2099-01-07",
-            "seconds": 0.6824,
+            "seconds": 0.7017,
             "rows": 0,
             "error": null
           },
@@ -2226,7 +2186,7 @@
             "name": "executivas_v2",
             "data_ini": "2098-07-12",
             "data_fim": "2099-01-07",
-            "seconds": 5.6043,
+            "seconds": 5.1992,
             "rows": 0,
             "error": null,
             "cols": 0
@@ -2235,7 +2195,7 @@
             "name": "load_one_page_funnel",
             "data_ini": "2098-07-12",
             "data_fim": "2099-01-07",
-            "seconds": 7.7975,
+            "seconds": 7.4341,
             "rows": 1,
             "error": null
           }

@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""Checkpoint Streamlit — Funil da Reconecta com debug_perf=1.
+# -*- coding: utf-8 -*-
+"""Checkpoint Streamlit - Funil da Reconecta com debug_perf=1.
 
-Simula reruns da view com `?debug_perf=1` e períodos distintos via AppTest.
+Simula reruns da view com `?debug_perf=1` e periodos distintos via AppTest.
 
 CP8: suporte a carregamento paralelo experimental (FUNIL_PARALLEL_LOADS).
 
-CP8.1: ativação controlada staging — parallel ON via env, workers clamp 1–4.
+CP8.1: ativacao controlada staging - parallel ON via env, workers clamp 1-4.
 
 Uso (PowerShell):
   Set-Location "c:\\Users\\zz\\Desktop\\Dashboards_Reconecta\\dashboard_py"
@@ -110,7 +111,7 @@ def _summarize_run(
     return {
         "mode": mode,
         "scenario": label,
-        "period": f"{data_ini}→{data_fim}",
+        "period": f"{data_ini}->{data_fim}",
         "main_sections_seconds": main_t,
         "page_total_seconds": perf.get("page_total_seconds"),
         "funnel_load_count": perf.get("funnel_loads", 0),
@@ -155,19 +156,37 @@ def _run_apptest(
 
 
 def _visual_checks(at: AppTest) -> dict[str, bool | str]:
+    from src.funil_progressive_load import (
+        BENCHMARK_LOAD_BTN_KEY,
+        funil_progressive_benchmark_mode,
+    )
+
     errs = [e.value for e in (at.error or [])]
     excs = [e.value for e in (at.exception or [])]
     has_err = bool(errs or excs)
+    mode = funil_progressive_benchmark_mode()
+    btn_keys = [b.key for b in (at.button or [])]
+    blob = "\n".join(str(getattr(m, "value", "") or "") for m in (at.markdown or []))
+    pos_bm = blob.find("Benchmark histórico")
+    pos_cen = blob.find("Cenários no Simulador")
+    pos_cmp = blob.find("Comparativo de cenários")
     checks = {
         "sem_erro_streamlit": not has_err,
-        "benchmark_dataframe": len(at.dataframe) >= 1,
         "controles_simulador": len(at.button) >= 3,
         "expander_perf": any(
             "performance" in (e.label or "").lower()
             or "funil da reconecta" in (e.label or "").lower()
             for e in (at.expander or [])
         ),
+        "ordem_benchmark_cenarios_comparativo": (
+            pos_bm >= 0 and pos_cen >= 0 and pos_cmp >= 0 and pos_bm < pos_cen < pos_cmp
+        ),
     }
+    if mode == "manual" and BENCHMARK_LOAD_BTN_KEY in btn_keys:
+        checks["benchmark_manual_ou_dataframe"] = True
+    else:
+        checks["benchmark_dataframe"] = len(at.dataframe) >= 1
+        checks["sem_botao_obrigatorio"] = BENCHMARK_LOAD_BTN_KEY not in btn_keys
     if has_err:
         checks["erro"] = "; ".join(errs + excs)
     return checks
@@ -177,9 +196,9 @@ def _print_row(name: str, row: dict[str, Any]) -> None:
     main_t = row.get("main_sections_seconds") or 0
     funil = row.get("funnel_load_count", 0)
     ref = "skip" if row.get("referencia_skipped") else (
-        "load" if row.get("referencia_loaded") else "—"
+        "load" if row.get("referencia_loaded") else "-"
     )
-    export = "prep" if row.get("export_prepared") else "—"
+    export = "prep" if row.get("export_prepared") else "-"
     bm = row.get("benchmark") or {}
     bm_txt = ""
     if bm:
@@ -192,15 +211,15 @@ def _print_row(name: str, row: dict[str, Any]) -> None:
             f"/batch={batch_txt}"
         )
     leg = row.get("legacy") or {}
-    leg_txt = f"  leg={leg.get('version', '—')}" if leg else "  leg=—"
+    leg_txt = f"  leg={leg.get('version', '-')}" if leg else "  leg=-"
     ex = row.get("executivas") or {}
-    ex_txt = f"  ex={ex.get('version', '—')}" if ex else "  ex=—"
+    ex_txt = f"  ex={ex.get('version', '-')}" if ex else "  ex=-"
     par = row.get("parallel") or {}
     par_txt = ""
     if par.get("parallel_enabled") is not None:
         par_txt = (
             f"  par={'on' if par.get('parallel_enabled') else 'off'}"
-            f"/w={par.get('parallel_workers', '—')}"
+            f"/w={par.get('parallel_workers', '-')}"
             f"/fb={'yes' if par.get('parallel_fallback') else 'no'}"
         )
     print(
@@ -247,7 +266,7 @@ def run_scenario(
     n_runs: int = 1,
 ) -> dict[str, Any]:
     print(f"\n{'=' * 72}", flush=True)
-    print(f"CENÁRIO: {label} | {data_ini} → {data_fim}", flush=True)
+    print(f"CENARIO: {label} | {data_ini} -> {data_fim}", flush=True)
     print(f"{'=' * 72}", flush=True)
 
     cold_runs: list[dict[str, Any]] = []
@@ -313,12 +332,12 @@ def run_scenario(
         delta = cold_main - cp71
         print(
             f"  CP7.1 baseline (run1) main={cp71:7.3f}s  "
-            f"(Δ vs agora: {delta:+.3f}s)",
+            f"(delta vs agora: {delta:+.3f}s)",
             flush=True,
         )
 
     if label == "sem_dados" or (timing["max"] - timing["min"] > 2.0 and n_runs > 1):
-        _print_blocks_detail(cold, title="diagnóstico blocos (último cold)")
+        _print_blocks_detail(cold, title="diagnostico blocos (ultimo cold)")
 
     ok = all(
         v is True for k, v in cold.get("visual", {}).items() if k != "erro"

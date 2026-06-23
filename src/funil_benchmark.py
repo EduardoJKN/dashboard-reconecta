@@ -335,8 +335,8 @@ def resolve_historical_base(
             same_interval=use_same_interval,
             error="Período principal sem histórico anterior suficiente.",
         )
-    hist_ini = ranges[0][0]
-    hist_fim = ranges[-1][1]
+    hist_ini = min(r[0] for r in ranges)
+    hist_fim = max(r[1] for r in ranges)
     short = _custom_interval_summary(
         page_data_ini,
         page_data_fim,

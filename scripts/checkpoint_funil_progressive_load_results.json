@@ -1,0 +1,706 @@
+{
+  "checkpoint": "CP9.2.1-hist-cache",
+  "reference_date": "2026-06-22",
+  "funil_progressive_load_default": "1",
+  "funil_progressive_benchmark_mode_default": "auto",
+  "parallel_off": true,
+  "scenarios": [
+    {
+      "scenario": "ultimos_7_dias",
+      "progressive_auto": {
+        "mode": "progressive_auto",
+        "scenario": "ultimos_7_dias",
+        "first_fold_time": 13.7015,
+        "main_sections_seconds": 23.5538,
+        "full_page_time": 23.5538,
+        "benchmark_block": 9.7949,
+        "benchmark_time": 9.7951,
+        "progressive": {
+          "first_fold_time": 13.7015,
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 9.7951,
+          "benchmark_lazy_time": 9.7951,
+          "full_page_time": 23.5538
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "botoes_cenario_presentes": true,
+          "comparativo_presente": true
+        }
+      },
+      "warm_auto": {
+        "mode": "warm_auto",
+        "scenario": "ultimos_7_dias",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.0452,
+        "full_page_time": 0.0452,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null,
+          "full_page_time": 0.0452
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1
+      },
+      "progressive_manual": {
+        "mode": "progressive_manual",
+        "scenario": "ultimos_7_dias",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.0408,
+        "full_page_time": null,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "manual",
+          "benchmark_auto_loaded": false,
+          "benchmark_loaded": false,
+          "benchmark_skipped": true,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null
+        },
+        "benchmark_auto_loaded": false,
+        "benchmark_skipped": true,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "botao_manual_presente": true
+        }
+      },
+      "classic": {
+        "mode": "classic",
+        "scenario": "ultimos_7_dias",
+        "first_fold_time": 0.0486,
+        "main_sections_seconds": 0.0489,
+        "full_page_time": 0.0489,
+        "benchmark_block": 0.0006,
+        "benchmark_time": 0.0007,
+        "progressive": {
+          "first_fold_time": 0.0486,
+          "progressive_load_enabled": false,
+          "progressive_benchmark_mode": "classic",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 0.0007,
+          "benchmark_lazy_time": 0.0007,
+          "full_page_time": 0.0489
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true
+        }
+      },
+      "period_change_validation": null,
+      "hist_base_switch_validation": null,
+      "mes_atual_ate_hoje_validation": null,
+      "same_interval_benchmark_validation": null
+    },
+    {
+      "scenario": "mes_atual",
+      "progressive_auto": {
+        "mode": "progressive_auto",
+        "scenario": "mes_atual",
+        "first_fold_time": 7.8813,
+        "main_sections_seconds": 17.7884,
+        "full_page_time": 17.7884,
+        "benchmark_block": 9.8551,
+        "benchmark_time": 9.8557,
+        "progressive": {
+          "first_fold_time": 7.8813,
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 9.8557,
+          "benchmark_lazy_time": 9.8557,
+          "full_page_time": 17.7884
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "botoes_cenario_presentes": true,
+          "comparativo_presente": true
+        }
+      },
+      "warm_auto": {
+        "mode": "warm_auto",
+        "scenario": "mes_atual",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.0462,
+        "full_page_time": 0.0462,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null,
+          "full_page_time": 0.0462
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1
+      },
+      "progressive_manual": {
+        "mode": "progressive_manual",
+        "scenario": "mes_atual",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.0414,
+        "full_page_time": null,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "manual",
+          "benchmark_auto_loaded": false,
+          "benchmark_loaded": false,
+          "benchmark_skipped": true,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null
+        },
+        "benchmark_auto_loaded": false,
+        "benchmark_skipped": true,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "botao_manual_presente": true
+        }
+      },
+      "classic": {
+        "mode": "classic",
+        "scenario": "mes_atual",
+        "first_fold_time": 0.0478,
+        "main_sections_seconds": 0.0479,
+        "full_page_time": 0.0479,
+        "benchmark_block": 0.0007,
+        "benchmark_time": 0.0008,
+        "progressive": {
+          "first_fold_time": 0.0478,
+          "progressive_load_enabled": false,
+          "progressive_benchmark_mode": "classic",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 0.0008,
+          "benchmark_lazy_time": 0.0008,
+          "full_page_time": 0.0479
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true
+        }
+      },
+      "period_change_validation": {
+        "other_period_cache_isolated": true,
+        "benchmark_auto_other": true,
+        "ok": true
+      },
+      "hist_base_switch_validation": {
+        "ok": true,
+        "media_12m": "R$ 44.302,92|R$ 125,44|353|55,41%|253|23,25%|120|25,55%",
+        "media_1m": "R$ 104.471,21|R$ 114,68|911|49,29%|449|50,33%|376|54,79%",
+        "media_6m": "R$ 60.553,86|R$ 118,22|513|72,89%|357|43,52%|237|51,09%",
+        "interval_off": "R$ 86.944,30|R$ 123,40|720|72,79%|498|42,88%|350|51,72%",
+        "interval_on": "R$ 60.553,86|R$ 118,22|513|72,89%|357|43,52%|237|51,09%",
+        "cache_key_count": 4,
+        "distinct_cache_keys": 4,
+        "runs": {
+          "365": {
+            "label": "\u00daltimos 12 meses",
+            "media_sig": "R$ 44.302,92|R$ 125,44|353|55,41%|253|23,25%|120|25,55%",
+            "base_text_ok": true,
+            "cache_keys": [
+              "funil_benchmark_data_2026-06-01_2026-06-22_365_7dfa7e11ad3f026a20d4",
+              "funil_benchmark_data_2026-06-01_2026-06-22_90_adad379a67741404ee40"
+            ]
+          },
+          "30": {
+            "label": "\u00daltimo m\u00eas",
+            "media_sig": "R$ 104.471,21|R$ 114,68|911|49,29%|449|50,33%|376|54,79%",
+            "base_text_ok": true,
+            "cache_keys": [
+              "funil_benchmark_data_2026-06-01_2026-06-22_30_0b11b395938667f82d65",
+              "funil_benchmark_data_2026-06-01_2026-06-22_365_7dfa7e11ad3f026a20d4",
+              "funil_benchmark_data_2026-06-01_2026-06-22_90_adad379a67741404ee40"
+            ]
+          },
+          "180": {
+            "label": "\u00daltimos 6 meses",
+            "media_sig": "R$ 60.553,86|R$ 118,22|513|72,89%|357|43,52%|237|51,09%",
+            "base_text_ok": true,
+            "cache_keys": [
+              "funil_benchmark_data_2026-06-01_2026-06-22_180_8c93cc8b8e7ffc1b7bdd",
+              "funil_benchmark_data_2026-06-01_2026-06-22_30_0b11b395938667f82d65",
+              "funil_benchmark_data_2026-06-01_2026-06-22_365_7dfa7e11ad3f026a20d4",
+              "funil_benchmark_data_2026-06-01_2026-06-22_90_adad379a67741404ee40"
+            ]
+          }
+        }
+      },
+      "mes_atual_ate_hoje_validation": {
+        "ok": true,
+        "eff_on": "01/06/2026 -> 23/06/2026",
+        "eff_off": "01/06/2026 -> 30/06/2026",
+        "eff_prev": "01/05/2026 -> 31/05/2026",
+        "prop_txt": "23 de 30 dias",
+        "media_on": "R$ 76.937,52|R$ 111,09|686|70,11%|453|47,55%|339|59,95%",
+        "media_off": "R$ 106.979,30|R$ 113,25|946|69,80%|620|45,16%|458|61,17%",
+        "media_custom": "R$ 76.937,52|R$ 111,09|686|70,11%|453|47,55%|339|59,95%"
+      },
+      "same_interval_benchmark_validation": {
+        "ok": true,
+        "ag_on": "339",
+        "cmp_on": "200",
+        "vendas_on": "37",
+        "ticket_on": "R$ 30.880,93",
+        "ag_off": "458",
+        "layout_ok": true
+      }
+    },
+    {
+      "scenario": "mes_anterior",
+      "progressive_auto": {
+        "mode": "progressive_auto",
+        "scenario": "mes_anterior",
+        "first_fold_time": 0.0061,
+        "main_sections_seconds": 0.1596,
+        "full_page_time": 0.1596,
+        "benchmark_block": 0.1019,
+        "benchmark_time": 0.1022,
+        "progressive": {
+          "first_fold_time": 0.0061,
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 0.1022,
+          "benchmark_lazy_time": 0.1022,
+          "full_page_time": 0.1596
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "botoes_cenario_presentes": true,
+          "comparativo_presente": true
+        }
+      },
+      "warm_auto": {
+        "mode": "warm_auto",
+        "scenario": "mes_anterior",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.051,
+        "full_page_time": 0.051,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null,
+          "full_page_time": 0.051
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1
+      },
+      "progressive_manual": {
+        "mode": "progressive_manual",
+        "scenario": "mes_anterior",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.0433,
+        "full_page_time": null,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "manual",
+          "benchmark_auto_loaded": false,
+          "benchmark_loaded": false,
+          "benchmark_skipped": true,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null
+        },
+        "benchmark_auto_loaded": false,
+        "benchmark_skipped": true,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "botao_manual_presente": true
+        }
+      },
+      "classic": {
+        "mode": "classic",
+        "scenario": "mes_anterior",
+        "first_fold_time": 0.0465,
+        "main_sections_seconds": 0.0467,
+        "full_page_time": 0.0467,
+        "benchmark_block": 0.0006,
+        "benchmark_time": 0.0007,
+        "progressive": {
+          "first_fold_time": 0.0465,
+          "progressive_load_enabled": false,
+          "progressive_benchmark_mode": "classic",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 0.0007,
+          "benchmark_lazy_time": 0.0007,
+          "full_page_time": 0.0467
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true
+        }
+      },
+      "period_change_validation": null,
+      "hist_base_switch_validation": null,
+      "mes_atual_ate_hoje_validation": null,
+      "same_interval_benchmark_validation": null
+    },
+    {
+      "scenario": "recorte_jun_2026",
+      "progressive_auto": {
+        "mode": "progressive_auto",
+        "scenario": "recorte_jun_2026",
+        "first_fold_time": 7.6695,
+        "main_sections_seconds": 17.1638,
+        "full_page_time": 17.1638,
+        "benchmark_block": 9.4522,
+        "benchmark_time": 9.4524,
+        "progressive": {
+          "first_fold_time": 7.6695,
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 9.4524,
+          "benchmark_lazy_time": 9.4524,
+          "full_page_time": 17.1638
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "botoes_cenario_presentes": true,
+          "comparativo_presente": true
+        }
+      },
+      "warm_auto": {
+        "mode": "warm_auto",
+        "scenario": "recorte_jun_2026",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.0461,
+        "full_page_time": 0.0461,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null,
+          "full_page_time": 0.0461
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1
+      },
+      "progressive_manual": {
+        "mode": "progressive_manual",
+        "scenario": "recorte_jun_2026",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.0521,
+        "full_page_time": null,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "manual",
+          "benchmark_auto_loaded": false,
+          "benchmark_loaded": false,
+          "benchmark_skipped": true,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null
+        },
+        "benchmark_auto_loaded": false,
+        "benchmark_skipped": true,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "botao_manual_presente": true
+        }
+      },
+      "classic": {
+        "mode": "classic",
+        "scenario": "recorte_jun_2026",
+        "first_fold_time": 0.0509,
+        "main_sections_seconds": 0.0511,
+        "full_page_time": 0.0511,
+        "benchmark_block": 0.0006,
+        "benchmark_time": 0.0007,
+        "progressive": {
+          "first_fold_time": 0.0509,
+          "progressive_load_enabled": false,
+          "progressive_benchmark_mode": "classic",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 0.0007,
+          "benchmark_lazy_time": 0.0007,
+          "full_page_time": 0.0511
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true
+        }
+      },
+      "period_change_validation": null,
+      "hist_base_switch_validation": null,
+      "mes_atual_ate_hoje_validation": null,
+      "same_interval_benchmark_validation": null
+    },
+    {
+      "scenario": "sem_dados",
+      "progressive_auto": {
+        "mode": "progressive_auto",
+        "scenario": "sem_dados",
+        "first_fold_time": 9.5441,
+        "main_sections_seconds": 18.8026,
+        "full_page_time": 18.8026,
+        "benchmark_block": 9.2164,
+        "benchmark_time": 9.2166,
+        "progressive": {
+          "first_fold_time": 9.5441,
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 9.2166,
+          "benchmark_lazy_time": 9.2166,
+          "full_page_time": 18.8026
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true,
+          "ordem_benchmark_cenarios_comparativo": true,
+          "botoes_cenario_presentes": true,
+          "comparativo_presente": true
+        }
+      },
+      "warm_auto": {
+        "mode": "warm_auto",
+        "scenario": "sem_dados",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.044,
+        "full_page_time": 0.044,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "auto",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null,
+          "full_page_time": 0.044
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1
+      },
+      "progressive_manual": {
+        "mode": "progressive_manual",
+        "scenario": "sem_dados",
+        "first_fold_time": null,
+        "main_sections_seconds": 0.044,
+        "full_page_time": null,
+        "benchmark_block": null,
+        "benchmark_time": null,
+        "progressive": {
+          "progressive_load_enabled": true,
+          "progressive_benchmark_mode": "manual",
+          "benchmark_auto_loaded": false,
+          "benchmark_loaded": false,
+          "benchmark_skipped": true,
+          "benchmark_time": null,
+          "benchmark_lazy_time": null
+        },
+        "benchmark_auto_loaded": false,
+        "benchmark_skipped": true,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "botao_manual_presente": true
+        }
+      },
+      "classic": {
+        "mode": "classic",
+        "scenario": "sem_dados",
+        "first_fold_time": 0.0503,
+        "main_sections_seconds": 0.0504,
+        "full_page_time": 0.0504,
+        "benchmark_block": 0.0009,
+        "benchmark_time": 0.0011,
+        "progressive": {
+          "first_fold_time": 0.0503,
+          "progressive_load_enabled": false,
+          "progressive_benchmark_mode": "classic",
+          "benchmark_auto_loaded": true,
+          "benchmark_loaded": true,
+          "benchmark_skipped": false,
+          "benchmark_time": 0.0011,
+          "benchmark_lazy_time": 0.0011,
+          "full_page_time": 0.0504
+        },
+        "benchmark_auto_loaded": true,
+        "benchmark_skipped": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "funnel_loads": 1,
+        "visual": {
+          "sem_erro_streamlit": true,
+          "controles_simulador": true,
+          "expander_perf": true,
+          "benchmark_dataframe_sem_clique": true,
+          "sem_botao_obrigatorio": true
+        }
+      },
+      "period_change_validation": null,
+      "hist_base_switch_validation": null,
+      "mes_atual_ate_hoje_validation": null,
+      "same_interval_benchmark_validation": null
+    }
+  ]
+}

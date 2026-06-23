@@ -49,6 +49,7 @@ def perf_reset_run() -> None:
         "executivas": {},
         "executivas_runs": [],
         "meta": {},
+        "progressive": {},
     }
 
 
@@ -65,6 +66,12 @@ def perf_set_context(
     data_fim: date | None = None,
     hist_base_key: str | None = None,
     excluir_testes_aplicacoes: bool | None = None,
+    period_preset: str | None = None,
+    period_original_ini: date | None = None,
+    period_original_fim: date | None = None,
+    usar_mes_atual_ate_hoje: bool | None = None,
+    meta_proporcional: bool | None = None,
+    dias_meta: str | None = None,
 ) -> None:
     if not perf_debug_enabled():
         return
@@ -77,6 +84,22 @@ def perf_set_context(
         ctx["hist_base_key"] = hist_base_key
     if excluir_testes_aplicacoes is not None:
         ctx["excluir_testes_aplicacoes"] = excluir_testes_aplicacoes
+    if period_preset is not None:
+        ctx["periodo_original"] = period_preset
+    if period_original_ini is not None and period_original_fim is not None:
+        ctx["periodo_preset_range"] = (
+            f"{period_original_ini.isoformat()} -> {period_original_fim.isoformat()}"
+        )
+    if usar_mes_atual_ate_hoje is not None:
+        ctx["usar_mes_atual_ate_hoje"] = bool(usar_mes_atual_ate_hoje)
+    if meta_proporcional is not None:
+        ctx["meta_proporcional"] = bool(meta_proporcional)
+    if dias_meta is not None:
+        ctx["dias_meta"] = dias_meta
+    if data_ini is not None and data_fim is not None:
+        ctx["periodo_efetivo"] = (
+            f"{data_ini.strftime('%d/%m/%Y')} -> {data_fim.strftime('%d/%m/%Y')}"
+        )
     _state()["context"] = ctx
 
 
@@ -463,6 +486,61 @@ def perf_record_executivas_run(
     )
 
 
+def perf_finalize_first_fold() -> None:
+    """Marca tempo até a primeira dobra útil (vitrine + gaps, sem benchmark lazy)."""
+    if not perf_debug_enabled():
+        return
+    state = _state()
+    started = state.get("run_started")
+    if started is None:
+        return
+    total = round(time.perf_counter() - started, 4)
+    state["first_fold_seconds"] = total
+    prog = state.setdefault("progressive", {})
+    prog["first_fold_time"] = total
+    milestones = state.setdefault("milestones", {})
+    milestones["primeira dobra útil"] = total
+    logger.info("[PERF] primeira dobra útil: %.3fs", total)
+    print(f"[PERF] primeira dobra útil: {total:.3f}s", flush=True)
+
+
+def perf_record_progressive(
+    *,
+    enabled: bool,
+    benchmark_mode: str = "classic",
+    benchmark_auto_loaded: bool = False,
+    benchmark_skipped: bool = False,
+    benchmark_time: float | None = None,
+    benchmark_lazy_seconds: float | None = None,
+) -> None:
+    """Registra métricas CP9/CP9.1. `benchmark_lazy_seconds` mantido por compat."""
+    bm_t = benchmark_time
+    if bm_t is None and benchmark_lazy_seconds is not None:
+        bm_t = benchmark_lazy_seconds
+    if not perf_debug_enabled():
+        return
+    entry = {
+        "progressive_load_enabled": bool(enabled),
+        "progressive_benchmark_mode": benchmark_mode,
+        "benchmark_auto_loaded": bool(benchmark_auto_loaded),
+        "benchmark_loaded": bool(benchmark_auto_loaded),
+        "benchmark_skipped": bool(benchmark_skipped),
+        "benchmark_time": round(bm_t, 4) if bm_t is not None else None,
+        "benchmark_lazy_time": round(bm_t, 4) if bm_t is not None else None,
+    }
+    state = _state()
+    prog = state.setdefault("progressive", {})
+    prog.update(entry)
+    logger.info(
+        "[PERF] progressive enabled=%s mode=%s bm_auto=%s bm_skipped=%s bm_time=%s",
+        enabled,
+        benchmark_mode,
+        benchmark_auto_loaded,
+        benchmark_skipped,
+        bm_t,
+    )
+
+
 def perf_finalize_page(*, main_sections_only: bool = False) -> None:
     state = _state()
     started = state.get("run_started")
@@ -470,6 +548,10 @@ def perf_finalize_page(*, main_sections_only: bool = False) -> None:
         total = round(time.perf_counter() - started, 4)
         if main_sections_only:
             state["main_sections_seconds"] = total
+            prog = state.setdefault("progressive", {})
+            mode = prog.get("progressive_benchmark_mode", "classic")
+            if mode != "manual" or prog.get("benchmark_auto_loaded"):
+                prog["full_page_time"] = total
             label = "main sections total"
         else:
             state["page_total_seconds"] = total
@@ -517,8 +599,26 @@ def perf_render_panel() -> None:
         expanded=False,
     ):
         ctx = state.get("context") or {}
-        if ctx.get("data_ini") and ctx.get("data_fim"):
+        if ctx.get("periodo_original"):
+            st.caption(f"**Período original:** {ctx['periodo_original']}")
+        if ctx.get("periodo_preset_range"):
+            st.caption(f"**Range do preset:** {ctx['periodo_preset_range']}")
+        if ctx.get("periodo_efetivo"):
+            st.caption(f"**Período efetivo:** {ctx['periodo_efetivo']}")
+        elif ctx.get("data_ini") and ctx.get("data_fim"):
             st.caption(f"**Período:** {ctx['data_ini']} -> {ctx['data_fim']}")
+        if "usar_mes_atual_ate_hoje" in ctx:
+            st.caption(
+                f"**Mês atual até hoje:** "
+                f"{'sim' if ctx['usar_mes_atual_ate_hoje'] else 'não'}"
+            )
+        if "meta_proporcional" in ctx:
+            st.caption(
+                f"**Meta proporcional:** "
+                f"{'sim' if ctx['meta_proporcional'] else 'não'}"
+            )
+        if ctx.get("dias_meta"):
+            st.caption(f"**Dias meta:** {ctx['dias_meta']}")
         if ctx.get("hist_base_key"):
             st.caption(f"**Base histórica:** {ctx['hist_base_key']}")
         if "excluir_testes_aplicacoes" in ctx:
@@ -665,6 +765,27 @@ def perf_render_panel() -> None:
             f"legacy_benchmark={bm_leg} · batch_enabled="
             f"{'true' if bm_batch else 'false'}"
         )
+        prog = state.get("progressive") or {}
+        if prog:
+            mode = prog.get("progressive_benchmark_mode", "—")
+            st.caption(
+                f"**Progressive (CP9.1):** enabled="
+                f"{'true' if prog.get('progressive_load_enabled') else 'false'} · "
+                f"mode={mode} · "
+                f"benchmark_auto_loaded="
+                f"{'true' if prog.get('benchmark_auto_loaded') else 'false'} · "
+                f"benchmark_skipped={'true' if prog.get('benchmark_skipped') else 'false'}"
+            )
+            ff = prog.get("first_fold_time") or state.get("first_fold_seconds")
+            if ff is not None:
+                st.caption(f"**Tempo primeira dobra útil:** {ff:.3f}s")
+            full_t = prog.get("full_page_time")
+            if full_t is not None:
+                st.caption(f"**Tempo análise completa:** {full_t:.3f}s")
+            bm_t = prog.get("benchmark_time") or prog.get("benchmark_lazy_time")
+            if bm_t is not None:
+                st.caption(f"**Benchmark (este rerun):** {bm_t:.3f}s")
+
         parallel = state.get("parallel") or {}
         if parallel:
             p_en = parallel.get("parallel_enabled")

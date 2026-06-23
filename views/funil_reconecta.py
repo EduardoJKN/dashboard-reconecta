@@ -27,6 +27,11 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from src.funil_effective_period import (
+    FUNIL_MES_ATUAL_ATE_HOJE_KEY,
+    is_mes_atual_preset,
+    resolve_effective_funil_period,
+)
 from src.funil_export import (
     FunilExportBundle,
     export_funil_csv,
@@ -76,12 +81,28 @@ from src.funil_meta_store import (
     meta_cache_hit_between,
     meta_latest_cache_hits,
 )
+from src.funil_progressive_load import (
+    BENCHMARK_LOAD_BTN_KEY,
+    BenchmarkCacheContext,
+    build_benchmark_cache_context,
+    cache_benchmark,
+    funil_progressive_benchmark_mode,
+    funil_progressive_load_enabled,
+    get_cached_benchmark,
+    mark_benchmark_loaded,
+    should_auto_compute_benchmark,
+    should_compute_benchmark,
+    should_defer_benchmark,
+    should_show_benchmark_button,
+)
 from src.funil_reconecta_perf import (
     perf_debug_enabled,
+    perf_finalize_first_fold,
     perf_finalize_page,
     perf_mark_milestone,
     perf_record_meta_init,
     perf_record_meta_load,
+    perf_record_progressive,
     perf_render_panel,
     perf_reset_run,
     perf_set_context,
@@ -102,7 +123,7 @@ from src.one_page_funnel import (
     snapshot_to_scenario_dict,
 )
 from src.ui.components import section_title
-from src.ui.page import start_page
+from src.ui.page import PERIOD_PRESET_KEY, start_page
 from src.ui.theme import PALETTE, brl as brl_global, int_br
 
 
@@ -3882,6 +3903,157 @@ def _render_scenario_fields_editor(
 _ORIGEM_DADOS_REAIS = "Dados reais históricos"
 _ORIGEM_METAS_SALVAS = "Metas oficiais salvas"
 
+def _render_benchmark_manual_placeholder(bm_ctx: BenchmarkCacheContext) -> None:
+    """Fallback manual (FUNIL_PROGRESSIVE_BENCHMARK_MODE=manual)."""
+    section_title(
+        "Benchmark histórico",
+        "Comparação com períodos anteriores — carregamento sob demanda.",
+    )
+    st.caption(
+        "A vitrine e os gaps já usam dados reais do período. "
+        "O benchmark histórico traz médias e cenários conservador/otimista."
+    )
+    if st.button(
+        "Carregar benchmark histórico",
+        key=BENCHMARK_LOAD_BTN_KEY,
+        type="primary",
+    ):
+        mark_benchmark_loaded(bm_ctx)
+        st.rerun()
+
+
+def _load_page_benchmark(
+    hist_spec: Any,
+    hist_base_key: str,
+    excluir_testes_aplicacoes: bool,
+    bm_ctx: BenchmarkCacheContext,
+    *,
+    status_slot: Any | None = None,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]] | None, float | None]:
+    """Carrega benchmark (cache session -> compute)."""
+    if hist_spec.error:
+        return {"error": hist_spec.error}, None, None
+    if not hist_spec.ranges:
+        return {"error": "Nenhum período histórico disponível."}, None, None
+
+    if not should_compute_benchmark(bm_ctx):
+        return {}, None, None
+
+    cached = get_cached_benchmark(bm_ctx)
+    bm_seconds: float | None = None
+    if cached is not None:
+        raw = cached
+    else:
+        t0 = time.perf_counter()
+        ranges_json = ranges_to_cache_json(hist_spec.ranges)
+
+        def _compute() -> dict[str, Any]:
+            return compute_funil_benchmark(
+                hist_spec.hist_ini.isoformat(),
+                hist_spec.hist_fim.isoformat(),
+                hist_base_key,
+                excluir_testes_aplicacoes,
+                ranges_json,
+            )
+
+        with perf_timed_block("Benchmark histórico"):
+            if status_slot is not None:
+                with status_slot.container():
+                    with st.status(
+                        "Atualizando benchmark histórico…", expanded=False,
+                    ):
+                        raw = _compute()
+            else:
+                with st.spinner("Atualizando benchmark histórico…"):
+                    raw = _compute()
+        bm_seconds = time.perf_counter() - t0
+        if not raw.get("error"):
+            cache_benchmark(bm_ctx, raw)
+
+    raw = dict(raw)
+    raw["summary"] = hist_spec.summary
+    raw["window_detail"] = hist_spec.window_detail
+    if not raw.get("period_windows"):
+        raw["period_windows"] = period_windows_from_ranges(hist_spec.ranges)
+    metrics = raw.get("metrics") if not raw.get("error") else None
+    return raw, metrics, bm_seconds
+
+
+def _resolve_benchmark_slot(
+    benchmark_slot: Any,
+    hist_spec: Any,
+    hist_base_key: str,
+    excluir_testes_aplicacoes: bool,
+    bm_ctx: BenchmarkCacheContext,
+    *,
+    snapshot: FunnelSnapshot | None,
+    atual_s: Scenario,
+    meta_s: Scenario,
+    meta_pct_recebimento: float,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]] | None, float | None]:
+    """Preenche o slot visual do Benchmark (posição fixa antes do Comparativo)."""
+    mode = funil_progressive_benchmark_mode()
+
+    if hist_spec.error or not hist_spec.ranges:
+        raw, metrics, secs = _load_page_benchmark(
+            hist_spec,
+            hist_base_key,
+            excluir_testes_aplicacoes,
+            bm_ctx,
+        )
+        with benchmark_slot.container():
+            _render_benchmark_historico(
+                raw, snapshot=snapshot, atual_s=atual_s, meta_s=meta_s,
+                meta_pct_recebimento=meta_pct_recebimento,
+            )
+        return raw, metrics, secs
+
+    if should_show_benchmark_button(bm_ctx):
+        with benchmark_slot.container():
+            _render_benchmark_manual_placeholder(bm_ctx)
+        return {}, None, None
+
+    if not should_auto_compute_benchmark(bm_ctx):
+        return {}, None, None
+
+    cached = get_cached_benchmark(bm_ctx)
+    if cached is not None:
+        raw, metrics, secs = _load_page_benchmark(
+            hist_spec,
+            hist_base_key,
+            excluir_testes_aplicacoes,
+            bm_ctx,
+        )
+        with benchmark_slot.container():
+            _render_benchmark_historico(
+                raw, snapshot=snapshot, atual_s=atual_s, meta_s=meta_s,
+                meta_pct_recebimento=meta_pct_recebimento,
+            )
+        return raw, metrics, secs
+
+    with benchmark_slot.container():
+        st.caption("Atualizando benchmark histórico…")
+    perf_finalize_first_fold()
+
+    raw, metrics, secs = _load_page_benchmark(
+        hist_spec,
+        hist_base_key,
+        excluir_testes_aplicacoes,
+        bm_ctx,
+        status_slot=benchmark_slot,
+    )
+    benchmark_slot.empty()
+    with benchmark_slot.container():
+        if raw.get("error") or metrics:
+            _render_benchmark_historico(
+                raw, snapshot=snapshot, atual_s=atual_s, meta_s=meta_s,
+                meta_pct_recebimento=meta_pct_recebimento,
+            )
+            if mode == "auto" and metrics:
+                st.caption("Benchmark histórico carregado.")
+    return raw, metrics, secs
+
+
 def _referencia_funil_col_config() -> dict[str, st.column_config.TextColumn]:
     """Larguras em px — scroll horizontal quando a soma excede o container."""
     specs: dict[str, tuple[int, str]] = {
@@ -4690,6 +4862,41 @@ def _render_compare(calc_atual: dict, calc_sim: dict, calc_meta: dict) -> None:
     )
 
 
+def _sync_perf_period_context(
+    *,
+    eff_ini: date,
+    eff_fim: date,
+    period_preset: str,
+    original_ini: date,
+    original_fim: date,
+    usar_mes_atual_ate_hoje: bool,
+    hist_base_key: str,
+    excluir_testes_aplicacoes: bool,
+) -> None:
+    prop = st.session_state.get("funil_meta_proporcao")
+    dias_meta: str | None = None
+    meta_prop = False
+    if isinstance(prop, MetaMensalProporcao):
+        dias_meta = f"{prop.dias_selecionados}/{prop.dias_mes}"
+        meta_prop = (
+            not prop.multi_mes and abs(prop.fator - 1.0) > 1e-9
+        )
+    perf_set_context(
+        data_ini=eff_ini,
+        data_fim=eff_fim,
+        hist_base_key=hist_base_key,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+        period_preset=period_preset,
+        period_original_ini=original_ini,
+        period_original_fim=original_fim,
+        usar_mes_atual_ate_hoje=(
+            usar_mes_atual_ate_hoje if is_mes_atual_preset(period_preset) else False
+        ),
+        meta_proporcional=meta_prop,
+        dias_meta=dias_meta,
+    )
+
+
 # =============================================================================
 # Página
 # =============================================================================
@@ -4704,19 +4911,16 @@ ctx = start_page(
 if perf_debug_enabled():
     perf_reset_run()
 
-perf_set_context(
-    data_ini=ctx.data_ini,
-    data_fim=ctx.data_fim,
-    excluir_testes_aplicacoes=_EXCLUIR_TESTES_APLICACOES,
-)
-perf_mark_milestone("init / auth / start_page")
+_period_preset = st.session_state.get(PERIOD_PRESET_KEY, "Mês atual")
+_mes_atual_preset = is_mes_atual_preset(_period_preset)
+st.session_state.setdefault(FUNIL_MES_ATUAL_ATE_HOJE_KEY, True)
 
 st.markdown(_FUNIL_CSS, unsafe_allow_html=True)
 
 excluir_testes_aplicacoes = _EXCLUIR_TESTES_APLICACOES
 
 st.session_state.setdefault("funil_hist_base", "90")
-_hist_base_col, _hist_interval_col = st.columns([2, 3], gap="medium")
+_hist_base_col, _hist_opts_col = st.columns([2, 3], gap="medium")
 with _hist_base_col:
     hist_base_key = st.selectbox(
         "Base histórica de comparação",
@@ -4728,20 +4932,42 @@ with _hist_base_col:
             "Define quantos períodos anteriores entram no benchmark histórico."
         ),
     )
-with _hist_interval_col:
-    _period_is_full_month = is_full_closed_month(ctx.data_ini, ctx.data_fim)
-    _same_interval = st.checkbox(
-        "Comparar históricos no mesmo intervalo do período atual",
-        value=True,
-        key="funil_hist_same_interval",
-        disabled=_period_is_full_month,
-        help=(
-            "Ligado: cada mês anterior usa o mesmo recorte de dias do filtro global "
-            "(ex.: 01/06–17/06 → 01/05–17/05). "
-            "Desligado: compara meses civis fechados anteriores."
-        ),
+with _hist_opts_col:
+    _cb_mes_col, _cb_interval_col = st.columns(2, gap="small")
+    with _cb_mes_col:
+        _usar_mes_atual_ate_hoje = st.checkbox(
+            "Mês atual até hoje",
+            key=FUNIL_MES_ATUAL_ATE_HOJE_KEY,
+            disabled=not _mes_atual_preset,
+            help=(
+                'Quando "Mês atual" estiver selecionado, usa do dia 1º até hoje '
+                "e ajusta a meta proporcionalmente."
+            ),
+        )
+    _eff_ini, _eff_fim, _mes_ate_hoje_applied = resolve_effective_funil_period(
+        _period_preset,
+        ctx.data_ini,
+        ctx.data_fim,
+        _usar_mes_atual_ate_hoje if _mes_atual_preset else False,
     )
-    if _period_is_full_month:
+    _period_is_full_month = is_full_closed_month(_eff_ini, _eff_fim)
+    with _cb_interval_col:
+        _same_interval = st.checkbox(
+            "Comparar históricos no mesmo intervalo do período atual",
+            value=True,
+            key="funil_hist_same_interval",
+            disabled=_period_is_full_month,
+            help=(
+                "Ligado: cada mês anterior usa o mesmo recorte de dias do filtro global "
+                "(ex.: 01/06–17/06 → 01/05–17/05). "
+                "Desligado: compara meses civis fechados anteriores."
+            ),
+        )
+    if not _mes_atual_preset:
+        st.caption(
+            'Disponível apenas com o período "Mês atual".'
+        )
+    elif _period_is_full_month:
         st.caption(
             "Período atual é um mês civil fechado; a comparação usa meses completos."
         )
@@ -4776,8 +5002,8 @@ if hist_base_key == HISTORICO_CUSTOM_KEY:
         )
 
 _hist_spec = resolve_historical_base(
-    ctx.data_ini,
-    ctx.data_fim,
+    _eff_ini,
+    _eff_fim,
     base_key=hist_base_key,
     custom_granularity=_custom_granularity,
     custom_n_periods=_custom_n_periods,
@@ -4786,19 +5012,36 @@ _hist_spec = resolve_historical_base(
 if _hist_spec.summary and not _hist_spec.error:
     st.caption(f"Base: {_hist_spec.summary}.")
 
+_bm_cache_ctx = build_benchmark_cache_context(
+    data_ini=_eff_ini,
+    data_fim=_eff_fim,
+    hist_spec=_hist_spec,
+    hist_base_key=hist_base_key,
+    same_interval=_same_interval,
+    custom_granularity=_custom_granularity,
+    custom_n_periods=_custom_n_periods,
+    excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    mes_atual_ate_hoje=_mes_ate_hoje_applied,
+)
+
 perf_set_context(
-    data_ini=ctx.data_ini,
-    data_fim=ctx.data_fim,
+    data_ini=_eff_ini,
+    data_fim=_eff_fim,
     hist_base_key=hist_base_key,
     excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    period_preset=_period_preset,
+    period_original_ini=ctx.data_ini,
+    period_original_fim=ctx.data_fim,
+    usar_mes_atual_ate_hoje=_usar_mes_atual_ate_hoje if _mes_atual_preset else False,
 )
+perf_mark_milestone("init / auth / start_page")
 
 _funnel_snapshot: FunnelSnapshot | None = None
 with perf_timed_block("carregamento Atual real"):
     try:
         _funnel_snapshot = load_one_page_funnel(
-            ctx.data_ini,
-            ctx.data_fim,
+            _eff_ini,
+            _eff_fim,
             excluir_testes_aplicacoes=excluir_testes_aplicacoes,
         )
         st.session_state["funil_atual"] = snapshot_to_scenario_dict(_funnel_snapshot)
@@ -4811,40 +5054,41 @@ if "funil_simulador" not in st.session_state and _funnel_snapshot is not None:
     st.session_state["funil_simulador"] = snapshot_to_scenario_dict(_funnel_snapshot)
 
 with perf_timed_block("carregamento Meta oficial"):
-    _init_meta_session_for_period(ctx.data_ini, ctx.data_fim, _funnel_snapshot)
+    _init_meta_session_for_period(_eff_ini, _eff_fim, _funnel_snapshot)
+    _sync_perf_period_context(
+        eff_ini=_eff_ini,
+        eff_fim=_eff_fim,
+        period_preset=_period_preset,
+        original_ini=ctx.data_ini,
+        original_fim=ctx.data_fim,
+        usar_mes_atual_ate_hoje=_usar_mes_atual_ate_hoje,
+        hist_base_key=hist_base_key,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
 perf_mark_milestone("carregamento Meta oficial")
+
+_progressive_on = funil_progressive_load_enabled()
+_bm_mode = funil_progressive_benchmark_mode()
+_defer_benchmark = should_defer_benchmark(_eff_ini, _eff_fim)
 
 _benchmark_raw: dict[str, Any] = {}
 _benchmark_metrics: dict[str, dict[str, Any]] | None = None
-if _hist_spec.error:
-    _benchmark_raw = {"error": _hist_spec.error}
-elif not _hist_spec.ranges:
-    _benchmark_raw = {"error": "Nenhum período histórico disponível."}
-else:
-    _ranges_json = ranges_to_cache_json(_hist_spec.ranges)
-    with perf_timed_block("Benchmark histórico"):
-        with st.spinner("Calculando benchmark histórico…"):
-            _benchmark_raw = compute_funil_benchmark(
-                _hist_spec.hist_ini.isoformat(),
-                _hist_spec.hist_fim.isoformat(),
-                hist_base_key,
-                excluir_testes_aplicacoes,
-                _ranges_json,
-            )
-    _benchmark_raw["summary"] = _hist_spec.summary
-    _benchmark_raw["window_detail"] = _hist_spec.window_detail
-    if not _benchmark_raw.get("period_windows"):
-        _benchmark_raw["period_windows"] = period_windows_from_ranges(
-            _hist_spec.ranges,
-        )
-    if not _benchmark_raw.get("error"):
-        _benchmark_metrics = _benchmark_raw.get("metrics")
-perf_mark_milestone("Benchmark histórico")
+_bm_seconds: float | None = None
+
+if not _defer_benchmark:
+    _benchmark_raw, _benchmark_metrics, _bm_seconds = _load_page_benchmark(
+        _hist_spec,
+        hist_base_key,
+        excluir_testes_aplicacoes,
+        _bm_cache_ctx,
+    )
+    if _benchmark_metrics:
+        perf_mark_milestone("Benchmark histórico")
 
 if st.session_state.pop("_meta_deleted_reload", False):
     _reload_default_meta_after_db_change(
-        ctx.data_ini,
-        ctx.data_fim,
+        _eff_ini,
+        _eff_fim,
         snapshot=_funnel_snapshot,
         seed_editor=True,
     )
@@ -4888,13 +5132,36 @@ st.caption(
     "(padrão, editada localmente ou carregada de um histórico)."
 )
 
-_render_benchmark_historico(
-    _benchmark_raw,
-    snapshot=_funnel_snapshot,
-    atual_s=atual_s,
-    meta_s=meta_tela_s,
-    meta_pct_recebimento=_meta_pct_rec,
-)
+# Slot fixo do Benchmark — acima do Comparativo de cenários (layout CP9.2).
+_benchmark_slot = st.empty()
+
+if _bm_mode == "classic" and (_benchmark_metrics or _benchmark_raw.get("error")):
+    with _benchmark_slot.container():
+        _render_benchmark_historico(
+            _benchmark_raw,
+            snapshot=_funnel_snapshot,
+            atual_s=atual_s,
+            meta_s=meta_tela_s,
+            meta_pct_recebimento=_meta_pct_rec,
+        )
+elif _defer_benchmark:
+    _benchmark_raw, _benchmark_metrics, _bm_seconds = _resolve_benchmark_slot(
+        _benchmark_slot,
+        _hist_spec,
+        hist_base_key,
+        excluir_testes_aplicacoes,
+        _bm_cache_ctx,
+        snapshot=_funnel_snapshot,
+        atual_s=atual_s,
+        meta_s=meta_tela_s,
+        meta_pct_recebimento=_meta_pct_rec,
+    )
+    if _benchmark_metrics:
+        perf_mark_milestone("Benchmark histórico")
+        _meta_pct_rec = _get_meta_pct_recebimento(
+            snapshot=_funnel_snapshot,
+            benchmark_metrics=_benchmark_metrics,
+        )
 
 section_title(
     "Comparativo de cenários",
@@ -4969,8 +5236,8 @@ _render_compare(calc_atual, calc_sim, calc_meta)
 
 _export_bundle = _build_export_bundle(
     periodo=periodo,
-    data_ini=ctx.data_ini,
-    data_fim=ctx.data_fim,
+    data_ini=_eff_ini,
+    data_fim=_eff_fim,
     excluir_testes=excluir_testes_aplicacoes,
     atual=atual_s,
     simulador=sim_s,
@@ -4983,14 +5250,28 @@ _export_bundle = _build_export_bundle(
 with _export_top_slot.container():
     _render_export_popover(_export_bundle)
 
+if not _defer_benchmark:
+    perf_finalize_first_fold()
+
+if perf_debug_enabled():
+    perf_record_progressive(
+        enabled=_progressive_on,
+        benchmark_mode=_bm_mode,
+        benchmark_auto_loaded=bool(_benchmark_metrics),
+        benchmark_skipped=(
+            _bm_mode == "manual" and not _benchmark_metrics
+        ),
+        benchmark_time=_bm_seconds,
+    )
+
 perf_mark_milestone("renderização seções principais")
 perf_finalize_page(main_sections_only=True)
 
-_ref_loaded = _is_referencia_meta_loaded(ctx.data_ini, ctx.data_fim)
+_ref_loaded = _is_referencia_meta_loaded(_eff_ini, _eff_fim)
 with perf_timed_block("renderização base meta / editor"):
     _render_base_meta_referencia(
-        data_ini=ctx.data_ini,
-        data_fim=ctx.data_fim,
+        data_ini=_eff_ini,
+        data_fim=_eff_fim,
         excluir_testes=excluir_testes_aplicacoes,
         can_edit_meta=is_metas_editor_authenticated(),
     )
@@ -5001,8 +5282,8 @@ perf_render_panel()
 _can_edit_meta = render_metas_editor_gate()
 _render_meta_cenario_editor(
     periodo,
-    data_ini=ctx.data_ini,
-    data_fim=ctx.data_fim,
+    data_ini=_eff_ini,
+    data_fim=_eff_fim,
     can_edit_meta=_can_edit_meta,
     atual_s=atual_s,
     pct_recebimento_sim=_pct_rec,
@@ -5012,8 +5293,8 @@ _render_meta_cenario_editor(
 
 st.markdown(
     '<div class="fr-footer-note">'
-    f'Atual: dados reais do período ({ctx.data_ini.strftime("%d/%m/%Y")}'
-    f'–{ctx.data_fim.strftime("%d/%m/%Y")}), mesmas regras da One Page. '
+    f'Atual: dados reais do período ({_eff_ini.strftime("%d/%m/%Y")}'
+    f'–{_eff_fim.strftime("%d/%m/%Y")}), mesmas regras da One Page. '
     'Semana e Dia são aproximações proporcionais (÷ 4 e ÷ 28). '
     'Simulador e Meta: montante = vendas × ticket; receita usa % recebimento. '
     'Simulador: memória local. Meta oficial: salva em `bi.metas_funil_reconecta` '
