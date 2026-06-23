@@ -237,16 +237,27 @@ A série CP1–CP8.1 está **concluída**. Não há CP9 planejado neste fechamen
 
 ## 11. Checklist final de execução
 
-_Preencher após última rodada automática:_
+Execução final: **2026-06-23** (parallel OFF — default produção).
 
 | Comando | Resultado |
 |---------|-----------|
-| `validate_funil_meta_cache.py` | _pendente_ |
-| `validate_funil_benchmark_v1_v2.py` | _pendente_ |
-| `validate_funil_executivas_v1_v2.py` | _pendente_ |
-| `validate_funil_legacy_v1_v2.py` | _pendente_ |
-| `validate_funil_reconecta_equivalence.py` | _pendente_ |
-| `checkpoint_funil_reconecta_streamlit.py` | _pendente_ |
+| `validate_funil_meta_cache.py` | **OK** (6/6) |
+| `validate_funil_benchmark_v1_v2.py` | **OK** (5/5) |
+| `validate_funil_executivas_v1_v2.py` | **OK** (5/5) |
+| `validate_funil_legacy_v1_v2.py` | **OK** (5/5) |
+| `validate_funil_reconecta_equivalence.py` | **OK** (4/4) |
+| `checkpoint_funil_reconecta_streamlit.py` | **OK** — visual OK todos cenários; warm 0,04–0,10s |
+| `stress_funil_parallel_staging.py` | **PASS 20/20** (CP8.1, parallel ON) — referência CP8.1 |
+
+### Checkpoint final (default, parallel OFF)
+
+| Cenário | Cold | Warm | Visual |
+|---------|-----:|-----:|:------:|
+| Últimos 7 dias | 23,2s | 0,05s | OK |
+| Mês atual | 9,7s | 0,05s | OK |
+| Mês anterior | 9,9s | 0,08s | OK |
+| 01/06–17/06 | 16,6s | 0,05s | OK |
+| Sem dados | 18,9s | 0,06s | OK |
 
 ---
 
