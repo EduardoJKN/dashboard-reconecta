@@ -1,9 +1,43 @@
 from datetime import date
+import json
+import logging
+import os
 
 import pandas as pd
 import streamlit as st
 
 from .db import run_sql_file
+
+logger = logging.getLogger("reconecta.repositories")
+LEGACY_VERSION_V1 = "v1"
+LEGACY_VERSION_V2 = "v2"
+LEGACY_BENCHMARK_BATCH_VERSION = "benchmark_batch_v2"
+
+LEGACY_DIARIO_COLUMNS: tuple[str, ...] = (
+    "data_ref",
+    "novos_leads",
+    "novas_aplicacoes",
+    "aplicacoes_mais_12",
+    "aplicacoes_menos_12",
+    "aplicacoes_nao_atua",
+    "agendamentos",
+    "emails_com_agendamento",
+    "aplicacoes_com_agendamento",
+    "aplicacoes_mais_12_com_agendamento",
+    "aplicacoes_menos_12_com_agendamento",
+    "aplicacoes_nao_atua_com_agendamento",
+    "investimento",
+    "novas_aplicacoes_periodo",
+    "aplicacoes_mais_12_periodo",
+    "aplicacoes_menos_12_periodo",
+    "aplicacoes_nao_atua_periodo",
+    "aplicacoes_com_agendamento_periodo",
+    "aplicacoes_mais_12_com_agendamento_periodo",
+    "aplicacoes_menos_12_com_agendamento_periodo",
+    "aplicacoes_nao_atua_com_agendamento_periodo",
+)
+EXECUTIVAS_VERSION_V1 = "v1"
+EXECUTIVAS_VERSION_V2 = "v2"
 
 _TTL = 600
 _TTL_AGENDA_RT = 60
@@ -31,6 +65,48 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
         df["data_ref"] = pd.to_datetime(df["data_ref"])
         df = executivas_aplicar_time_vendas_overrides(df)
     return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def get_executivas_for_funil_v2(
+    data_ini_iso: str,
+    data_fim_iso: str,
+) -> pd.DataFrame:
+    """Executivas agregadas diárias — view BI v2, colunas mínimas para o Funil."""
+    data_ini = date.fromisoformat(data_ini_iso)
+    data_fim = date.fromisoformat(data_fim_iso)
+    df = run_sql_file(
+        "dashboard_executivas_funil_v2.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty and "data_ref" in df.columns:
+        df["data_ref"] = pd.to_datetime(df["data_ref"])
+    return df
+
+
+def funil_executivas_v2_enabled() -> bool:
+    flag = os.environ.get("FUNIL_EXECUTIVAS_V2", "1").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
+
+
+def get_executivas_for_funil(
+    data_ini: date,
+    data_fim: date,
+) -> tuple[pd.DataFrame, str, str | None]:
+    """Executivas para Funil — v2 com fallback v1. Retorna (df, version, fallback_error)."""
+    if funil_executivas_v2_enabled():
+        try:
+            df = get_executivas_for_funil_v2(
+                data_ini.isoformat(),
+                data_fim.isoformat(),
+            )
+            return df, EXECUTIVAS_VERSION_V2, None
+        except Exception as exc:
+            logger.exception("Executivas v2 falhou — fallback v1")
+            df = get_executivas(data_ini, data_fim)
+            return df, EXECUTIVAS_VERSION_V1, str(exc)
+    df = get_executivas(data_ini, data_fim)
+    return df, EXECUTIVAS_VERSION_V1, None
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo vendas oficiais (Campanhas)…")
@@ -263,6 +339,95 @@ def get_one_page_legacy_diario(
     params["excluir_testes_aplicacoes"] = 1 if excluir_testes_aplicacoes else 0
     df = run_sql_file("one_page_legacy_diario.sql", params)
     if not df.empty and "data_ref" in df.columns:
+        df["data_ref"] = pd.to_datetime(df["data_ref"])
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def get_one_page_legacy_diario_v2(
+    data_ini_iso: str,
+    data_fim_iso: str,
+    excluir_testes_aplicacoes: bool,
+) -> pd.DataFrame:
+    """Série diária legada v2 — escopo reduzido em leads/deals para o período."""
+    data_ini = date.fromisoformat(data_ini_iso)
+    data_fim = date.fromisoformat(data_fim_iso)
+    params = _date_params(data_ini, data_fim)
+    params["excluir_testes_aplicacoes"] = 1 if excluir_testes_aplicacoes else 0
+    df = run_sql_file("one_page_legacy_diario_v2.sql", params)
+    if not df.empty and "data_ref" in df.columns:
+        df["data_ref"] = pd.to_datetime(df["data_ref"])
+    return df
+
+
+def funil_legacy_v2_enabled() -> bool:
+    flag = os.environ.get("FUNIL_LEGACY_V2", "1").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
+
+
+def get_one_page_legacy_diario_for_funil(
+    data_ini: date,
+    data_fim: date,
+    *,
+    excluir_testes_aplicacoes: bool = False,
+) -> tuple[pd.DataFrame, str, str | None]:
+    """Legacy para Funil — v2 com fallback v1. Retorna (df, version, fallback_error)."""
+    if funil_legacy_v2_enabled():
+        try:
+            df = get_one_page_legacy_diario_v2(
+                data_ini.isoformat(),
+                data_fim.isoformat(),
+                bool(excluir_testes_aplicacoes),
+            )
+            return df, LEGACY_VERSION_V2, None
+        except Exception as exc:
+            logger.exception("Legacy v2 falhou — fallback v1")
+            df = get_one_page_legacy_diario(
+                data_ini, data_fim,
+                excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+            )
+            return df, LEGACY_VERSION_V1, str(exc)
+    df = get_one_page_legacy_diario(
+        data_ini, data_fim,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    return df, LEGACY_VERSION_V1, None
+
+
+def funil_legacy_benchmark_batch_v2_enabled() -> bool:
+    """Experimental — opt-in via `FUNIL_LEGACY_BENCHMARK_BATCH_V2=1` (default OFF)."""
+    flag = os.environ.get("FUNIL_LEGACY_BENCHMARK_BATCH_V2", "0").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
+def benchmark_periods_json(
+    ranges: list[tuple[date, date, str]],
+) -> str:
+    """JSON para `one_page_legacy_diario_benchmark_batch_v2.sql`."""
+    return json.dumps([
+        {
+            "period_key": str(i),
+            "data_ini": ini.isoformat(),
+            "data_fim": fim.isoformat(),
+        }
+        for i, (ini, fim, _label) in enumerate(ranges)
+    ])
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def get_one_page_legacy_diario_benchmark_batch_v2(
+    periods_json: str,
+    excluir_testes_aplicacoes: bool,
+) -> pd.DataFrame:
+    """Legacy diário batch — N janelas com dedupe por `period_key`."""
+    params = {
+        "periods_json": periods_json,
+        "excluir_testes_aplicacoes": 1 if excluir_testes_aplicacoes else 0,
+    }
+    df = run_sql_file("one_page_legacy_diario_benchmark_batch_v2.sql", params)
+    if df.empty:
+        return pd.DataFrame(columns=list(LEGACY_DIARIO_COLUMNS))
+    if "data_ref" in df.columns:
         df["data_ref"] = pd.to_datetime(df["data_ref"])
     return df
 

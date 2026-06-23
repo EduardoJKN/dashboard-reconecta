@@ -1,0 +1,2882 @@
+{
+  "checkpoint": "CP8.1",
+  "reference_date": "2026-06-22",
+  "cold_runs_per_scenario": 3,
+  "cp7_1_baseline_main_sections": {
+    "ultimos_7_dias": 23.0,
+    "mes_atual": 17.4,
+    "mes_anterior": 19.3,
+    "recorte_jun_2026": 17.5,
+    "sem_dados": 17.6
+  },
+  "parallel_env": {
+    "FUNIL_PARALLEL_LOADS": "1",
+    "FUNIL_PARALLEL_WORKERS": "3",
+    "resolved_workers": 3,
+    "parallel_enabled": true
+  },
+  "meta_cache_ttl_seconds": 600,
+  "legacy_benchmark_batch_default": false,
+  "scenarios": [
+    {
+      "scenario": "ultimos_7_dias",
+      "cp7_1_baseline_main_sections": 23.0,
+      "cold_timing": {
+        "runs": [
+          17.8295,
+          0.0486,
+          0.0497
+        ],
+        "median": 0.0497,
+        "min": 0.0486,
+        "max": 17.8295
+      },
+      "cold_sem_referencia": {
+        "mode": "cold_sem_referencia",
+        "scenario": "ultimos_7_dias",
+        "period": "2026-06-16\u21922026-06-22",
+        "main_sections_seconds": 0.0497,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "load_seconds": 0.0002,
+          "cache_hit": true,
+          "session_hit": false,
+          "db_configured": true,
+          "row_found": true,
+          "cache_invalidated": false,
+          "batch_enabled": false,
+          "init_seconds": 0.0007
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0002,
+          "meta": 0.0007,
+          "benchmark": 0.0007,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.0021,
+          "carregamento Meta oficial": 0.0029,
+          "Benchmark hist\u00f3rico": 0.0038,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0476,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0497
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-06-16",
+            "data_fim": "2026-06-22",
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          }
+        ],
+        "visual": {
+          "sem_erro_streamlit": true,
+          "benchmark_dataframe": true,
+          "controles_simulador": true,
+          "expander_perf": true
+        }
+      },
+      "cold_runs": [
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "ultimos_7_dias",
+          "period": "2026-06-16\u21922026-06-22",
+          "main_sections_seconds": 17.8295,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 11,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 3.0574,
+            "cache_hit": false,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 3.0584
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {
+            "version": "v2",
+            "seconds": 0.833,
+            "data_ini": "2026-03-16",
+            "data_fim": "2026-03-22",
+            "rows": 7,
+            "fallback_error": null
+          },
+          "legacy_runs": [
+            {
+              "version": "v2",
+              "seconds": 3.4982,
+              "data_ini": "2026-06-16",
+              "data_fim": "2026-06-22",
+              "rows": 7,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.7721,
+              "data_ini": "2026-05-16",
+              "data_fim": "2026-05-22",
+              "rows": 7,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.8644,
+              "data_ini": "2026-04-16",
+              "data_fim": "2026-04-22",
+              "rows": 7,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.833,
+              "data_ini": "2026-03-16",
+              "data_fim": "2026-03-22",
+              "rows": 7,
+              "fallback_error": null
+            }
+          ],
+          "executivas": {
+            "version": "v2",
+            "seconds": 6.1156,
+            "data_ini": "2026-05-16",
+            "data_fim": "2026-03-22",
+            "rows": 0,
+            "cols": 0,
+            "fallback_error": null
+          },
+          "parallel": {
+            "runs": [
+              {
+                "scope": "atual",
+                "enabled": true,
+                "workers": 3,
+                "mode": "atual_sources",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 7.6857,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 7.684244000003673
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.7387172000017017
+                  },
+                  {
+                    "name": "legacy",
+                    "seconds": 3.498245599999791
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 3.536830099998042
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_shared",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_shared",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 6.1164,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 6.115641300013522
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 1.600423600000795
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.8940661000087857
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_legacy",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_legacy_windows",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 0.8652,
+                "groups": [
+                  {
+                    "name": "legacy_0",
+                    "seconds": 0.7721024000202306
+                  },
+                  {
+                    "name": "legacy_1",
+                    "seconds": 0.8644138000090607
+                  },
+                  {
+                    "name": "legacy_2",
+                    "seconds": 0.8329520999977831
+                  }
+                ]
+              }
+            ],
+            "parallel_enabled": true,
+            "parallel_workers": 3,
+            "parallel_fallback": false,
+            "parallel_mode": "benchmark_legacy_windows",
+            "parallel_last_scope": "benchmark_legacy",
+            "parallel_last_seconds": 0.8652
+          },
+          "blocks": {
+            "atual": 7.6893,
+            "meta": 3.0584,
+            "benchmark": 6.9865,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 7.6913,
+            "carregamento Meta oficial": 10.7499,
+            "Benchmark hist\u00f3rico": 17.7366,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 17.8269,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 17.8295
+          },
+          "queries": [
+            {
+              "name": "executivas_v2",
+              "data_ini": "2026-06-16",
+              "data_fim": "2026-06-22",
+              "seconds": 7.6842,
+              "rows": 7,
+              "error": null,
+              "cols": 11
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2026-06-16",
+              "data_fim": "2026-06-22",
+              "seconds": 0.7387,
+              "rows": 7,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-06-16",
+              "data_fim": "2026-06-22",
+              "seconds": 3.4982,
+              "rows": 7,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2026-06-16",
+              "data_fim": "2026-06-22",
+              "seconds": 3.5368,
+              "rows": 7,
+              "error": null
+            },
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-16",
+              "data_fim": "2026-06-22",
+              "seconds": 7.6892,
+              "rows": 1,
+              "error": null
+            },
+            {
+              "name": "executivas_v2",
+              "data_ini": "2026-05-16",
+              "data_fim": "2026-03-22",
+              "seconds": 6.1156,
+              "rows": 0,
+              "error": null,
+              "cols": 0
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2026-05-16",
+              "data_fim": "2026-03-22",
+              "seconds": 1.6004,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2026-05-16",
+              "data_fim": "2026-03-22",
+              "seconds": 0.8941,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-05-16",
+              "data_fim": "2026-05-22",
+              "seconds": 0.7721,
+              "rows": 7,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-04-16",
+              "data_fim": "2026-04-22",
+              "seconds": 0.8644,
+              "rows": 7,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-03-16",
+              "data_fim": "2026-03-22",
+              "seconds": 0.833,
+              "rows": 7,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "ultimos_7_dias",
+          "period": "2026-06-16\u21922026-06-22",
+          "main_sections_seconds": 0.0486,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0002,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0006
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0003,
+            "meta": 0.0007,
+            "benchmark": 0.0008,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0021,
+            "carregamento Meta oficial": 0.0029,
+            "Benchmark hist\u00f3rico": 0.0039,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.0465,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0485
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-16",
+              "data_fim": "2026-06-22",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "ultimos_7_dias",
+          "period": "2026-06-16\u21922026-06-22",
+          "main_sections_seconds": 0.0497,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0002,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0007
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0002,
+            "meta": 0.0007,
+            "benchmark": 0.0007,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0021,
+            "carregamento Meta oficial": 0.0029,
+            "Benchmark hist\u00f3rico": 0.0038,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.0476,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0497
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-16",
+              "data_fim": "2026-06-22",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        }
+      ],
+      "warm_rerun": {
+        "mode": "warm_rerun",
+        "scenario": "ultimos_7_dias",
+        "period": "2026-06-16\u21922026-06-22",
+        "main_sections_seconds": 0.0438,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "session_hit": true,
+          "init_seconds": 0.0001
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0002,
+          "meta": 0.0001,
+          "benchmark": 0.0006,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.0023,
+          "carregamento Meta oficial": 0.0025,
+          "Benchmark hist\u00f3rico": 0.0032,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0415,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0438
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-06-16",
+            "data_fim": "2026-06-22",
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          }
+        ]
+      },
+      "cold_com_referencia": null
+    },
+    {
+      "scenario": "mes_atual",
+      "cp7_1_baseline_main_sections": 17.4,
+      "cold_timing": {
+        "runs": [
+          10.7856,
+          0.0511,
+          0.05
+        ],
+        "median": 0.0511,
+        "min": 0.05,
+        "max": 10.7856
+      },
+      "cold_sem_referencia": {
+        "mode": "cold_sem_referencia",
+        "scenario": "mes_atual",
+        "period": "2026-06-01\u21922026-06-22",
+        "main_sections_seconds": 0.05,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "load_seconds": 0.0002,
+          "cache_hit": true,
+          "session_hit": false,
+          "db_configured": true,
+          "row_found": true,
+          "cache_invalidated": false,
+          "batch_enabled": false,
+          "init_seconds": 0.0007
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0002,
+          "meta": 0.0007,
+          "benchmark": 0.0006,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.0022,
+          "carregamento Meta oficial": 0.003,
+          "Benchmark hist\u00f3rico": 0.0038,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0473,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.05
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-22",
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          }
+        ],
+        "visual": {
+          "sem_erro_streamlit": true,
+          "benchmark_dataframe": true,
+          "controles_simulador": true,
+          "expander_perf": true
+        }
+      },
+      "cold_runs": [
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "mes_atual",
+          "period": "2026-06-01\u21922026-06-22",
+          "main_sections_seconds": 10.7856,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 11,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0003,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.001
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {
+            "version": "v2",
+            "seconds": 0.9091,
+            "data_ini": "2026-03-01",
+            "data_fim": "2026-03-22",
+            "rows": 22,
+            "fallback_error": null
+          },
+          "legacy_runs": [
+            {
+              "version": "v2",
+              "seconds": 1.0174,
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-22",
+              "rows": 22,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.9935,
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-22",
+              "rows": 22,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.9409,
+              "data_ini": "2026-04-01",
+              "data_fim": "2026-04-22",
+              "rows": 22,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.9091,
+              "data_ini": "2026-03-01",
+              "data_fim": "2026-03-22",
+              "rows": 22,
+              "fallback_error": null
+            }
+          ],
+          "executivas": {
+            "version": "v2",
+            "seconds": 4.8864,
+            "data_ini": "2026-05-01",
+            "data_fim": "2026-03-22",
+            "rows": 0,
+            "cols": 0,
+            "fallback_error": null
+          },
+          "parallel": {
+            "runs": [
+              {
+                "scope": "atual",
+                "enabled": true,
+                "workers": 3,
+                "mode": "atual_sources",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 4.8496,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 4.84801710001193
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.835128300008364
+                  },
+                  {
+                    "name": "legacy",
+                    "seconds": 1.0174202999914996
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.8947667000174988
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_shared",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_shared",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 4.8871,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 4.886397299997043
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.6200650999962818
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.8189638000039849
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_legacy",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_legacy_windows",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 0.994,
+                "groups": [
+                  {
+                    "name": "legacy_0",
+                    "seconds": 0.9935046999889892
+                  },
+                  {
+                    "name": "legacy_1",
+                    "seconds": 0.9408965000184253
+                  },
+                  {
+                    "name": "legacy_2",
+                    "seconds": 0.9091115999908652
+                  }
+                ]
+              }
+            ],
+            "parallel_enabled": true,
+            "parallel_workers": 3,
+            "parallel_fallback": false,
+            "parallel_mode": "benchmark_legacy_windows",
+            "parallel_last_scope": "benchmark_legacy",
+            "parallel_last_seconds": 0.994
+          },
+          "blocks": {
+            "atual": 4.8534,
+            "meta": 0.001,
+            "benchmark": 5.8862,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 4.8557,
+            "carregamento Meta oficial": 4.8569,
+            "Benchmark hist\u00f3rico": 10.7432,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 10.7834,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 10.7856
+          },
+          "queries": [
+            {
+              "name": "executivas_v2",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-22",
+              "seconds": 4.848,
+              "rows": 22,
+              "error": null,
+              "cols": 11
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-22",
+              "seconds": 0.8351,
+              "rows": 22,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-22",
+              "seconds": 1.0174,
+              "rows": 22,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-22",
+              "seconds": 0.8948,
+              "rows": 22,
+              "error": null
+            },
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-22",
+              "seconds": 4.8533,
+              "rows": 1,
+              "error": null
+            },
+            {
+              "name": "executivas_v2",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-03-22",
+              "seconds": 4.8864,
+              "rows": 0,
+              "error": null,
+              "cols": 0
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-03-22",
+              "seconds": 0.6201,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-03-22",
+              "seconds": 0.819,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-22",
+              "seconds": 0.9935,
+              "rows": 22,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-04-01",
+              "data_fim": "2026-04-22",
+              "seconds": 0.9409,
+              "rows": 22,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-03-01",
+              "data_fim": "2026-03-22",
+              "seconds": 0.9091,
+              "rows": 22,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "mes_atual",
+          "period": "2026-06-01\u21922026-06-22",
+          "main_sections_seconds": 0.0511,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0002,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0007
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0002,
+            "meta": 0.0007,
+            "benchmark": 0.0006,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0021,
+            "carregamento Meta oficial": 0.003,
+            "Benchmark hist\u00f3rico": 0.0037,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.0488,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0511
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-22",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "mes_atual",
+          "period": "2026-06-01\u21922026-06-22",
+          "main_sections_seconds": 0.05,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0002,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0007
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0002,
+            "meta": 0.0007,
+            "benchmark": 0.0006,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0022,
+            "carregamento Meta oficial": 0.003,
+            "Benchmark hist\u00f3rico": 0.0038,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.0473,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.05
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-22",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        }
+      ],
+      "warm_rerun": {
+        "mode": "warm_rerun",
+        "scenario": "mes_atual",
+        "period": "2026-06-01\u21922026-06-22",
+        "main_sections_seconds": 0.0493,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "session_hit": true,
+          "init_seconds": 0.0001
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0003,
+          "meta": 0.0001,
+          "benchmark": 0.0007,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0002,
+          "carregamento Atual real": 0.0028,
+          "carregamento Meta oficial": 0.003,
+          "Benchmark hist\u00f3rico": 0.0038,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0471,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0493
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-22",
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          }
+        ]
+      },
+      "cold_com_referencia": null
+    },
+    {
+      "scenario": "mes_anterior",
+      "cp7_1_baseline_main_sections": 19.3,
+      "cold_timing": {
+        "runs": [
+          12.284,
+          0.0481,
+          0.0472
+        ],
+        "median": 0.0481,
+        "min": 0.0472,
+        "max": 12.284
+      },
+      "cold_sem_referencia": {
+        "mode": "cold_sem_referencia",
+        "scenario": "mes_anterior",
+        "period": "2026-05-01\u21922026-05-31",
+        "main_sections_seconds": 0.0472,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "load_seconds": 0.0004,
+          "cache_hit": true,
+          "session_hit": false,
+          "db_configured": true,
+          "row_found": false,
+          "cache_invalidated": false,
+          "batch_enabled": false,
+          "init_seconds": 0.0008
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0002,
+          "meta": 0.0008,
+          "benchmark": 0.0006,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.0022,
+          "carregamento Meta oficial": 0.0031,
+          "Benchmark hist\u00f3rico": 0.0038,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0445,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0472
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-05-01",
+            "data_fim": "2026-05-31",
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          }
+        ],
+        "visual": {
+          "sem_erro_streamlit": true,
+          "benchmark_dataframe": true,
+          "controles_simulador": true,
+          "expander_perf": true
+        }
+      },
+      "cold_runs": [
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "mes_anterior",
+          "period": "2026-05-01\u21922026-05-31",
+          "main_sections_seconds": 12.284,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 11,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 1.3025,
+            "cache_hit": false,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": false,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 1.3031
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {
+            "version": "v2",
+            "seconds": 0.8944,
+            "data_ini": "2026-04-01",
+            "data_fim": "2026-04-30",
+            "rows": 30,
+            "fallback_error": null
+          },
+          "legacy_runs": [
+            {
+              "version": "v2",
+              "seconds": 1.0317,
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-31",
+              "rows": 31,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.8779,
+              "data_ini": "2026-02-01",
+              "data_fim": "2026-02-28",
+              "rows": 28,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.8795,
+              "data_ini": "2026-03-01",
+              "data_fim": "2026-03-31",
+              "rows": 31,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.8944,
+              "data_ini": "2026-04-01",
+              "data_fim": "2026-04-30",
+              "rows": 30,
+              "fallback_error": null
+            }
+          ],
+          "executivas": {
+            "version": "v2",
+            "seconds": 4.8904,
+            "data_ini": "2026-02-01",
+            "data_fim": "2026-04-30",
+            "rows": 89,
+            "cols": 11,
+            "fallback_error": null
+          },
+          "parallel": {
+            "runs": [
+              {
+                "scope": "atual",
+                "enabled": true,
+                "workers": 3,
+                "mode": "atual_sources",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 5.1261,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 5.12451080000028
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.8283408999850508
+                  },
+                  {
+                    "name": "legacy",
+                    "seconds": 1.0317094000056386
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.8728724000102375
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_shared",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_shared",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 4.8911,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 4.890350599976955
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.8351849000027869
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.9168230000068434
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_legacy",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_legacy_windows",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 0.8954,
+                "groups": [
+                  {
+                    "name": "legacy_0",
+                    "seconds": 0.8778993999876548
+                  },
+                  {
+                    "name": "legacy_1",
+                    "seconds": 0.8795074000081513
+                  },
+                  {
+                    "name": "legacy_2",
+                    "seconds": 0.8943977000017185
+                  }
+                ]
+              }
+            ],
+            "parallel_enabled": true,
+            "parallel_workers": 3,
+            "parallel_fallback": false,
+            "parallel_mode": "benchmark_legacy_windows",
+            "parallel_last_scope": "benchmark_legacy",
+            "parallel_last_seconds": 0.8954
+          },
+          "blocks": {
+            "atual": 5.1297,
+            "meta": 1.3031,
+            "benchmark": 5.803,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 5.1325,
+            "carregamento Meta oficial": 6.4359,
+            "Benchmark hist\u00f3rico": 12.2391,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 12.2812,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 12.284
+          },
+          "queries": [
+            {
+              "name": "executivas_v2",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-31",
+              "seconds": 5.1245,
+              "rows": 31,
+              "error": null,
+              "cols": 11
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-31",
+              "seconds": 0.8283,
+              "rows": 31,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-31",
+              "seconds": 1.0317,
+              "rows": 31,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-31",
+              "seconds": 0.8729,
+              "rows": 31,
+              "error": null
+            },
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-31",
+              "seconds": 5.1296,
+              "rows": 1,
+              "error": null
+            },
+            {
+              "name": "executivas_v2",
+              "data_ini": "2026-02-01",
+              "data_fim": "2026-04-30",
+              "seconds": 4.8904,
+              "rows": 89,
+              "error": null,
+              "cols": 11
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2026-02-01",
+              "data_fim": "2026-04-30",
+              "seconds": 0.8352,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2026-02-01",
+              "data_fim": "2026-04-30",
+              "seconds": 0.9168,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-02-01",
+              "data_fim": "2026-02-28",
+              "seconds": 0.8779,
+              "rows": 28,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-03-01",
+              "data_fim": "2026-03-31",
+              "seconds": 0.8795,
+              "rows": 31,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-04-01",
+              "data_fim": "2026-04-30",
+              "seconds": 0.8944,
+              "rows": 30,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "mes_anterior",
+          "period": "2026-05-01\u21922026-05-31",
+          "main_sections_seconds": 0.0481,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0005,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": false,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.001
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0003,
+            "meta": 0.0011,
+            "benchmark": 0.0007,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0028,
+            "carregamento Meta oficial": 0.0041,
+            "Benchmark hist\u00f3rico": 0.0049,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.046,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.048
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-31",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "mes_anterior",
+          "period": "2026-05-01\u21922026-05-31",
+          "main_sections_seconds": 0.0472,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0004,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": false,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0008
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0002,
+            "meta": 0.0008,
+            "benchmark": 0.0006,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0022,
+            "carregamento Meta oficial": 0.0031,
+            "Benchmark hist\u00f3rico": 0.0038,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.0445,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0472
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-31",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        }
+      ],
+      "warm_rerun": {
+        "mode": "warm_rerun",
+        "scenario": "mes_anterior",
+        "period": "2026-05-01\u21922026-05-31",
+        "main_sections_seconds": 0.0491,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "session_hit": true,
+          "init_seconds": 0.0001
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0002,
+          "meta": 0.0001,
+          "benchmark": 0.0006,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.0028,
+          "carregamento Meta oficial": 0.0029,
+          "Benchmark hist\u00f3rico": 0.0037,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0469,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0491
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-05-01",
+            "data_fim": "2026-05-31",
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          }
+        ]
+      },
+      "cold_com_referencia": null
+    },
+    {
+      "scenario": "recorte_jun_2026",
+      "cp7_1_baseline_main_sections": 17.5,
+      "cold_timing": {
+        "runs": [
+          10.9884,
+          0.0485,
+          0.0491
+        ],
+        "median": 0.0491,
+        "min": 0.0485,
+        "max": 10.9884
+      },
+      "cold_sem_referencia": {
+        "mode": "cold_sem_referencia",
+        "scenario": "recorte_jun_2026",
+        "period": "2026-06-01\u21922026-06-17",
+        "main_sections_seconds": 0.0491,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "load_seconds": 0.0003,
+          "cache_hit": true,
+          "session_hit": false,
+          "db_configured": true,
+          "row_found": true,
+          "cache_invalidated": false,
+          "batch_enabled": false,
+          "init_seconds": 0.0007
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0002,
+          "meta": 0.0007,
+          "benchmark": 0.0006,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.002,
+          "carregamento Meta oficial": 0.0029,
+          "Benchmark hist\u00f3rico": 0.0036,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.047,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0491
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-17",
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          }
+        ],
+        "visual": {
+          "sem_erro_streamlit": true,
+          "benchmark_dataframe": true,
+          "controles_simulador": true,
+          "expander_perf": true
+        }
+      },
+      "cold_runs": [
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "recorte_jun_2026",
+          "period": "2026-06-01\u21922026-06-17",
+          "main_sections_seconds": 10.9884,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 11,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0003,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0009
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {
+            "version": "v2",
+            "seconds": 0.7849,
+            "data_ini": "2026-03-01",
+            "data_fim": "2026-03-17",
+            "rows": 17,
+            "fallback_error": null
+          },
+          "legacy_runs": [
+            {
+              "version": "v2",
+              "seconds": 0.9102,
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-17",
+              "rows": 17,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.7923,
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-17",
+              "rows": 17,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.8764,
+              "data_ini": "2026-04-01",
+              "data_fim": "2026-04-17",
+              "rows": 17,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.7849,
+              "data_ini": "2026-03-01",
+              "data_fim": "2026-03-17",
+              "rows": 17,
+              "fallback_error": null
+            }
+          ],
+          "executivas": {
+            "version": "v2",
+            "seconds": 5.0537,
+            "data_ini": "2026-05-01",
+            "data_fim": "2026-03-17",
+            "rows": 0,
+            "cols": 0,
+            "fallback_error": null
+          },
+          "parallel": {
+            "runs": [
+              {
+                "scope": "atual",
+                "enabled": true,
+                "workers": 3,
+                "mode": "atual_sources",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 4.9982,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 4.997154600016074
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.7722535000066273
+                  },
+                  {
+                    "name": "legacy",
+                    "seconds": 0.9101553999935277
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.889749900001334
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_shared",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_shared",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 5.0542,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 5.053662600024836
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.6480097999738064
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.8213125000183936
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_legacy",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_legacy_windows",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 0.877,
+                "groups": [
+                  {
+                    "name": "legacy_0",
+                    "seconds": 0.7923167999833822
+                  },
+                  {
+                    "name": "legacy_1",
+                    "seconds": 0.8763580000086222
+                  },
+                  {
+                    "name": "legacy_2",
+                    "seconds": 0.7849079999723472
+                  }
+                ]
+              }
+            ],
+            "parallel_enabled": true,
+            "parallel_workers": 3,
+            "parallel_fallback": false,
+            "parallel_mode": "benchmark_legacy_windows",
+            "parallel_last_scope": "benchmark_legacy",
+            "parallel_last_seconds": 0.877
+          },
+          "blocks": {
+            "atual": 5.0017,
+            "meta": 0.0009,
+            "benchmark": 5.9358,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 5.004,
+            "carregamento Meta oficial": 5.0051,
+            "Benchmark hist\u00f3rico": 10.9413,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 10.9855,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 10.9884
+          },
+          "queries": [
+            {
+              "name": "executivas_v2",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-17",
+              "seconds": 4.9972,
+              "rows": 17,
+              "error": null,
+              "cols": 11
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-17",
+              "seconds": 0.7723,
+              "rows": 17,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-17",
+              "seconds": 0.9102,
+              "rows": 17,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-17",
+              "seconds": 0.8897,
+              "rows": 17,
+              "error": null
+            },
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-17",
+              "seconds": 5.0015,
+              "rows": 1,
+              "error": null
+            },
+            {
+              "name": "executivas_v2",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-03-17",
+              "seconds": 5.0537,
+              "rows": 0,
+              "error": null,
+              "cols": 0
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-03-17",
+              "seconds": 0.648,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-03-17",
+              "seconds": 0.8213,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-05-01",
+              "data_fim": "2026-05-17",
+              "seconds": 0.7923,
+              "rows": 17,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-04-01",
+              "data_fim": "2026-04-17",
+              "seconds": 0.8764,
+              "rows": 17,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2026-03-01",
+              "data_fim": "2026-03-17",
+              "seconds": 0.7849,
+              "rows": 17,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "recorte_jun_2026",
+          "period": "2026-06-01\u21922026-06-17",
+          "main_sections_seconds": 0.0485,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0002,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0007
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0002,
+            "meta": 0.0007,
+            "benchmark": 0.0006,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0024,
+            "carregamento Meta oficial": 0.0032,
+            "Benchmark hist\u00f3rico": 0.0039,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.0453,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0485
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-17",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "recorte_jun_2026",
+          "period": "2026-06-01\u21922026-06-17",
+          "main_sections_seconds": 0.0491,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0003,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": true,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0007
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0002,
+            "meta": 0.0007,
+            "benchmark": 0.0006,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.002,
+            "carregamento Meta oficial": 0.0029,
+            "Benchmark hist\u00f3rico": 0.0036,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.047,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0491
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2026-06-01",
+              "data_fim": "2026-06-17",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        }
+      ],
+      "warm_rerun": {
+        "mode": "warm_rerun",
+        "scenario": "recorte_jun_2026",
+        "period": "2026-06-01\u21922026-06-17",
+        "main_sections_seconds": 0.0498,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "session_hit": true,
+          "init_seconds": 0.0001
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0004,
+          "meta": 0.0002,
+          "benchmark": 0.0006,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.0027,
+          "carregamento Meta oficial": 0.003,
+          "Benchmark hist\u00f3rico": 0.0037,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0476,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0498
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2026-06-01",
+            "data_fim": "2026-06-17",
+            "seconds": 0.0002,
+            "rows": 1,
+            "error": null
+          }
+        ]
+      },
+      "cold_com_referencia": null
+    },
+    {
+      "scenario": "sem_dados",
+      "cp7_1_baseline_main_sections": 17.6,
+      "cold_timing": {
+        "runs": [
+          13.1619,
+          0.0453,
+          0.0435
+        ],
+        "median": 0.0453,
+        "min": 0.0435,
+        "max": 13.1619
+      },
+      "cold_sem_referencia": {
+        "mode": "cold_sem_referencia",
+        "scenario": "sem_dados",
+        "period": "2099-01-01\u21922099-01-07",
+        "main_sections_seconds": 0.0435,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "load_seconds": 0.0004,
+          "cache_hit": true,
+          "session_hit": false,
+          "db_configured": true,
+          "row_found": false,
+          "cache_invalidated": false,
+          "batch_enabled": false,
+          "init_seconds": 0.0008
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0002,
+          "meta": 0.0008,
+          "benchmark": 0.0006,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.0022,
+          "carregamento Meta oficial": 0.0031,
+          "Benchmark hist\u00f3rico": 0.0038,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0413,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0435
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2099-01-01",
+            "data_fim": "2099-01-07",
+            "seconds": 0.0001,
+            "rows": 1,
+            "error": null
+          }
+        ],
+        "visual": {
+          "sem_erro_streamlit": true,
+          "benchmark_dataframe": true,
+          "controles_simulador": true,
+          "expander_perf": true
+        }
+      },
+      "cold_runs": [
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "sem_dados",
+          "period": "2099-01-01\u21922099-01-07",
+          "main_sections_seconds": 13.1619,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 11,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 2.5641,
+            "cache_hit": false,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": false,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 2.5648
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {
+            "version": "v2",
+            "seconds": 0.6566,
+            "data_ini": "2098-10-01",
+            "data_fim": "2098-10-07",
+            "rows": 0,
+            "fallback_error": null
+          },
+          "legacy_runs": [
+            {
+              "version": "v2",
+              "seconds": 0.6629,
+              "data_ini": "2099-01-01",
+              "data_fim": "2099-01-07",
+              "rows": 0,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.6658,
+              "data_ini": "2098-12-01",
+              "data_fim": "2098-12-07",
+              "rows": 0,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.6713,
+              "data_ini": "2098-11-01",
+              "data_fim": "2098-11-07",
+              "rows": 0,
+              "fallback_error": null
+            },
+            {
+              "version": "v2",
+              "seconds": 0.6566,
+              "data_ini": "2098-10-01",
+              "data_fim": "2098-10-07",
+              "rows": 0,
+              "fallback_error": null
+            }
+          ],
+          "executivas": {
+            "version": "v2",
+            "seconds": 5.3442,
+            "data_ini": "2098-12-01",
+            "data_fim": "2098-10-07",
+            "rows": 0,
+            "cols": 0,
+            "fallback_error": null
+          },
+          "parallel": {
+            "runs": [
+              {
+                "scope": "atual",
+                "enabled": true,
+                "workers": 3,
+                "mode": "atual_sources",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 4.5314,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 4.530331199988723
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.6157948000181932
+                  },
+                  {
+                    "name": "legacy",
+                    "seconds": 0.6628724999900442
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.8142999999981839
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_shared",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_shared",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 5.3449,
+                "groups": [
+                  {
+                    "name": "executivas",
+                    "seconds": 5.344229299982544
+                  },
+                  {
+                    "name": "investimento",
+                    "seconds": 0.6364846999931615
+                  },
+                  {
+                    "name": "prevendas",
+                    "seconds": 0.8348184999777004
+                  }
+                ]
+              },
+              {
+                "scope": "benchmark_legacy",
+                "enabled": true,
+                "workers": 3,
+                "mode": "benchmark_legacy_windows",
+                "fallback": false,
+                "fallback_error": null,
+                "total_seconds": 0.672,
+                "groups": [
+                  {
+                    "name": "legacy_0",
+                    "seconds": 0.6658489000110421
+                  },
+                  {
+                    "name": "legacy_1",
+                    "seconds": 0.671321200003149
+                  },
+                  {
+                    "name": "legacy_2",
+                    "seconds": 0.6565929000207689
+                  }
+                ]
+              }
+            ],
+            "parallel_enabled": true,
+            "parallel_workers": 3,
+            "parallel_fallback": false,
+            "parallel_mode": "benchmark_legacy_windows",
+            "parallel_last_scope": "benchmark_legacy",
+            "parallel_last_seconds": 0.672
+          },
+          "blocks": {
+            "atual": 4.5323,
+            "meta": 2.5648,
+            "benchmark": 6.0203,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 4.5342,
+            "carregamento Meta oficial": 7.0992,
+            "Benchmark hist\u00f3rico": 13.1197,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 13.1598,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 13.1619
+          },
+          "queries": [
+            {
+              "name": "executivas_v2",
+              "data_ini": "2099-01-01",
+              "data_fim": "2099-01-07",
+              "seconds": 4.5303,
+              "rows": 0,
+              "error": null,
+              "cols": 0
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2099-01-01",
+              "data_fim": "2099-01-07",
+              "seconds": 0.6158,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2099-01-01",
+              "data_fim": "2099-01-07",
+              "seconds": 0.6629,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2099-01-01",
+              "data_fim": "2099-01-07",
+              "seconds": 0.8143,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2099-01-01",
+              "data_fim": "2099-01-07",
+              "seconds": 4.5322,
+              "rows": 1,
+              "error": null
+            },
+            {
+              "name": "executivas_v2",
+              "data_ini": "2098-12-01",
+              "data_fim": "2098-10-07",
+              "seconds": 5.3442,
+              "rows": 0,
+              "error": null,
+              "cols": 0
+            },
+            {
+              "name": "investimento_diario",
+              "data_ini": "2098-12-01",
+              "data_fim": "2098-10-07",
+              "seconds": 0.6365,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "prevendas_overview_diario",
+              "data_ini": "2098-12-01",
+              "data_fim": "2098-10-07",
+              "seconds": 0.8348,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2098-12-01",
+              "data_fim": "2098-12-07",
+              "seconds": 0.6658,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2098-11-01",
+              "data_fim": "2098-11-07",
+              "seconds": 0.6713,
+              "rows": 0,
+              "error": null
+            },
+            {
+              "name": "legacy_diario_v2",
+              "data_ini": "2098-10-01",
+              "data_fim": "2098-10-07",
+              "seconds": 0.6566,
+              "rows": 0,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "sem_dados",
+          "period": "2099-01-01\u21922099-01-07",
+          "main_sections_seconds": 0.0453,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0004,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": false,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0009
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0002,
+            "meta": 0.0009,
+            "benchmark": 0.0006,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0026,
+            "carregamento Meta oficial": 0.0036,
+            "Benchmark hist\u00f3rico": 0.0043,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.0433,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0453
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2099-01-01",
+              "data_fim": "2099-01-07",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        },
+        {
+          "mode": "cold_sem_referencia",
+          "scenario": "sem_dados",
+          "period": "2099-01-01\u21922099-01-07",
+          "main_sections_seconds": 0.0435,
+          "page_total_seconds": null,
+          "funnel_load_count": 1,
+          "query_count": 1,
+          "referencia_loaded": false,
+          "referencia_skipped": true,
+          "export_prepared": false,
+          "benchmark": {
+            "version": "v2",
+            "windows": 3,
+            "repo_queries": 6,
+            "funnel_loads_avoided": 9,
+            "used_v2": true,
+            "fallback_error": null,
+            "legacy_benchmark_mode": "per_window",
+            "legacy_benchmark_time": null,
+            "legacy_benchmark_queries": 3,
+            "legacy_benchmark_fallback": null,
+            "legacy_benchmark_batch_enabled": false
+          },
+          "meta": {
+            "load_seconds": 0.0004,
+            "cache_hit": true,
+            "session_hit": false,
+            "db_configured": true,
+            "row_found": false,
+            "cache_invalidated": false,
+            "batch_enabled": false,
+            "init_seconds": 0.0008
+          },
+          "legacy_benchmark_batch": {},
+          "legacy": {},
+          "legacy_runs": [],
+          "executivas": {},
+          "parallel": {},
+          "blocks": {
+            "atual": 0.0002,
+            "meta": 0.0008,
+            "benchmark": 0.0006,
+            "referencia": null,
+            "export": null
+          },
+          "milestones": {
+            "init / auth / start_page": 0.0001,
+            "carregamento Atual real": 0.0022,
+            "carregamento Meta oficial": 0.0031,
+            "Benchmark hist\u00f3rico": 0.0038,
+            "renderiza\u00e7\u00e3o vitrine comparativa": 0.0413,
+            "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0435
+          },
+          "queries": [
+            {
+              "name": "load_one_page_funnel",
+              "data_ini": "2099-01-01",
+              "data_fim": "2099-01-07",
+              "seconds": 0.0001,
+              "rows": 1,
+              "error": null
+            }
+          ],
+          "visual": {
+            "sem_erro_streamlit": true,
+            "benchmark_dataframe": true,
+            "controles_simulador": true,
+            "expander_perf": true
+          }
+        }
+      ],
+      "warm_rerun": {
+        "mode": "warm_rerun",
+        "scenario": "sem_dados",
+        "period": "2099-01-01\u21922099-01-07",
+        "main_sections_seconds": 0.0469,
+        "page_total_seconds": null,
+        "funnel_load_count": 1,
+        "query_count": 1,
+        "referencia_loaded": false,
+        "referencia_skipped": true,
+        "export_prepared": false,
+        "benchmark": {
+          "version": "v2",
+          "windows": 3,
+          "repo_queries": 6,
+          "funnel_loads_avoided": 9,
+          "used_v2": true,
+          "fallback_error": null,
+          "legacy_benchmark_mode": "per_window",
+          "legacy_benchmark_time": null,
+          "legacy_benchmark_queries": 3,
+          "legacy_benchmark_fallback": null,
+          "legacy_benchmark_batch_enabled": false
+        },
+        "meta": {
+          "session_hit": true,
+          "init_seconds": 0.0001
+        },
+        "legacy_benchmark_batch": {},
+        "legacy": {},
+        "legacy_runs": [],
+        "executivas": {},
+        "parallel": {},
+        "blocks": {
+          "atual": 0.0004,
+          "meta": 0.0002,
+          "benchmark": 0.0007,
+          "referencia": null,
+          "export": null
+        },
+        "milestones": {
+          "init / auth / start_page": 0.0001,
+          "carregamento Atual real": 0.0028,
+          "carregamento Meta oficial": 0.0031,
+          "Benchmark hist\u00f3rico": 0.0039,
+          "renderiza\u00e7\u00e3o vitrine comparativa": 0.0449,
+          "renderiza\u00e7\u00e3o se\u00e7\u00f5es principais": 0.0469
+        },
+        "queries": [
+          {
+            "name": "load_one_page_funnel",
+            "data_ini": "2099-01-01",
+            "data_fim": "2099-01-07",
+            "seconds": 0.0002,
+            "rows": 1,
+            "error": null
+          }
+        ]
+      },
+      "cold_com_referencia": null
+    }
+  ]
+}

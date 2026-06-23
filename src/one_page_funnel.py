@@ -7,15 +7,18 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import date
+import time
 
 import pandas as pd
+import streamlit as st
 
 from src.prevendas_transforms import prevendas_overview_kpis
 from src.repositories import (
-    get_executivas,
+    get_executivas_for_funil,
     get_investimento_diario,
-    get_one_page_legacy_diario,
+    get_one_page_legacy_diario_for_funil,
     get_prevendas_overview_diario,
+    LEGACY_DIARIO_COLUMNS,
 )
 from src.transforms import visao_geral_kpis
 
@@ -128,21 +131,50 @@ def project_receita_from_montante(montante: float, pct_recebimento: float) -> fl
     return montante * (pct_recebimento / 100.0)
 
 
-def load_one_page_funnel(
+def filter_df_date_range(
+    df: pd.DataFrame,
     data_ini: date,
     data_fim: date,
-    *,
-    excluir_testes_aplicacoes: bool = False,
-) -> FunnelSnapshot:
-    """Carrega o funil real do período com as mesmas regras da One Page."""
-    df_one = get_one_page_legacy_diario(
-        data_ini, data_fim,
-        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
-    )
-    df_prev = get_prevendas_overview_diario(data_ini, data_fim)
-    df_exec = get_executivas(data_ini, data_fim)
-    df_inv = get_investimento_diario(data_ini, data_fim)
+) -> pd.DataFrame:
+    """Recorte inclusivo por `data_ref` (date ou datetime)."""
+    if df is None or df.empty or "data_ref" not in df.columns:
+        return df
+    out = df.copy()
+    out["data_ref"] = pd.to_datetime(out["data_ref"])
+    ini = pd.Timestamp(data_ini)
+    fim = pd.Timestamp(data_fim)
+    mask = (out["data_ref"] >= ini) & (out["data_ref"] <= fim)
+    return out.loc[mask].copy()
 
+
+def legacy_df_for_benchmark_period(
+    df_batch: pd.DataFrame,
+    period_key: str,
+) -> pd.DataFrame:
+    """Recorte in-memory de um `period_key` do legacy batch (sem a coluna auxiliar)."""
+    legacy_cols = list(LEGACY_DIARIO_COLUMNS)
+    if df_batch is None or df_batch.empty:
+        return pd.DataFrame(columns=legacy_cols)
+    if "period_key" not in df_batch.columns:
+        return df_batch
+    pk = str(period_key)
+    out = df_batch.loc[df_batch["period_key"].astype(str) == pk].copy()
+    if "period_key" in out.columns:
+        out = out.drop(columns=["period_key"])
+    if out.empty:
+        return pd.DataFrame(columns=legacy_cols)
+    if "data_ref" in out.columns:
+        out["data_ref"] = pd.to_datetime(out["data_ref"])
+    return out.reset_index(drop=True)
+
+
+def build_funnel_snapshot(
+    df_one: pd.DataFrame,
+    df_prev: pd.DataFrame,
+    df_exec: pd.DataFrame,
+    df_inv: pd.DataFrame,
+) -> FunnelSnapshot:
+    """Monta snapshot a partir de DataFrames já no recorte desejado."""
     k_apl = aplicacoes_kpis(df_one)
     k_prev = prevendas_overview_kpis(df_prev)
     k_vend = visao_geral_kpis(df_exec, df_inv)
@@ -170,12 +202,368 @@ def load_one_page_funnel(
         pct_recebimento=pct_recebimento,
         custo_lead=safe_div(investimento, leads),
         pct_la=safe_div(aplicacoes, leads),
-        # Mesma regra da One Page (`pct_agendamento_apl`): match por e-mail, 1x por aplicação.
         pct_a_ag=safe_div(aplicacoes_com_agendamento, aplicacoes),
         pct_ag_c=safe_div(comparecimento, agendamentos),
         pct_c_v=safe_div(vendas, comparecimento),
         ticket=safe_div(montante, vendas),
     )
+
+
+def _fetch_legacy_for_funil(
+    data_ini: date,
+    data_fim: date,
+    *,
+    excluir_testes_aplicacoes: bool,
+) -> pd.DataFrame:
+    """Legacy diário com v2/fallback — registra perf quando debug ativo."""
+    t0 = time.perf_counter()
+    df, version, fallback_error = get_one_page_legacy_diario_for_funil(
+        data_ini,
+        data_fim,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    elapsed = time.perf_counter() - t0
+    try:
+        from src.funil_reconecta_perf import perf_debug_enabled, perf_record_legacy_run
+
+        if perf_debug_enabled():
+            perf_record_legacy_run(
+                data_ini,
+                data_fim,
+                elapsed,
+                version=version,
+                rows=len(df),
+                fallback_error=fallback_error,
+            )
+    except Exception:
+        pass
+    return df
+
+
+def _fetch_executivas_for_funil(
+    data_ini: date,
+    data_fim: date,
+) -> pd.DataFrame:
+    """Executivas com v2/fallback — registra perf quando debug ativo."""
+    t0 = time.perf_counter()
+    df, version, fallback_error = get_executivas_for_funil(data_ini, data_fim)
+    elapsed = time.perf_counter() - t0
+    try:
+        from src.funil_reconecta_perf import (
+            perf_debug_enabled,
+            perf_record_executivas_run,
+        )
+
+        if perf_debug_enabled():
+            perf_record_executivas_run(
+                data_ini,
+                data_fim,
+                elapsed,
+                version=version,
+                rows=len(df),
+                cols=len(df.columns) if not df.empty else 0,
+                fallback_error=fallback_error,
+            )
+    except Exception:
+        pass
+    return df
+
+
+def _load_one_page_funnel_impl(
+    data_ini: date,
+    data_fim: date,
+    *,
+    excluir_testes_aplicacoes: bool = False,
+) -> FunnelSnapshot:
+    """Carrega o funil real do período com as mesmas regras da One Page."""
+    from src.funil_parallel_load import (
+        funil_parallel_loads_enabled,
+        load_one_page_funnel_frames_parallel,
+    )
+
+    if funil_parallel_loads_enabled():
+        try:
+            frames, report, meta = load_one_page_funnel_frames_parallel(
+                data_ini,
+                data_fim,
+                excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+            )
+            _record_parallel_atual_perf(
+                data_ini, data_fim, report, meta, excluir_testes_aplicacoes
+            )
+            return build_funnel_snapshot(*frames)
+        except Exception as exc:
+            _record_parallel_fallback("atual", str(exc))
+    df_one = _fetch_legacy_for_funil(
+        data_ini,
+        data_fim,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    df_prev = get_prevendas_overview_diario(data_ini, data_fim)
+    df_exec = _fetch_executivas_for_funil(data_ini, data_fim)
+    df_inv = get_investimento_diario(data_ini, data_fim)
+    return build_funnel_snapshot(df_one, df_prev, df_exec, df_inv)
+
+
+def _record_parallel_atual_perf(
+    data_ini: date,
+    data_fim: date,
+    report,
+    meta: dict,
+    excluir_testes_aplicacoes: bool,
+) -> None:
+    try:
+        from src.funil_reconecta_perf import (
+            perf_debug_enabled,
+            perf_record_executivas_run,
+            perf_record_legacy_run,
+            perf_record_parallel_load,
+            perf_record_query,
+        )
+
+        if not perf_debug_enabled():
+            return
+        perf_record_parallel_load(
+            scope="atual",
+            enabled=True,
+            workers=report.workers,
+            mode=report.mode,
+            fallback=False,
+            total_seconds=report.total_seconds,
+            groups=[{"name": g.name, "seconds": g.seconds} for g in report.groups],
+        )
+        leg = meta.get("legacy") or {}
+        for g in report.groups:
+            if g.name == "legacy":
+                perf_record_legacy_run(
+                    data_ini,
+                    data_fim,
+                    g.seconds,
+                    version=str(leg.get("version") or "v2"),
+                    rows=int(leg.get("rows") or 0),
+                    fallback_error=leg.get("fallback_error"),
+                )
+            elif g.name == "prevendas":
+                perf_record_query(
+                    "prevendas_overview_diario",
+                    data_ini,
+                    data_fim,
+                    g.seconds,
+                    int(meta.get("prev_rows") or 0),
+                )
+            elif g.name == "executivas":
+                ex = meta.get("executivas") or {}
+                perf_record_executivas_run(
+                    data_ini,
+                    data_fim,
+                    g.seconds,
+                    version=str(ex.get("version") or "v2"),
+                    rows=int(ex.get("rows") or 0),
+                    cols=int(ex.get("cols") or 0),
+                    fallback_error=ex.get("fallback_error"),
+                )
+            elif g.name == "investimento":
+                perf_record_query(
+                    "investimento_diario",
+                    data_ini,
+                    data_fim,
+                    g.seconds,
+                    int(meta.get("inv_rows") or 0),
+                )
+    except Exception:
+        pass
+
+
+def _record_parallel_fallback(scope: str, error: str) -> None:
+    try:
+        from src.funil_reconecta_perf import perf_debug_enabled, perf_record_parallel_load
+
+        if perf_debug_enabled():
+            perf_record_parallel_load(
+                scope=scope,
+                enabled=True,
+                workers=0,
+                mode="sequential_fallback",
+                fallback=True,
+                fallback_error=error,
+                total_seconds=0.0,
+                groups=[],
+            )
+    except Exception:
+        pass
+
+
+def _load_benchmark_shared_frames_impl(
+    wide_ini: date,
+    wide_fim: date,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    from src.funil_parallel_load import (
+        funil_parallel_loads_enabled,
+        load_benchmark_shared_frames_parallel,
+    )
+
+    if funil_parallel_loads_enabled():
+        try:
+            frames, report, meta = load_benchmark_shared_frames_parallel(
+                wide_ini, wide_fim
+            )
+            _record_parallel_benchmark_shared_perf(wide_ini, wide_fim, report, meta)
+            return frames
+        except Exception as exc:
+            _record_parallel_fallback("benchmark_shared", str(exc))
+    df_prev = get_prevendas_overview_diario(wide_ini, wide_fim)
+    df_exec = _fetch_executivas_for_funil(wide_ini, wide_fim)
+    df_inv = get_investimento_diario(wide_ini, wide_fim)
+    return df_prev, df_exec, df_inv
+
+
+def _record_parallel_benchmark_shared_perf(
+    wide_ini: date,
+    wide_fim: date,
+    report,
+    meta: dict,
+) -> None:
+    try:
+        from src.funil_reconecta_perf import (
+            perf_debug_enabled,
+            perf_record_executivas_run,
+            perf_record_parallel_load,
+            perf_record_query,
+        )
+
+        if not perf_debug_enabled():
+            return
+        perf_record_parallel_load(
+            scope="benchmark_shared",
+            enabled=True,
+            workers=report.workers,
+            mode=report.mode,
+            fallback=False,
+            total_seconds=report.total_seconds,
+            groups=[{"name": g.name, "seconds": g.seconds} for g in report.groups],
+        )
+        ex = meta.get("executivas") or {}
+        for g in report.groups:
+            if g.name == "prevendas":
+                perf_record_query(
+                    "prevendas_overview_diario",
+                    wide_ini,
+                    wide_fim,
+                    g.seconds,
+                    0,
+                )
+            elif g.name == "executivas":
+                perf_record_executivas_run(
+                    wide_ini,
+                    wide_fim,
+                    g.seconds,
+                    version=str(ex.get("version") or "v2"),
+                    rows=int(ex.get("rows") or 0),
+                    cols=int(ex.get("cols") or 0),
+                    fallback_error=ex.get("fallback_error"),
+                )
+            elif g.name == "investimento":
+                perf_record_query(
+                    "investimento_diario",
+                    wide_ini,
+                    wide_fim,
+                    g.seconds,
+                    0,
+                )
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_benchmark_shared_frames(
+    wide_ini_iso: str,
+    wide_fim_iso: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Pré-vendas, executivas e investimento no intervalo amplo do benchmark."""
+    wide_ini = date.fromisoformat(wide_ini_iso)
+    wide_fim = date.fromisoformat(wide_fim_iso)
+    return _load_benchmark_shared_frames_impl(wide_ini, wide_fim)
+
+
+def build_funnel_snapshot_for_window(
+    data_ini: date,
+    data_fim: date,
+    *,
+    excluir_testes_aplicacoes: bool,
+    df_prev_wide: pd.DataFrame,
+    df_exec_wide: pd.DataFrame,
+    df_inv_wide: pd.DataFrame,
+) -> FunnelSnapshot:
+    """Snapshot de uma janela — legacy por recorte; demais fontes filtradas in-memory."""
+    df_one = _fetch_legacy_for_funil(
+        data_ini,
+        data_fim,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    df_prev = filter_df_date_range(df_prev_wide, data_ini, data_fim)
+    df_exec = filter_df_date_range(df_exec_wide, data_ini, data_fim)
+    df_inv = filter_df_date_range(df_inv_wide, data_ini, data_fim)
+    return build_funnel_snapshot(df_one, df_prev, df_exec, df_inv)
+
+
+def build_funnel_snapshot_for_window_with_legacy(
+    data_ini: date,
+    data_fim: date,
+    *,
+    df_one: pd.DataFrame,
+    df_prev_wide: pd.DataFrame,
+    df_exec_wide: pd.DataFrame,
+    df_inv_wide: pd.DataFrame,
+) -> FunnelSnapshot:
+    """Snapshot de uma janela — legacy já carregado; demais fontes filtradas in-memory."""
+    df_prev = filter_df_date_range(df_prev_wide, data_ini, data_fim)
+    df_exec = filter_df_date_range(df_exec_wide, data_ini, data_fim)
+    df_inv = filter_df_date_range(df_inv_wide, data_ini, data_fim)
+    return build_funnel_snapshot(df_one, df_prev, df_exec, df_inv)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_one_page_funnel_cached(
+    data_ini_iso: str,
+    data_fim_iso: str,
+    excluir_testes_aplicacoes: bool,
+) -> dict:
+    """Snapshot serializado — chave estável para `st.cache_data`."""
+    snap = _load_one_page_funnel_impl(
+        date.fromisoformat(data_ini_iso),
+        date.fromisoformat(data_fim_iso),
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    return asdict(snap)
+
+
+def load_one_page_funnel(
+    data_ini: date,
+    data_fim: date,
+    *,
+    excluir_testes_aplicacoes: bool = False,
+) -> FunnelSnapshot:
+    """Carrega o funil real do período (cache de 10 min por recorte)."""
+    t0 = time.perf_counter()
+    payload = _load_one_page_funnel_cached(
+        data_ini.isoformat(),
+        data_fim.isoformat(),
+        bool(excluir_testes_aplicacoes),
+    )
+    elapsed = time.perf_counter() - t0
+    try:
+        from src.funil_reconecta_perf import perf_debug_enabled, perf_record_funnel_load
+
+        if perf_debug_enabled():
+            perf_record_funnel_load(
+                data_ini,
+                data_fim,
+                elapsed,
+                source="load_one_page_funnel",
+            )
+    except Exception:
+        pass
+    return FunnelSnapshot(**payload)
 
 
 def snapshot_to_scenario_dict(snapshot: FunnelSnapshot) -> dict:

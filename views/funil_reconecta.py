@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
@@ -72,6 +73,21 @@ from src.funil_meta_store import (
     pct_to_display_percent,
     save_funil_meta,
     delete_meta_funil,
+    meta_cache_hit_between,
+    meta_latest_cache_hits,
+)
+from src.funil_reconecta_perf import (
+    perf_debug_enabled,
+    perf_finalize_page,
+    perf_mark_milestone,
+    perf_record_meta_init,
+    perf_record_meta_load,
+    perf_render_panel,
+    perf_reset_run,
+    perf_set_context,
+    perf_set_export_prepared,
+    perf_set_referencia_status,
+    perf_timed_block,
 )
 from src.metas_auth import (
     METAS_VIEW_ONLY_MESSAGE,
@@ -1157,7 +1173,7 @@ def _render_benchmark_historico(
     st.dataframe(
         pd.DataFrame(rows),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "Métrica": st.column_config.TextColumn(width="medium"),
             "C. Otimista": st.column_config.TextColumn(
@@ -1169,17 +1185,17 @@ def _render_benchmark_historico(
     st.markdown("**Cenários no Simulador**")
     b1, b2, b3, _ = st.columns([2, 2, 2, 3], gap="small")
     with b1:
-        if st.button("Aplicar cenário conservador", use_container_width=True):
+        if st.button("Aplicar cenário conservador", width="stretch"):
             _clear_funil_widget_keys(sim_only=True)
             _apply_benchmark_scenario_to_sim(metrics, "conservador")
             st.rerun()
     with b2:
-        if st.button("Aplicar cenário provável", use_container_width=True):
+        if st.button("Aplicar cenário provável", width="stretch"):
             _clear_funil_widget_keys(sim_only=True)
             _apply_benchmark_scenario_to_sim(metrics, "provavel")
             st.rerun()
     with b3:
-        if st.button("Aplicar cenário otimista", use_container_width=True):
+        if st.button("Aplicar cenário otimista", width="stretch"):
             _clear_funil_widget_keys(sim_only=True)
             _apply_benchmark_scenario_to_sim(metrics, "otimista")
             st.rerun()
@@ -2386,7 +2402,17 @@ def _fetch_latest_official_meta(
     data_fim: date,
 ) -> dict[str, Any] | None:
     if not is_metas_database_configured():
+        if perf_debug_enabled():
+            perf_record_meta_load(
+                seconds=0.0,
+                cache_hit=False,
+                session_hit=False,
+                db_configured=False,
+                row_found=None,
+            )
         return None
+    hits_before = meta_latest_cache_hits()
+    t0 = time.perf_counter()
     try:
         row, prop = load_latest_meta_funil_mensal(data_ini, data_fim)
         st.session_state["funil_meta_proporcao"] = prop
@@ -2397,8 +2423,30 @@ def _fetch_latest_official_meta(
             )
         else:
             st.session_state.pop("funil_meta_proporcao_aviso", None)
+        elapsed = time.perf_counter() - t0
+        if perf_debug_enabled():
+            hits_after = meta_latest_cache_hits()
+            cache_hit = meta_cache_hit_between(hits_before, hits_after)
+            if not cache_hit and hits_before is None and elapsed < 0.05:
+                cache_hit = True
+            perf_record_meta_load(
+                seconds=elapsed,
+                cache_hit=cache_hit,
+                session_hit=False,
+                db_configured=True,
+                row_found=row is not None,
+            )
         return row
     except Exception as exc:
+        elapsed = time.perf_counter() - t0
+        if perf_debug_enabled():
+            perf_record_meta_load(
+                seconds=elapsed,
+                cache_hit=False,
+                session_hit=False,
+                db_configured=True,
+                row_found=None,
+            )
         if os.environ.get("FUNIL_DEBUG"):
             st.session_state["_meta_load_error"] = str(exc)
         return None
@@ -2492,6 +2540,7 @@ def _init_meta_session_for_period(
     snapshot: FunnelSnapshot | None,
 ) -> None:
     """Inicializa a meta da tela ao abrir a página ou trocar o período global."""
+    t0 = time.perf_counter()
     key = _funil_period_storage_key(data_ini, data_fim)
     period_changed = st.session_state.get("funil_meta_period_key") != key
     if period_changed:
@@ -2505,10 +2554,20 @@ def _init_meta_session_for_period(
         or not st.session_state.get(bootstrap_key)
     )
     if not should_bootstrap or st.session_state.get("_meta_user_override"):
+        if perf_debug_enabled():
+            perf_record_meta_init(
+                session_hit=True,
+                seconds=time.perf_counter() - t0,
+            )
         return
 
     _bootstrap_default_meta_for_period(data_ini, data_fim, snapshot)
     st.session_state[bootstrap_key] = True
+    if perf_debug_enabled():
+        perf_record_meta_init(
+            session_hit=False,
+            seconds=time.perf_counter() - t0,
+        )
 
 
 def _restore_default_meta_for_period(
@@ -2541,6 +2600,18 @@ def _reload_default_meta_after_db_change(
     seed_editor: bool = False,
 ) -> None:
     """Reaplica o padrão após salvar/excluir meta oficial no banco."""
+    from src.funil_meta_store import invalidate_funil_meta_load_cache
+
+    invalidate_funil_meta_load_cache()
+    if perf_debug_enabled():
+        perf_record_meta_load(
+            seconds=0.0,
+            cache_hit=False,
+            session_hit=False,
+            db_configured=is_metas_database_configured(),
+            row_found=None,
+            cache_invalidated=True,
+        )
     st.session_state.pop(_meta_bootstrap_session_key(data_ini, data_fim), None)
     st.session_state.pop("_meta_user_override", None)
     latest_meta = _fetch_latest_official_meta(data_ini, data_fim)
@@ -2671,37 +2742,178 @@ def _export_file_stem(data_ini: date, data_fim: date, periodo: str) -> str:
     )
 
 
+def _export_bundle_cache_key(bundle: FunilExportBundle) -> str:
+    """Chave estável para cache de exportação (sem gerar arquivos no rerun)."""
+    parts = [
+        bundle.periodo_viz,
+        bundle.data_ini.isoformat(),
+        bundle.data_fim.isoformat(),
+        str(bundle.excluir_testes),
+    ]
+    for prefix, scenario, calc in (
+        ("a", bundle.atual, bundle.calc_atual),
+        ("s", bundle.simulador, bundle.calc_sim),
+        ("m", bundle.meta, bundle.calc_meta),
+    ):
+        parts.append(prefix)
+        for field in (
+            "investimento", "custo_lead", "pct_la", "pct_a_ag",
+            "pct_ag_c", "pct_c_v", "ticket",
+        ):
+            parts.append(f"{field}={getattr(scenario, field, 0)}")
+        for k, v in sorted(calc.items()):
+            parts.append(f"{k}={v}")
+    for imp in bundle.impactos:
+        parts.append(str(sorted(imp.items())))
+    return "|".join(parts)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_export_csv(cache_key: str, bundle_json: str) -> bytes:
+    import json
+
+    raw = json.loads(bundle_json)
+    bundle = FunilExportBundle(
+        periodo_viz=raw["periodo_viz"],
+        periodo_viz_label=raw["periodo_viz_label"],
+        data_ini=date.fromisoformat(raw["data_ini"]),
+        data_fim=date.fromisoformat(raw["data_fim"]),
+        excluir_testes=raw["excluir_testes"],
+        atual=Scenario(**raw["atual"]),
+        simulador=Scenario(**raw["simulador"]),
+        meta=Scenario(**raw["meta"]),
+        calc_atual=raw["calc_atual"],
+        calc_sim=raw["calc_sim"],
+        calc_meta=raw["calc_meta"],
+        impactos=raw["impactos"],
+        periodos_cfg=raw["periodos_cfg"],
+    )
+    return export_funil_csv(bundle)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_export_xlsx(cache_key: str, bundle_json: str) -> bytes:
+    import json
+
+    raw = json.loads(bundle_json)
+    bundle = FunilExportBundle(
+        periodo_viz=raw["periodo_viz"],
+        periodo_viz_label=raw["periodo_viz_label"],
+        data_ini=date.fromisoformat(raw["data_ini"]),
+        data_fim=date.fromisoformat(raw["data_fim"]),
+        excluir_testes=raw["excluir_testes"],
+        atual=Scenario(**raw["atual"]),
+        simulador=Scenario(**raw["simulador"]),
+        meta=Scenario(**raw["meta"]),
+        calc_atual=raw["calc_atual"],
+        calc_sim=raw["calc_sim"],
+        calc_meta=raw["calc_meta"],
+        impactos=raw["impactos"],
+        periodos_cfg=raw["periodos_cfg"],
+    )
+    return export_funil_excel(bundle)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_export_pdf(cache_key: str, bundle_json: str) -> bytes:
+    import json
+
+    raw = json.loads(bundle_json)
+    bundle = FunilExportBundle(
+        periodo_viz=raw["periodo_viz"],
+        periodo_viz_label=raw["periodo_viz_label"],
+        data_ini=date.fromisoformat(raw["data_ini"]),
+        data_fim=date.fromisoformat(raw["data_fim"]),
+        excluir_testes=raw["excluir_testes"],
+        atual=Scenario(**raw["atual"]),
+        simulador=Scenario(**raw["simulador"]),
+        meta=Scenario(**raw["meta"]),
+        calc_atual=raw["calc_atual"],
+        calc_sim=raw["calc_sim"],
+        calc_meta=raw["calc_meta"],
+        impactos=raw["impactos"],
+        periodos_cfg=raw["periodos_cfg"],
+    )
+    return export_funil_pdf(bundle)
+
+
+def _serialize_export_bundle(bundle: FunilExportBundle) -> str:
+    import json
+
+    return json.dumps({
+        "periodo_viz": bundle.periodo_viz,
+        "periodo_viz_label": bundle.periodo_viz_label,
+        "data_ini": bundle.data_ini.isoformat(),
+        "data_fim": bundle.data_fim.isoformat(),
+        "excluir_testes": bundle.excluir_testes,
+        "atual": asdict(bundle.atual),
+        "simulador": asdict(bundle.simulador),
+        "meta": asdict(bundle.meta),
+        "calc_atual": bundle.calc_atual,
+        "calc_sim": bundle.calc_sim,
+        "calc_meta": bundle.calc_meta,
+        "impactos": bundle.impactos,
+        "periodos_cfg": bundle.periodos_cfg,
+    }, sort_keys=True)
+
+
+def _render_export_popover(bundle: FunilExportBundle) -> None:
+    """Popover de exportação — arquivos só após clique em Preparar."""
+    cache_key = _export_bundle_cache_key(bundle)
+    prepared_key = st.session_state.get("funil_export_prepared_key")
+    with st.popover("Exportar relatório", width="stretch"):
+        if prepared_key != cache_key:
+            st.caption(
+                "Gere CSV, Excel ou PDF sob demanda — não prepara arquivos "
+                "no carregamento inicial."
+            )
+            if st.button(
+                "Preparar exportação",
+                key="funil_export_prepare_btn",
+                width="stretch",
+            ):
+                st.session_state["funil_export_prepared_key"] = cache_key
+                st.rerun()
+            perf_set_export_prepared(False)
+            return
+        perf_set_export_prepared(True)
+        with perf_timed_block("Export"):
+            _render_export_actions(bundle)
+
+
 def _render_export_actions(bundle: FunilExportBundle) -> None:
-    """Botões de download — usado no popover do topo da página."""
+    """Botões de download — chamado após Preparar exportação."""
     stem = _export_file_stem(bundle.data_ini, bundle.data_fim, bundle.periodo_viz)
     st.caption(
         "Período, testes, comparativo Atual/Simulador/Meta, gargalo e prioridades."
     )
+    cache_key = _export_bundle_cache_key(bundle)
+    bundle_json = _serialize_export_bundle(bundle)
     st.download_button(
         "CSV",
-        data=export_funil_csv(bundle),
+        data=_cached_export_csv(cache_key, bundle_json),
         file_name=f"{stem}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
         key="funil_export_csv",
     )
     st.download_button(
         "Excel (.xlsx)",
-        data=export_funil_excel(bundle),
+        data=_cached_export_xlsx(cache_key, bundle_json),
         file_name=f"{stem}.xlsx",
         mime=(
             "application/vnd.openxmlformats-officedocument."
             "spreadsheetml.sheet"
         ),
-        use_container_width=True,
+        width="stretch",
         key="funil_export_xlsx",
     )
     st.download_button(
         "PDF",
-        data=export_funil_pdf(bundle),
+        data=_cached_export_pdf(cache_key, bundle_json),
         file_name=f"{stem}.pdf",
         mime="application/pdf",
-        use_container_width=True,
+        width="stretch",
         key="funil_export_pdf",
     )
 
@@ -3708,7 +3920,7 @@ def _render_referencia_funil_table(df: pd.DataFrame) -> None:
     st.dataframe(
         prepare_referencia_funil_display_df(df),
         hide_index=True,
-        use_container_width=False,
+        width="content",
         column_config=_referencia_funil_col_config(),
     )
 
@@ -3769,14 +3981,14 @@ def _render_referencia_acoes(
     if can_edit_meta:
         b_sim, b_edit, b_meta = st.columns([2, 2, 2], gap="small")
         with b_sim:
-            if st.button("Carregar no Simulador", key=sim_key, use_container_width=True):
+            if st.button("Carregar no Simulador", key=sim_key, width="stretch"):
                 _apply_historico_row_to_sim(_row_for_current_period(row, data_ini, data_fim))
                 st.rerun()
         with b_edit:
             if st.button(
                 "Carregar no Ajuste de meta",
                 key=editor_key,
-                use_container_width=True,
+                width="stretch",
             ):
                 _apply_historico_row_to_meta_editor(
                     _row_for_current_period(row, data_ini, data_fim),
@@ -3784,7 +3996,7 @@ def _render_referencia_acoes(
                 st.session_state["_meta_editor_ref_loaded_msg"] = True
                 st.rerun()
         with b_meta:
-            if st.button("Usar como Meta da tela", key=meta_key, use_container_width=True):
+            if st.button("Usar como Meta da tela", key=meta_key, width="stretch"):
                 scaled = _row_for_current_period(row, data_ini, data_fim)
                 _apply_historico_row_to_meta(scaled)
                 st.session_state["funil_meta_loaded_db_id"] = row.get("meta_db_id")
@@ -3796,7 +4008,7 @@ def _render_referencia_acoes(
     else:
         b_sim, _ = st.columns([2, 4], gap="small")
         with b_sim:
-            if st.button("Carregar no Simulador", key=sim_key, use_container_width=True):
+            if st.button("Carregar no Simulador", key=sim_key, width="stretch"):
                 _apply_historico_row_to_sim(_row_for_current_period(row, data_ini, data_fim))
                 st.rerun()
         st.caption(
@@ -3850,6 +4062,46 @@ def _render_referencia_acoes(
             st.rerun()
 
 
+def _referencia_historico_cache_key(
+    data_ini: date,
+    data_fim: date,
+    excluir_testes: bool,
+) -> str:
+    return f"{data_ini.isoformat()}|{data_fim.isoformat()}|{int(excluir_testes)}"
+
+
+def _referencia_meta_load_key(data_ini: date, data_fim: date) -> str:
+    return f"funil_ref_meta_loaded_{data_ini.isoformat()}_{data_fim.isoformat()}"
+
+
+def _is_referencia_meta_loaded(data_ini: date, data_fim: date) -> bool:
+    return bool(st.session_state.get(_referencia_meta_load_key(data_ini, data_fim)))
+
+
+def _load_referencia_historico_rows(
+    data_ini: date,
+    data_fim: date,
+    excluir_testes: bool,
+) -> list[dict[str, Any]]:
+    """Reutiliza linhas já carregadas no período — evita recargas a cada rerun."""
+    cache_key = _referencia_historico_cache_key(data_ini, data_fim, excluir_testes)
+    if st.session_state.get("funil_historico_cache_key") == cache_key:
+        cached = st.session_state.get("funil_historico_rows")
+        if isinstance(cached, list):
+            return cached
+
+    with perf_timed_block("Referência histórica"):
+        rows = load_funil_historico_referencias(
+            data_fim.isoformat(),
+            data_ini.isoformat(),
+            data_fim.isoformat(),
+            excluir_testes,
+        )
+    st.session_state["funil_historico_rows"] = rows
+    st.session_state["funil_historico_cache_key"] = cache_key
+    return rows
+
+
 def _render_referencia_dados_reais(
     *,
     data_ini: date,
@@ -3857,13 +4109,7 @@ def _render_referencia_dados_reais(
     excluir_testes: bool,
     can_edit_meta: bool,
 ) -> list[dict[str, Any]]:
-    rows = load_funil_historico_referencias(
-        data_fim.isoformat(),
-        data_ini.isoformat(),
-        data_fim.isoformat(),
-        excluir_testes,
-    )
-    st.session_state["funil_historico_rows"] = rows
+    rows = _load_referencia_historico_rows(data_ini, data_fim, excluir_testes)
 
     if not rows:
         st.info("Sem dados históricos disponíveis para os períodos de referência.")
@@ -3980,6 +4226,21 @@ def _render_base_meta_referencia(
         "escolha a origem da referência para Simulador e Meta da tela",
     )
 
+    if not _is_referencia_meta_loaded(data_ini, data_fim):
+        st.caption(
+            "Os períodos de referência para montar meta não carregam automaticamente — "
+            "isso acelera a abertura da página. O Atual e o Benchmark histórico "
+            "acima não são afetados."
+        )
+        if st.button(
+            "Carregar base histórica para definição de meta",
+            key="funil_ref_meta_load_btn",
+            width="stretch",
+        ):
+            st.session_state[_referencia_meta_load_key(data_ini, data_fim)] = True
+            st.rerun()
+        return
+
     opcoes = [_ORIGEM_DADOS_REAIS]
     if is_metas_database_configured():
         opcoes.append(_ORIGEM_METAS_SALVAS)
@@ -4035,7 +4296,7 @@ def _render_meta_cenario_editor(
     if st.button(
         "Carregar Simulador no Ajuste de meta",
         key="meta_cfg_load_from_sim",
-        use_container_width=False,
+        width="content",
         help=(
             "Copia o cenário atual do Simulador para a Meta da tela em modo editor. "
             "Não salva metas oficiais."
@@ -4209,12 +4470,12 @@ def _render_meta_cenario_editor(
     b_sim, b_save, b_reset, _ = st.columns([2, 2, 2, 2], gap="small")
 
     with b_sim:
-        if st.button("Carregar no Simulador", key="meta_cfg_to_sim", use_container_width=True):
+        if st.button("Carregar no Simulador", key="meta_cfg_to_sim", width="stretch"):
             st.session_state["funil_simulador"] = dict(meta_state)
             _clear_funil_widget_keys(sim_only=True)
             st.rerun()
     with b_save:
-        if st.button("Salvar meta oficial", key="meta_cfg_save_db", use_container_width=True):
+        if st.button("Salvar meta oficial", key="meta_cfg_save_db", width="stretch"):
             if not is_metas_database_configured():
                 st.error(
                     "Configure `METAS_DATABASE_URL` no `.env` ou nos Secrets "
@@ -4256,7 +4517,7 @@ def _render_meta_cenario_editor(
                 except Exception as exc:
                     st.error(f"Não foi possível salvar a meta oficial: {exc}")
     with b_reset:
-        if st.button("Restaurar cenário padrão", use_container_width=True):
+        if st.button("Restaurar cenário padrão", width="stretch"):
             _restore_default_meta_for_period(
                 data_ini,
                 data_fim,
@@ -4440,6 +4701,16 @@ ctx = start_page(
     include_period=True,
 )
 
+if perf_debug_enabled():
+    perf_reset_run()
+
+perf_set_context(
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    excluir_testes_aplicacoes=_EXCLUIR_TESTES_APLICACOES,
+)
+perf_mark_milestone("init / auth / start_page")
+
 st.markdown(_FUNIL_CSS, unsafe_allow_html=True)
 
 excluir_testes_aplicacoes = _EXCLUIR_TESTES_APLICACOES
@@ -4515,6 +4786,34 @@ _hist_spec = resolve_historical_base(
 if _hist_spec.summary and not _hist_spec.error:
     st.caption(f"Base: {_hist_spec.summary}.")
 
+perf_set_context(
+    data_ini=ctx.data_ini,
+    data_fim=ctx.data_fim,
+    hist_base_key=hist_base_key,
+    excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+)
+
+_funnel_snapshot: FunnelSnapshot | None = None
+with perf_timed_block("carregamento Atual real"):
+    try:
+        _funnel_snapshot = load_one_page_funnel(
+            ctx.data_ini,
+            ctx.data_fim,
+            excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+        )
+        st.session_state["funil_atual"] = snapshot_to_scenario_dict(_funnel_snapshot)
+    except Exception as e:
+        st.warning(f"Não foi possível carregar o cenário Atual do banco: {e}")
+        st.session_state.setdefault("funil_atual", asdict(_BASE_ATUAL))
+perf_mark_milestone("carregamento Atual real")
+
+if "funil_simulador" not in st.session_state and _funnel_snapshot is not None:
+    st.session_state["funil_simulador"] = snapshot_to_scenario_dict(_funnel_snapshot)
+
+with perf_timed_block("carregamento Meta oficial"):
+    _init_meta_session_for_period(ctx.data_ini, ctx.data_fim, _funnel_snapshot)
+perf_mark_milestone("carregamento Meta oficial")
+
 _benchmark_raw: dict[str, Any] = {}
 _benchmark_metrics: dict[str, dict[str, Any]] | None = None
 if _hist_spec.error:
@@ -4523,14 +4822,15 @@ elif not _hist_spec.ranges:
     _benchmark_raw = {"error": "Nenhum período histórico disponível."}
 else:
     _ranges_json = ranges_to_cache_json(_hist_spec.ranges)
-    with st.spinner("Calculando benchmark histórico…"):
-        _benchmark_raw = compute_funil_benchmark(
-            _hist_spec.hist_ini.isoformat(),
-            _hist_spec.hist_fim.isoformat(),
-            hist_base_key,
-            excluir_testes_aplicacoes,
-            _ranges_json,
-        )
+    with perf_timed_block("Benchmark histórico"):
+        with st.spinner("Calculando benchmark histórico…"):
+            _benchmark_raw = compute_funil_benchmark(
+                _hist_spec.hist_ini.isoformat(),
+                _hist_spec.hist_fim.isoformat(),
+                hist_base_key,
+                excluir_testes_aplicacoes,
+                _ranges_json,
+            )
     _benchmark_raw["summary"] = _hist_spec.summary
     _benchmark_raw["window_detail"] = _hist_spec.window_detail
     if not _benchmark_raw.get("period_windows"):
@@ -4539,23 +4839,7 @@ else:
         )
     if not _benchmark_raw.get("error"):
         _benchmark_metrics = _benchmark_raw.get("metrics")
-
-_funnel_snapshot: FunnelSnapshot | None = None
-try:
-    _funnel_snapshot = load_one_page_funnel(
-        ctx.data_ini,
-        ctx.data_fim,
-        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
-    )
-    st.session_state["funil_atual"] = snapshot_to_scenario_dict(_funnel_snapshot)
-except Exception as e:
-    st.warning(f"Não foi possível carregar o cenário Atual do banco: {e}")
-    st.session_state.setdefault("funil_atual", asdict(_BASE_ATUAL))
-
-if "funil_simulador" not in st.session_state and _funnel_snapshot is not None:
-    st.session_state["funil_simulador"] = snapshot_to_scenario_dict(_funnel_snapshot)
-
-_init_meta_session_for_period(ctx.data_ini, ctx.data_fim, _funnel_snapshot)
+perf_mark_milestone("Benchmark histórico")
 
 if st.session_state.pop("_meta_deleted_reload", False):
     _reload_default_meta_after_db_change(
@@ -4584,7 +4868,7 @@ with c_periodo:
         label_visibility="collapsed",
     ) or "mes"
 with c_reset:
-    if st.button("Resetar simulador", use_container_width=True):
+    if st.button("Resetar simulador", width="stretch"):
         if "funil_simulador" in st.session_state:
             del st.session_state["funil_simulador"]
         _clear_funil_widget_keys(sim_only=True)
@@ -4617,32 +4901,35 @@ section_title(
     "Simulador: em cada etapa escolha «Editar %» ou «Editar vol.» — o outro valor recalcula",
 )
 _ensure_sim_edit_modes()
-atual_s, sim_s, meta_s = _render_vitrine_comparison(
-    periodo,
-    atual_s=atual_s,
-    snapshot=_funnel_snapshot,
-    benchmark_metrics=_benchmark_metrics,
-    pct_recebimento=_pct_rec,
-    meta_pct_recebimento=_meta_pct_rec,
-)
+with perf_timed_block("renderização vitrine comparativa"):
+    atual_s, sim_s, meta_s = _render_vitrine_comparison(
+        periodo,
+        atual_s=atual_s,
+        snapshot=_funnel_snapshot,
+        benchmark_metrics=_benchmark_metrics,
+        pct_recebimento=_pct_rec,
+        meta_pct_recebimento=_meta_pct_rec,
+    )
+perf_mark_milestone("renderização vitrine comparativa")
 
-calc_atual = _calc_atual_para_tela(_funnel_snapshot, atual_s, periodo)
-calc_sim = _calc_exibicao_com_receita(
-    sim_s,
-    periodo,
-    pct_recebimento=_pct_rec,
-    snapshot=_funnel_snapshot,
-    benchmark_metrics=_benchmark_metrics,
-)
-calc_meta = _calc_exibicao_com_receita(
-    meta_s,
-    periodo,
-    pct_recebimento=float(
-        st.session_state.get("funil_meta_pct_recebimento", _meta_pct_rec),
-    ),
-    snapshot=_funnel_snapshot,
-    benchmark_metrics=_benchmark_metrics,
-)
+with perf_timed_block("preparação DataFrames/transforms"):
+    calc_atual = _calc_atual_para_tela(_funnel_snapshot, atual_s, periodo)
+    calc_sim = _calc_exibicao_com_receita(
+        sim_s,
+        periodo,
+        pct_recebimento=_pct_rec,
+        snapshot=_funnel_snapshot,
+        benchmark_metrics=_benchmark_metrics,
+    )
+    calc_meta = _calc_exibicao_com_receita(
+        meta_s,
+        periodo,
+        pct_recebimento=float(
+            st.session_state.get("funil_meta_pct_recebimento", _meta_pct_rec),
+        ),
+        snapshot=_funnel_snapshot,
+        benchmark_metrics=_benchmark_metrics,
+    )
 
 # Gap até a meta — volumes e financeiro.
 section_title(
@@ -4694,15 +4981,23 @@ _export_bundle = _build_export_bundle(
     impactos=impactos,
 )
 with _export_top_slot.container():
-    with st.popover("Exportar relatório", use_container_width=True):
-        _render_export_actions(_export_bundle)
+    _render_export_popover(_export_bundle)
 
-_render_base_meta_referencia(
-    data_ini=ctx.data_ini,
-    data_fim=ctx.data_fim,
-    excluir_testes=excluir_testes_aplicacoes,
-    can_edit_meta=is_metas_editor_authenticated(),
-)
+perf_mark_milestone("renderização seções principais")
+perf_finalize_page(main_sections_only=True)
+
+_ref_loaded = _is_referencia_meta_loaded(ctx.data_ini, ctx.data_fim)
+with perf_timed_block("renderização base meta / editor"):
+    _render_base_meta_referencia(
+        data_ini=ctx.data_ini,
+        data_fim=ctx.data_fim,
+        excluir_testes=excluir_testes_aplicacoes,
+        can_edit_meta=is_metas_editor_authenticated(),
+    )
+
+perf_set_referencia_status(loaded=_ref_loaded, skipped=not _ref_loaded)
+perf_render_panel()
+
 _can_edit_meta = render_metas_editor_gate()
 _render_meta_cenario_editor(
     periodo,

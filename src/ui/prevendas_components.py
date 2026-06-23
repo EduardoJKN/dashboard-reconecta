@@ -373,8 +373,8 @@ def render_top_sdr_interativo(
             cols_map_resumo = [
                 ("#",                       "#"),
                 ("nome_cliente_view",       "Nome do cliente/lead"),
-                ("email_lead",              "E-mail"),
-                ("classificacao_filtro",    "Classificação"),
+                ("email_final_filtro",      "E-mail"),
+                ("classificacao_final_filtro", "Classificação"),
                 ("status_filtro",           "Status reunião"),
                 ("origem_fonte",            "Origem/fonte"),
                 ("data_agendamento",        "Data agendamento"),
@@ -410,7 +410,9 @@ def render_top_sdr_interativo(
                 cols_map_top = [
                     ("#", "#"),
                     ("nome_cliente_view", "Nome do cliente/lead"),
-                    ("email_lead", "E-mail"),
+                    ("email_final_filtro",      "E-mail"),
+                    ("email_lead_filtro",       "E-mail (lead)"),
+                    ("email_crm_filtro",        "E-mail (CRM)"),
                     ("sdr_filtro", "SDR"),
                     ("closer_filtro", "Closer"),
                     ("classificacao_filtro", "Classif. (lead)"),

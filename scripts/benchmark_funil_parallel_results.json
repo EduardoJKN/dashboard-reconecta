@@ -1,0 +1,205 @@
+{
+  "reference_date": "2026-06-22",
+  "results": [
+    {
+      "scenario": "ultimos_7_dias",
+      "period": "2026-06-16->2026-06-22",
+      "sequential": {
+        "atual": 10.135,
+        "benchmark": 9.026,
+        "cold_total": 19.161
+      },
+      "equivalence_ok": true,
+      "equivalence_error": null,
+      "parallel": {
+        "2": {
+          "atual": 5.508,
+          "benchmark": 6.466,
+          "cold_total": 11.973,
+          "warm": 6.016,
+          "gain_pct": 37.5,
+          "fallback": false,
+          "error": null
+        },
+        "3": {
+          "atual": 5.375,
+          "benchmark": 5.798,
+          "cold_total": 11.173,
+          "warm": 5.499,
+          "gain_pct": 41.7,
+          "fallback": false,
+          "error": null
+        },
+        "4": {
+          "atual": 5.125,
+          "benchmark": 5.704,
+          "cold_total": 10.829,
+          "warm": 5.251,
+          "gain_pct": 43.5,
+          "fallback": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "scenario": "mes_atual",
+      "period": "2026-06-01->2026-06-22",
+      "sequential": {
+        "atual": 7.91,
+        "benchmark": 9.721,
+        "cold_total": 17.631
+      },
+      "equivalence_ok": true,
+      "equivalence_error": null,
+      "parallel": {
+        "2": {
+          "atual": 6.163,
+          "benchmark": 7.178,
+          "cold_total": 13.34,
+          "warm": 6.408,
+          "gain_pct": 24.3,
+          "fallback": false,
+          "error": null
+        },
+        "3": {
+          "atual": 5.515,
+          "benchmark": 6.297,
+          "cold_total": 11.812,
+          "warm": 5.523,
+          "gain_pct": 33.0,
+          "fallback": false,
+          "error": null
+        },
+        "4": {
+          "atual": 5.574,
+          "benchmark": 6.151,
+          "cold_total": 11.725,
+          "warm": 5.474,
+          "gain_pct": 33.5,
+          "fallback": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "scenario": "mes_anterior",
+      "period": "2026-05-01->2026-05-31",
+      "sequential": {
+        "atual": 8.332,
+        "benchmark": 10.386,
+        "cold_total": 18.718
+      },
+      "equivalence_ok": true,
+      "equivalence_error": null,
+      "parallel": {
+        "2": {
+          "atual": 6.142,
+          "benchmark": 7.14,
+          "cold_total": 13.282,
+          "warm": 6.48,
+          "gain_pct": 29.0,
+          "fallback": false,
+          "error": null
+        },
+        "3": {
+          "atual": 5.081,
+          "benchmark": 6.536,
+          "cold_total": 11.617,
+          "warm": 5.416,
+          "gain_pct": 37.9,
+          "fallback": false,
+          "error": null
+        },
+        "4": {
+          "atual": 5.294,
+          "benchmark": 6.715,
+          "cold_total": 12.009,
+          "warm": 6.233,
+          "gain_pct": 35.8,
+          "fallback": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "scenario": "recorte_jun_2026",
+      "period": "2026-06-01->2026-06-17",
+      "sequential": {
+        "atual": 8.042,
+        "benchmark": 9.498,
+        "cold_total": 17.54
+      },
+      "equivalence_ok": true,
+      "equivalence_error": null,
+      "parallel": {
+        "2": {
+          "atual": 5.715,
+          "benchmark": 7.497,
+          "cold_total": 13.212,
+          "warm": 6.47,
+          "gain_pct": 24.7,
+          "fallback": false,
+          "error": null
+        },
+        "3": {
+          "atual": 5.747,
+          "benchmark": 6.13,
+          "cold_total": 11.877,
+          "warm": 5.583,
+          "gain_pct": 32.3,
+          "fallback": false,
+          "error": null
+        },
+        "4": {
+          "atual": 5.273,
+          "benchmark": 6.106,
+          "cold_total": 11.38,
+          "warm": 5.225,
+          "gain_pct": 35.1,
+          "fallback": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "scenario": "sem_dados",
+      "period": "2099-01-01->2099-01-07",
+      "sequential": {
+        "atual": 7.726,
+        "benchmark": 8.663,
+        "cold_total": 16.389
+      },
+      "equivalence_ok": true,
+      "equivalence_error": null,
+      "parallel": {
+        "2": {
+          "atual": 6.532,
+          "benchmark": 7.256,
+          "cold_total": 13.788,
+          "warm": 6.466,
+          "gain_pct": 15.9,
+          "fallback": false,
+          "error": null
+        },
+        "3": {
+          "atual": 5.836,
+          "benchmark": 5.961,
+          "cold_total": 11.797,
+          "warm": 5.199,
+          "gain_pct": 28.0,
+          "fallback": false,
+          "error": null
+        },
+        "4": {
+          "atual": 5.283,
+          "benchmark": 5.888,
+          "cold_total": 11.171,
+          "warm": 4.944,
+          "gain_pct": 31.8,
+          "fallback": false,
+          "error": null
+        }
+      }
+    }
+  ]
+}

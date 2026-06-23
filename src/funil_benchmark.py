@@ -2,14 +2,33 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import statistics
+import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
 import streamlit as st
 
-from src.one_page_funnel import FunnelSnapshot, load_one_page_funnel
+from src.one_page_funnel import (
+    FunnelSnapshot,
+    build_funnel_snapshot_for_window,
+    build_funnel_snapshot_for_window_with_legacy,
+    legacy_df_for_benchmark_period,
+    load_benchmark_shared_frames,
+    load_one_page_funnel,
+)
+from src.repositories import (
+    benchmark_periods_json,
+    funil_legacy_benchmark_batch_v2_enabled,
+    get_one_page_legacy_diario_benchmark_batch_v2,
+)
+
+logger = logging.getLogger("reconecta.funil_benchmark")
+BENCHMARK_VERSION_V1 = "v1"
+BENCHMARK_VERSION_V2 = "v2"
 
 # Período histórico (independente do filtro principal da página).
 HISTORICO_CUSTOM_KEY = "custom"
@@ -391,45 +410,27 @@ class FunilBenchmarkResult:
     error: str | None = None
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def compute_funil_benchmark(
+def _aggregate_benchmark_result(
+    *,
+    hist_ini: date,
+    hist_fim: date,
     hist_ini_iso: str,
     hist_fim_iso: str,
     days_key: str,
-    excluir_testes_aplicacoes: bool,
-    ranges_json: str = "",
+    ranges: list[tuple[date, date, str]],
+    snapshots: list[FunnelSnapshot],
+    labels: list[str],
+    loaded_ranges: list[tuple[date, date, str]],
+    benchmark_version: str,
+    benchmark_repo_queries: int,
+    funnel_loads_avoided: int,
+    benchmark_fallback: str | None = None,
+    legacy_benchmark_mode: str | None = None,
+    legacy_benchmark_time: float | None = None,
+    legacy_benchmark_queries: int | None = None,
+    legacy_benchmark_fallback: str | None = None,
+    legacy_benchmark_batch_enabled: bool | None = None,
 ) -> dict[str, Any]:
-    """Carrega snapshots por recorte e agrega estatísticas (média, melhor/pior, p25/p75)."""
-    hist_ini = date.fromisoformat(hist_ini_iso)
-    hist_fim = date.fromisoformat(hist_fim_iso)
-    if ranges_json:
-        raw_ranges = json.loads(ranges_json)
-        ranges = [
-            (date.fromisoformat(ini), date.fromisoformat(fim), label)
-            for ini, fim, label in raw_ranges
-        ]
-    else:
-        ranges = month_ranges_in_period(hist_ini, hist_fim)
-
-    snapshots: list[FunnelSnapshot] = []
-    labels: list[str] = []
-    loaded_ranges: list[tuple[date, date, str]] = []
-
-    for ini, fim, label in ranges:
-        try:
-            snapshots.append(
-                load_one_page_funnel(
-                    ini,
-                    fim,
-                    excluir_testes_aplicacoes=excluir_testes_aplicacoes,
-                )
-            )
-            short_label = _period_short_label(ini)
-            labels.append(short_label)
-            loaded_ranges.append((ini, fim, short_label))
-        except Exception:
-            continue
-
     metrics: dict[str, dict[str, Any]] = {}
     for key, _label, higher_is_better, kind in BENCHMARK_TAG_SPECS:
         vals = [_metric_from_snapshot(s, key) for s in snapshots]
@@ -444,8 +445,6 @@ def compute_funil_benchmark(
     error: str | None = None
     if not snapshots:
         error = "Sem dados históricos no intervalo."
-    elif available < requested:
-        error = None
 
     return {
         "hist_ini": hist_ini_iso,
@@ -458,7 +457,494 @@ def compute_funil_benchmark(
             loaded_ranges if loaded_ranges else ranges,
         ),
         "error": error,
+        "benchmark_version": benchmark_version,
+        "benchmark_windows": requested,
+        "benchmark_repo_queries": benchmark_repo_queries,
+        "funnel_loads_avoided": funnel_loads_avoided,
+        "benchmark_fallback": benchmark_fallback,
+        "legacy_benchmark_mode": legacy_benchmark_mode,
+        "legacy_benchmark_time": legacy_benchmark_time,
+        "legacy_benchmark_queries": legacy_benchmark_queries,
+        "legacy_benchmark_fallback": legacy_benchmark_fallback,
+        "legacy_benchmark_batch_enabled": legacy_benchmark_batch_enabled,
     }
+
+
+def _parse_benchmark_ranges(
+    hist_ini: date,
+    hist_fim: date,
+    ranges_json: str,
+) -> list[tuple[date, date, str]]:
+    if ranges_json:
+        raw_ranges = json.loads(ranges_json)
+        return [
+            (date.fromisoformat(ini), date.fromisoformat(fim), label)
+            for ini, fim, label in raw_ranges
+        ]
+    return month_ranges_in_period(hist_ini, hist_fim)
+
+
+def _collect_snapshots_v1(
+    ranges: list[tuple[date, date, str]],
+    *,
+    excluir_testes_aplicacoes: bool,
+) -> tuple[list[FunnelSnapshot], list[str], list[tuple[date, date, str]]]:
+    snapshots: list[FunnelSnapshot] = []
+    labels: list[str] = []
+    loaded_ranges: list[tuple[date, date, str]] = []
+    for ini, fim, _label in ranges:
+        try:
+            snapshots.append(
+                load_one_page_funnel(
+                    ini,
+                    fim,
+                    excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+                )
+            )
+            short_label = _period_short_label(ini)
+            labels.append(short_label)
+            loaded_ranges.append((ini, fim, short_label))
+        except Exception:
+            continue
+    return snapshots, labels, loaded_ranges
+
+
+def _collect_snapshots_v2_per_window(
+    ranges: list[tuple[date, date, str]],
+    *,
+    excluir_testes_aplicacoes: bool,
+    df_prev_wide,
+    df_exec_wide,
+    df_inv_wide,
+    repo_queries_start: int = 3,
+) -> tuple[list[FunnelSnapshot], list[str], list[tuple[date, date, str]], int]:
+    from src.funil_parallel_load import funil_parallel_loads_enabled
+
+    if funil_parallel_loads_enabled() and ranges:
+        try:
+            return _collect_snapshots_v2_per_window_parallel(
+                ranges,
+                excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+                df_prev_wide=df_prev_wide,
+                df_exec_wide=df_exec_wide,
+                df_inv_wide=df_inv_wide,
+                repo_queries_start=repo_queries_start,
+            )
+        except Exception as exc:
+            _record_parallel_benchmark_fallback("benchmark_legacy", str(exc))
+
+    repo_queries = repo_queries_start
+    snapshots: list[FunnelSnapshot] = []
+    labels: list[str] = []
+    loaded_ranges: list[tuple[date, date, str]] = []
+    for ini, fim, _label in ranges:
+        try:
+            snapshots.append(
+                build_funnel_snapshot_for_window(
+                    ini,
+                    fim,
+                    excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+                    df_prev_wide=df_prev_wide,
+                    df_exec_wide=df_exec_wide,
+                    df_inv_wide=df_inv_wide,
+                )
+            )
+            repo_queries += 1  # legacy diário por janela
+            short_label = _period_short_label(ini)
+            labels.append(short_label)
+            loaded_ranges.append((ini, fim, short_label))
+        except Exception:
+            continue
+    return snapshots, labels, loaded_ranges, repo_queries
+
+
+def _collect_snapshots_v2_per_window_parallel(
+    ranges: list[tuple[date, date, str]],
+    *,
+    excluir_testes_aplicacoes: bool,
+    df_prev_wide,
+    df_exec_wide,
+    df_inv_wide,
+    repo_queries_start: int = 3,
+) -> tuple[list[FunnelSnapshot], list[str], list[tuple[date, date, str]], int]:
+    from src.funil_parallel_load import fetch_legacy_windows_parallel
+
+    legacy_rows, report = fetch_legacy_windows_parallel(
+        ranges,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    _record_parallel_benchmark_legacy_perf(report, legacy_rows)
+
+    legacy_by_range = {(ini, fim): df for ini, fim, df, _v, _fb in legacy_rows}
+    repo_queries = repo_queries_start + len(legacy_rows)
+    snapshots: list[FunnelSnapshot] = []
+    labels: list[str] = []
+    loaded_ranges: list[tuple[date, date, str]] = []
+    for ini, fim, _label in ranges:
+        df_one = legacy_by_range.get((ini, fim))
+        if df_one is None:
+            continue
+        try:
+            snapshots.append(
+                build_funnel_snapshot_for_window_with_legacy(
+                    ini,
+                    fim,
+                    df_one=df_one,
+                    df_prev_wide=df_prev_wide,
+                    df_exec_wide=df_exec_wide,
+                    df_inv_wide=df_inv_wide,
+                )
+            )
+            short_label = _period_short_label(ini)
+            labels.append(short_label)
+            loaded_ranges.append((ini, fim, short_label))
+        except Exception:
+            continue
+    return snapshots, labels, loaded_ranges, repo_queries
+
+
+def _record_parallel_benchmark_legacy_perf(report, legacy_rows) -> None:
+    try:
+        from src.funil_reconecta_perf import (
+            perf_debug_enabled,
+            perf_record_legacy_run,
+            perf_record_parallel_load,
+        )
+
+        if not perf_debug_enabled():
+            return
+        perf_record_parallel_load(
+            scope="benchmark_legacy",
+            enabled=True,
+            workers=report.workers,
+            mode=report.mode,
+            fallback=False,
+            total_seconds=report.total_seconds,
+            groups=[{"name": g.name, "seconds": g.seconds} for g in report.groups],
+        )
+        for i, (ini, fim, df, ver, fb) in enumerate(legacy_rows):
+            task_sec = next(
+                (
+                    g.seconds
+                    for g in report.groups
+                    if g.name == f"legacy_{i}"
+                ),
+                0.0,
+            )
+            perf_record_legacy_run(
+                ini,
+                fim,
+                task_sec,
+                version=ver,
+                rows=len(df),
+                fallback_error=fb,
+            )
+    except Exception:
+        pass
+
+
+def _record_parallel_benchmark_fallback(scope: str, error: str) -> None:
+    try:
+        from src.funil_reconecta_perf import perf_debug_enabled, perf_record_parallel_load
+
+        if perf_debug_enabled():
+            perf_record_parallel_load(
+                scope=scope,
+                enabled=True,
+                workers=0,
+                mode="sequential_fallback",
+                fallback=True,
+                fallback_error=error,
+                total_seconds=0.0,
+                groups=[],
+            )
+    except Exception:
+        pass
+
+
+def _legacy_benchmark_meta(
+    *,
+    mode: str,
+    queries: int,
+    seconds: float | None = None,
+    fallback: str | None = None,
+    batch_enabled: bool | None = None,
+) -> dict[str, Any]:
+    if batch_enabled is None:
+        batch_enabled = mode == "batch" and fallback is None
+    return {
+        "legacy_benchmark_mode": mode,
+        "legacy_benchmark_time": seconds,
+        "legacy_benchmark_queries": queries,
+        "legacy_benchmark_fallback": fallback,
+        "legacy_benchmark_batch_enabled": bool(batch_enabled),
+    }
+
+
+def _perf_record_legacy_benchmark_batch(legacy_meta: dict[str, Any]) -> None:
+    try:
+        from src.funil_reconecta_perf import (
+            perf_debug_enabled,
+            perf_record_legacy_benchmark_batch,
+        )
+
+        if perf_debug_enabled():
+            perf_record_legacy_benchmark_batch(
+                mode=str(legacy_meta.get("legacy_benchmark_mode") or "per_window"),
+                seconds=legacy_meta.get("legacy_benchmark_time"),
+                queries=int(legacy_meta.get("legacy_benchmark_queries") or 0),
+                fallback_error=legacy_meta.get("legacy_benchmark_fallback"),
+            )
+    except Exception:
+        pass
+
+
+def _collect_snapshots_v2(
+    ranges: list[tuple[date, date, str]],
+    *,
+    hist_ini: date,
+    hist_fim: date,
+    excluir_testes_aplicacoes: bool,
+) -> tuple[
+    list[FunnelSnapshot],
+    list[str],
+    list[tuple[date, date, str]],
+    int,
+    dict[str, Any],
+]:
+    df_prev_wide, df_exec_wide, df_inv_wide = load_benchmark_shared_frames(
+        hist_ini.isoformat(),
+        hist_fim.isoformat(),
+    )
+    n = len(ranges)
+    repo_queries = 3  # prev, exec, inv
+
+    if funil_legacy_benchmark_batch_v2_enabled() and n > 0:
+        try:
+            t0 = time.perf_counter()
+            periods_json = benchmark_periods_json(ranges)
+            df_legacy_batch = get_one_page_legacy_diario_benchmark_batch_v2(
+                periods_json,
+                excluir_testes_aplicacoes,
+            )
+            batch_seconds = time.perf_counter() - t0
+            snapshots: list[FunnelSnapshot] = []
+            labels: list[str] = []
+            loaded_ranges: list[tuple[date, date, str]] = []
+            for i, (ini, fim, _label) in enumerate(ranges):
+                try:
+                    df_one = legacy_df_for_benchmark_period(df_legacy_batch, str(i))
+                    snapshots.append(
+                        build_funnel_snapshot_for_window_with_legacy(
+                            ini,
+                            fim,
+                            df_one=df_one,
+                            df_prev_wide=df_prev_wide,
+                            df_exec_wide=df_exec_wide,
+                            df_inv_wide=df_inv_wide,
+                        )
+                    )
+                    short_label = _period_short_label(ini)
+                    labels.append(short_label)
+                    loaded_ranges.append((ini, fim, short_label))
+                except Exception:
+                    continue
+            if snapshots:
+                legacy_meta = _legacy_benchmark_meta(
+                    mode="batch",
+                    queries=1,
+                    seconds=batch_seconds,
+                    batch_enabled=True,
+                )
+                _perf_record_legacy_benchmark_batch(legacy_meta)
+                return (
+                    snapshots,
+                    labels,
+                    loaded_ranges,
+                    repo_queries + 1,
+                    legacy_meta,
+                )
+            logger.warning(
+                "Legacy benchmark batch sem snapshots — fallback por janela",
+            )
+        except Exception as exc:
+            logger.exception("Legacy benchmark batch falhou — fallback por janela")
+            fallback_msg = str(exc)
+            snapshots, labels, loaded_ranges, repo_queries = (
+                _collect_snapshots_v2_per_window(
+                    ranges,
+                    excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+                    df_prev_wide=df_prev_wide,
+                    df_exec_wide=df_exec_wide,
+                    df_inv_wide=df_inv_wide,
+                )
+            )
+            legacy_meta = _legacy_benchmark_meta(
+                mode="per_window",
+                queries=n,
+                fallback=fallback_msg,
+                batch_enabled=True,
+            )
+            return snapshots, labels, loaded_ranges, repo_queries, legacy_meta
+
+    snapshots, labels, loaded_ranges, repo_queries = _collect_snapshots_v2_per_window(
+        ranges,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+        df_prev_wide=df_prev_wide,
+        df_exec_wide=df_exec_wide,
+        df_inv_wide=df_inv_wide,
+    )
+    legacy_meta = _legacy_benchmark_meta(
+        mode="per_window",
+        queries=n,
+        batch_enabled=False,
+    )
+    return snapshots, labels, loaded_ranges, repo_queries, legacy_meta
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def compute_funil_benchmark_v1(
+    hist_ini_iso: str,
+    hist_fim_iso: str,
+    days_key: str,
+    excluir_testes_aplicacoes: bool,
+    ranges_json: str = "",
+) -> dict[str, Any]:
+    """v1 — loop de `load_one_page_funnel` por janela (4 consultas × N janelas)."""
+    hist_ini = date.fromisoformat(hist_ini_iso)
+    hist_fim = date.fromisoformat(hist_fim_iso)
+    ranges = _parse_benchmark_ranges(hist_ini, hist_fim, ranges_json)
+    snapshots, labels, loaded_ranges = _collect_snapshots_v1(
+        ranges,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    n = len(ranges)
+    return _aggregate_benchmark_result(
+        hist_ini=hist_ini,
+        hist_fim=hist_fim,
+        hist_ini_iso=hist_ini_iso,
+        hist_fim_iso=hist_fim_iso,
+        days_key=days_key,
+        ranges=ranges,
+        snapshots=snapshots,
+        labels=labels,
+        loaded_ranges=loaded_ranges,
+        benchmark_version=BENCHMARK_VERSION_V1,
+        benchmark_repo_queries=4 * n,
+        funnel_loads_avoided=0,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def compute_funil_benchmark_v2(
+    hist_ini_iso: str,
+    hist_fim_iso: str,
+    days_key: str,
+    excluir_testes_aplicacoes: bool,
+    ranges_json: str = "",
+) -> dict[str, Any]:
+    """v2 — fontes compartilhadas no intervalo amplo + legacy por janela."""
+    hist_ini = date.fromisoformat(hist_ini_iso)
+    hist_fim = date.fromisoformat(hist_fim_iso)
+    ranges = _parse_benchmark_ranges(hist_ini, hist_fim, ranges_json)
+    snapshots, labels, loaded_ranges, repo_queries, legacy_meta = _collect_snapshots_v2(
+        ranges,
+        hist_ini=hist_ini,
+        hist_fim=hist_fim,
+        excluir_testes_aplicacoes=excluir_testes_aplicacoes,
+    )
+    n = len(ranges)
+    return _aggregate_benchmark_result(
+        hist_ini=hist_ini,
+        hist_fim=hist_fim,
+        hist_ini_iso=hist_ini_iso,
+        hist_fim_iso=hist_fim_iso,
+        days_key=days_key,
+        ranges=ranges,
+        snapshots=snapshots,
+        labels=labels,
+        loaded_ranges=loaded_ranges,
+        benchmark_version=BENCHMARK_VERSION_V2,
+        benchmark_repo_queries=repo_queries,
+        funnel_loads_avoided=max(n * 3, 0),
+        **legacy_meta,
+    )
+
+
+def benchmark_v2_enabled() -> bool:
+    flag = os.environ.get("FUNIL_BENCHMARK_V2", "1").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
+
+
+def compute_funil_benchmark(
+    hist_ini_iso: str,
+    hist_fim_iso: str,
+    days_key: str,
+    excluir_testes_aplicacoes: bool,
+    ranges_json: str = "",
+) -> dict[str, Any]:
+    """Benchmark ativo — v2 batched com fallback para v1."""
+    use_v2 = benchmark_v2_enabled()
+    if use_v2:
+        try:
+            result = compute_funil_benchmark_v2(
+                hist_ini_iso,
+                hist_fim_iso,
+                days_key,
+                excluir_testes_aplicacoes,
+                ranges_json,
+            )
+            _perf_record_benchmark(result, used_v2=True, fallback_error=None)
+            return result
+        except Exception as exc:
+            logger.exception("Benchmark v2 falhou — fallback v1")
+            result = compute_funil_benchmark_v1(
+                hist_ini_iso,
+                hist_fim_iso,
+                days_key,
+                excluir_testes_aplicacoes,
+                ranges_json,
+            )
+            result["benchmark_fallback"] = str(exc)
+            _perf_record_benchmark(result, used_v2=False, fallback_error=str(exc))
+            return result
+    result = compute_funil_benchmark_v1(
+        hist_ini_iso,
+        hist_fim_iso,
+        days_key,
+        excluir_testes_aplicacoes,
+        ranges_json,
+    )
+    _perf_record_benchmark(result, used_v2=False, fallback_error=None)
+    return result
+
+
+def _perf_record_benchmark(
+    result: dict[str, Any],
+    *,
+    used_v2: bool,
+    fallback_error: str | None,
+) -> None:
+    try:
+        from src.funil_reconecta_perf import perf_record_benchmark_run
+
+        perf_record_benchmark_run(
+            version=str(result.get("benchmark_version", BENCHMARK_VERSION_V1)),
+            windows=int(result.get("benchmark_windows") or 0),
+            repo_queries=int(result.get("benchmark_repo_queries") or 0),
+            funnel_loads_avoided=int(result.get("funnel_loads_avoided") or 0),
+            used_v2=used_v2,
+            fallback_error=fallback_error,
+            legacy_benchmark_mode=result.get("legacy_benchmark_mode"),
+            legacy_benchmark_time=result.get("legacy_benchmark_time"),
+            legacy_benchmark_queries=result.get("legacy_benchmark_queries"),
+            legacy_benchmark_fallback=result.get("legacy_benchmark_fallback"),
+            legacy_benchmark_batch_enabled=result.get(
+                "legacy_benchmark_batch_enabled",
+            ),
+        )
+    except Exception:
+        pass
 
 
 def ranges_to_cache_json(ranges: list[tuple[date, date, str]]) -> str:

@@ -473,6 +473,43 @@ def prevendas_ranking_sdr_oficiais(df_sdr: pd.DataFrame,
 # Detalhe linha-a-linha (prevendas_leads_detalhe_diario.sql) — helpers usados
 # pela tabela "Detalhamento Top SDR" da Visão Geral Pré-vendas.
 # ---------------------------------------------------------------------------
+_CLASSIF_VALIDAS = frozenset({"Atua +12", "Atua -12", "Não atua"})
+_EMAIL_VAZIOS = frozenset({"", "none", "nan", "null", "<na>", "nat"})
+
+
+def _email_normalizado(val) -> str:
+    """Trata None, NaN, 'None', 'nan', null e string vazia como ausente."""
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    if s.lower() in _EMAIL_VAZIOS:
+        return ""
+    return s
+
+
+def email_final_com_prioridade_crm(crm, lead) -> str:
+    """E-mail exibido no detalhe: CRM/deal > lead/ext > vazio."""
+    c = _email_normalizado(crm)
+    l = _email_normalizado(lead)
+    return c or l or ""
+
+
+def classificacao_final_com_prioridade_crm(crm, lead) -> str:
+    """Classificação exibida no detalhe: CRM válido > lead/ext > Sem classificação."""
+    c = (str(crm) if crm is not None else "").strip()
+    l = (str(lead) if lead is not None else "").strip()
+    if c in _CLASSIF_VALIDAS:
+        return c
+    if l in _CLASSIF_VALIDAS:
+        return l
+    return "Sem classificação"
+
+
 def prevendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
     """Enriquecimento mínimo do detalhe diário para máscaras estáveis.
 
@@ -502,6 +539,26 @@ def prevendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
         _series_or_default("classificacao_crm", "")
         .fillna("").astype(str).str.strip()
     )
+    # Coluna resumida "Classificação" nas tabelas de detalhe (Vendas e
+    # Pré-vendas): prioriza CRM (`lead_classification`) quando válido;
+    # `classificacao_filtro` permanece só como origem/lead para auditoria.
+    out["classificacao_final_filtro"] = [
+        classificacao_final_com_prioridade_crm(c, l)
+        for c, l in zip(
+            out["classificacao_crm_filtro"],
+            out["classificacao_filtro"],
+        )
+    ]
+    out["email_lead_filtro"] = (
+        _series_or_default("email_lead", "").map(_email_normalizado)
+    )
+    out["email_crm_filtro"] = (
+        _series_or_default("email_crm", "").map(_email_normalizado)
+    )
+    out["email_final_filtro"] = [
+        email_final_com_prioridade_crm(c, l)
+        for c, l in zip(out["email_crm_filtro"], out["email_lead_filtro"])
+    ]
     out["sdr_filtro"] = (
         _series_or_default("sdr", "")
         .fillna("").astype(str).str.strip().replace("", "Sem SDR")

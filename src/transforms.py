@@ -708,7 +708,8 @@ def vendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
 
     Aplica a normalização canônica (mesmas colunas `*_filtro` que
     `prevendas_normalizar_detalhe` produz: classificacao_filtro,
-    classificacao_crm_filtro, sdr_filtro, closer_filtro, status_filtro,
+    classificacao_crm_filtro, classificacao_final_filtro, email_lead_filtro,
+    email_crm_filtro, email_final_filtro, sdr_filtro, closer_filtro, status_filtro,
     tipo_registro_base_filtro, nome_cliente_view) e acrescenta
     `time_vendas_filtro` — disponível após a inclusão de `time_vendas` em
     prevendas_leads_detalhe_diario.sql.
@@ -868,6 +869,8 @@ def vendas_detalhe_filtrar_closer(df_det_norm: pd.DataFrame,
     via zoho_users (com fallback pro owner_id quando não pareia); o detalhe
     expõe `closer_filtro` com a mesma fórmula (fallback 'Sem Closer'). Match
     string-exato funciona pra todos os closers cadastrados em zoho_users.
+    Também produz `classificacao_final_filtro` (CRM > lead/ext) para a
+    coluna resumida "Classificação" nas tabelas de detalhe.
     Edge case: um closer cujo `executiva_vendas` é ID sem user pareado
     aparece no ranking como o ID raw e no detalhe como 'Sem Closer' — essa
     linha do ranking não terá detalhe disponível (caller deve sinalizar).

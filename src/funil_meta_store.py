@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import text
+import streamlit as st
 
 from src.metas_db import (
     MetasDatabaseNotConfiguredError,
@@ -26,6 +27,8 @@ from src.one_page_funnel import project_receita_from_montante
 PERIODO_TIPO_META_MENSAL = "mes"
 PERIODO_TIPO_PADRAO = PERIODO_TIPO_META_MENSAL
 LEGACY_PERIODO_TIPOS = ("filtro_global",)
+
+_META_CACHE_TTL = 600
 
 _MESES_PT = (
     "janeiro", "fevereiro", "março", "abril", "maio", "junho",
@@ -742,6 +745,32 @@ def load_latest_meta_funil(
     periodo_fim: date,
 ) -> dict[str, Any] | None:
     """Última meta oficial salva para o período (`bi.vw_metas_funil_reconecta`)."""
+    return _load_latest_meta_funil_cached(
+        periodo_tipo,
+        periodo_inicio.isoformat(),
+        periodo_fim.isoformat(),
+    )
+
+
+@st.cache_data(ttl=_META_CACHE_TTL, show_spinner=False)
+def _load_latest_meta_funil_cached(
+    periodo_tipo: str,
+    periodo_inicio_iso: str,
+    periodo_fim_iso: str,
+) -> dict[str, Any] | None:
+    return _load_latest_meta_funil_from_db(
+        periodo_tipo,
+        date.fromisoformat(periodo_inicio_iso),
+        date.fromisoformat(periodo_fim_iso),
+    )
+
+
+def _load_latest_meta_funil_from_db(
+    periodo_tipo: str,
+    periodo_inicio: date,
+    periodo_fim: date,
+) -> dict[str, Any] | None:
+    """Leitura direta no banco de metas (sem cache Streamlit)."""
     if not is_metas_database_configured():
         return None
     params = {
@@ -762,6 +791,35 @@ def load_metas_funil_for_period(
     periodo_fim: date,
 ) -> list[dict[str, Any]]:
     """Todas as metas oficiais do período, da mais recente para a mais antiga."""
+    return list(
+        _load_metas_funil_for_period_cached(
+            periodo_tipo,
+            periodo_inicio.isoformat(),
+            periodo_fim.isoformat(),
+        )
+    )
+
+
+@st.cache_data(ttl=_META_CACHE_TTL, show_spinner=False)
+def _load_metas_funil_for_period_cached(
+    periodo_tipo: str,
+    periodo_inicio_iso: str,
+    periodo_fim_iso: str,
+) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        _load_metas_funil_for_period_from_db(
+            periodo_tipo,
+            date.fromisoformat(periodo_inicio_iso),
+            date.fromisoformat(periodo_fim_iso),
+        )
+    )
+
+
+def _load_metas_funil_for_period_from_db(
+    periodo_tipo: str,
+    periodo_inicio: date,
+    periodo_fim: date,
+) -> list[dict[str, Any]]:
     if not is_metas_database_configured():
         return []
     sql = """
@@ -785,6 +843,46 @@ ORDER BY
     if df.empty:
         return []
     return [_meta_historico_row_from_db(raw) for _, raw in df.iterrows()]
+
+
+def invalidate_funil_meta_load_cache() -> None:
+    """Limpa cache de leitura após salvar/excluir meta oficial."""
+    _load_latest_meta_funil_cached.clear()
+    _load_metas_funil_for_period_cached.clear()
+
+
+def meta_latest_cache_hits() -> int | None:
+    """Hits do cache de `load_latest_meta_funil` (None se indisponível)."""
+    try:
+        return int(_load_latest_meta_funil_cached.get_stats().hits)
+    except (AttributeError, TypeError):
+        return None
+
+
+def meta_cache_hit_between(before: int | None, after: int | None) -> bool:
+    if before is None or after is None:
+        return False
+    return after > before
+
+
+def meta_load_cache_stats() -> dict[str, int]:
+    """Hits/misses do cache de leitura (para benchmark/debug)."""
+    try:
+        latest = _load_latest_meta_funil_cached.get_stats()
+        period = _load_metas_funil_for_period_cached.get_stats()
+        return {
+            "latest_hits": int(latest.hits),
+            "latest_misses": int(latest.misses),
+            "period_hits": int(period.hits),
+            "period_misses": int(period.misses),
+        }
+    except (AttributeError, TypeError):
+        return {
+            "latest_hits": 0,
+            "latest_misses": 0,
+            "period_hits": 0,
+            "period_misses": 0,
+        }
 
 
 def load_latest_meta_funil_mensal(
@@ -931,6 +1029,7 @@ def save_funil_meta(
             "criado_por": criado_por,
         },
     )
+    invalidate_funil_meta_load_cache()
     return {
         "nome_meta": nome_meta,
         "versao_meta": versao_meta,
@@ -959,7 +1058,10 @@ def delete_meta_funil(meta_id: int) -> int:
         raise MetasDatabaseNotConfiguredError(
             "METAS_DATABASE_URL não configurada."
         )
-    return execute_metas_sql_rowcount(_DELETE_SQL, {"id": int(meta_id)})
+    deleted = execute_metas_sql_rowcount(_DELETE_SQL, {"id": int(meta_id)})
+    if deleted > 0:
+        invalidate_funil_meta_load_cache()
+    return deleted
 
 
 __all__ = [
@@ -979,6 +1081,10 @@ __all__ = [
     "load_metas_funil_for_period",
     "load_metas_funil_mensal_for_selection",
     "load_metas_funil_historico",
+    "invalidate_funil_meta_load_cache",
+    "meta_latest_cache_hits",
+    "meta_cache_hit_between",
+    "meta_load_cache_stats",
     "monthly_save_bounds",
     "prepare_meta_row_for_selection",
     "resolve_meta_mensal_proporcao",
