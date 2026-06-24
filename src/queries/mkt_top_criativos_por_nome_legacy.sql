@@ -1,31 +1,41 @@
--- =============================================================================
--- Top Criativos por nome normalizado (ad_name / utm_content)
---
--- Mídia: fdw_reconecta.anuncios agregada por LOWER(TRIM(ad_name)).
--- Leads reais: ext_reconecta.leads (mesmo universo que lp_form no Railway;
--- o role do app costuma não ter permissão em lp_form.leads).
--- Aplicações: fdw_reconecta.typeform_aplicacoes cruzadas pelos e-mails dos
--- leads do criativo (utm_content = ad_name), mesma regra do One Page legado.
--- Join APÓS agregação — evita multiplicar leads por múltiplos ad_id.
---
--- Classificação (valores reais no banco, case-insensitive):
---   Atua +12, Atua -12, Não atua, ...
--- Leads: e-mail único por dia (COUNT DISTINCT chave email|dia); data = timestamp::date.
--- Aplicações: dedupe e-mail+dia (mais recente), depois COUNT DISTINCT e-mail.
---
--- CPL real = investimento / leads_reais
--- CPL +12  = investimento / leads_mais_12
--- CPL Meta = investimento / leads_meta   (actions_lead somado no grão)
---
--- CP5: um único scan filtrado em ext_reconecta.leads (leads + leads_emails).
--- CP7: CTEs MATERIALIZED — dedupe typeform e joins avaliados uma vez (hash join).
--- =============================================================================
-WITH leads_base AS MATERIALIZED (
+-- Cópia legada (duplo scan em ext_reconecta.leads) — somente para validação de equivalência.
+-- Não usar em produção; ver mkt_top_criativos_por_nome.sql.
+WITH leads AS (
     SELECT
         LOWER(TRIM(l.utm_content)) AS ad_name_norm,
-        LOWER(TRIM(l.email))       AS email_norm,
-        l.timestamp::date          AS lead_date,
-        LOWER(TRIM(l.classificado)) AS classificado_norm
+
+        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.timestamp::date)::text))
+            AS leads_reais,
+
+        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.timestamp::date)::text)) FILTER (
+            WHERE LOWER(TRIM(l.classificado)) = 'atua +12'
+        ) AS leads_mais_12,
+
+        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.timestamp::date)::text)) FILTER (
+            WHERE LOWER(TRIM(l.classificado)) = 'atua -12'
+        ) AS leads_menos_12,
+
+        COUNT(DISTINCT (LOWER(TRIM(l.email)) || '|' || (l.timestamp::date)::text)) FILTER (
+            WHERE LOWER(TRIM(l.classificado)) = 'não atua'
+        ) AS leads_nao_atua
+
+    FROM ext_reconecta.leads l
+    WHERE l.timestamp::date BETWEEN :data_ini AND :data_fim
+      AND l.utm_content IS NOT NULL
+      AND TRIM(l.utm_content) <> ''
+      AND l.email IS NOT NULL
+      AND TRIM(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    GROUP BY LOWER(TRIM(l.utm_content))
+),
+
+leads_emails AS (
+    SELECT DISTINCT
+        LOWER(TRIM(l.utm_content)) AS ad_name_norm,
+        LOWER(TRIM(l.email))       AS email_norm
     FROM ext_reconecta.leads l
     WHERE l.timestamp::date BETWEEN :data_ini AND :data_fim
       AND l.utm_content IS NOT NULL
@@ -38,37 +48,7 @@ WITH leads_base AS MATERIALIZED (
       AND lower(l.email) NOT LIKE '%reconecta%'
 ),
 
-leads AS MATERIALIZED (
-    SELECT
-        ad_name_norm,
-
-        COUNT(DISTINCT (email_norm || '|' || lead_date::text))
-            AS leads_reais,
-
-        COUNT(DISTINCT (email_norm || '|' || lead_date::text)) FILTER (
-            WHERE classificado_norm = 'atua +12'
-        ) AS leads_mais_12,
-
-        COUNT(DISTINCT (email_norm || '|' || lead_date::text)) FILTER (
-            WHERE classificado_norm = 'atua -12'
-        ) AS leads_menos_12,
-
-        COUNT(DISTINCT (email_norm || '|' || lead_date::text)) FILTER (
-            WHERE classificado_norm = 'não atua'
-        ) AS leads_nao_atua
-
-    FROM leads_base
-    GROUP BY ad_name_norm
-),
-
--- E-mails dos leads por criativo (período) — base do cruzamento com typeform.
-leads_emails AS MATERIALIZED (
-    SELECT DISTINCT ad_name_norm, email_norm
-    FROM leads_base
-),
-
--- Aplicações deduplicadas por e-mail+dia (mais recente); data = created_at::date.
-aplicacoes_dedup AS MATERIALIZED (
+aplicacoes_dedup AS (
     SELECT
         email_norm,
         classificado_norm
@@ -94,7 +74,7 @@ aplicacoes_dedup AS MATERIALIZED (
     WHERE rn = 1
 ),
 
-aplicacoes AS MATERIALIZED (
+aplicacoes AS (
     SELECT
         le.ad_name_norm,
         COUNT(DISTINCT a.email_norm) AS aplicacoes,
@@ -111,7 +91,7 @@ aplicacoes AS MATERIALIZED (
     GROUP BY le.ad_name_norm
 ),
 
-midia AS MATERIALIZED (
+midia AS (
     SELECT
         LOWER(TRIM(ad_name)) AS ad_name_norm,
         MAX(ad_name)         AS ad_name,

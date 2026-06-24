@@ -1,3 +1,4 @@
+-- Baseline pré-CP7 (CP5/CP6) — somente validação/benchmark. Produção: mkt_top_criativos_por_nome.sql.
 -- =============================================================================
 -- Top Criativos por nome normalizado (ad_name / utm_content)
 --
@@ -18,9 +19,8 @@
 -- CPL Meta = investimento / leads_meta   (actions_lead somado no grão)
 --
 -- CP5: um único scan filtrado em ext_reconecta.leads (leads + leads_emails).
--- CP7: CTEs MATERIALIZED — dedupe typeform e joins avaliados uma vez (hash join).
 -- =============================================================================
-WITH leads_base AS MATERIALIZED (
+WITH leads_base AS (
     SELECT
         LOWER(TRIM(l.utm_content)) AS ad_name_norm,
         LOWER(TRIM(l.email))       AS email_norm,
@@ -38,7 +38,7 @@ WITH leads_base AS MATERIALIZED (
       AND lower(l.email) NOT LIKE '%reconecta%'
 ),
 
-leads AS MATERIALIZED (
+leads AS (
     SELECT
         ad_name_norm,
 
@@ -62,13 +62,13 @@ leads AS MATERIALIZED (
 ),
 
 -- E-mails dos leads por criativo (período) — base do cruzamento com typeform.
-leads_emails AS MATERIALIZED (
+leads_emails AS (
     SELECT DISTINCT ad_name_norm, email_norm
     FROM leads_base
 ),
 
 -- Aplicações deduplicadas por e-mail+dia (mais recente); data = created_at::date.
-aplicacoes_dedup AS MATERIALIZED (
+aplicacoes_dedup AS (
     SELECT
         email_norm,
         classificado_norm
@@ -94,7 +94,7 @@ aplicacoes_dedup AS MATERIALIZED (
     WHERE rn = 1
 ),
 
-aplicacoes AS MATERIALIZED (
+aplicacoes AS (
     SELECT
         le.ad_name_norm,
         COUNT(DISTINCT a.email_norm) AS aplicacoes,
@@ -111,7 +111,7 @@ aplicacoes AS MATERIALIZED (
     GROUP BY le.ad_name_norm
 ),
 
-midia AS MATERIALIZED (
+midia AS (
     SELECT
         LOWER(TRIM(ad_name)) AS ad_name_norm,
         MAX(ad_name)         AS ad_name,

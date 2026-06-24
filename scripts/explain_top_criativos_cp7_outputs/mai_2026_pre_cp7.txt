@@ -1,0 +1,42 @@
+Sort  (cost=342.64..342.65 rows=1 width=392) (actual time=374940.305..374940.331 rows=290 loops=1)
+  Sort Key: (COALESCE((count(DISTINCT (((leads_base.email_norm || '|'::text) || (leads_base.lead_date)::text)))), '0'::bigint)) DESC NULLS LAST, (sum(anuncios.spend)) DESC NULLS LAST
+  Sort Method: quicksort  Memory: 112kB
+  CTE leads_base
+    ->  Foreign Scan on leads l  (cost=100.00..115.20 rows=1 width=100) (actual time=3.613..127.332 rows=1380 loops=1)
+          Filter: ((("timestamp")::date >= '2026-05-01'::date) AND (("timestamp")::date <= '2026-05-31'::date))
+          Rows Removed by Filter: 5570
+  ->  Nested Loop Left Join  (cost=215.98..227.44 rows=1 width=392) (actual time=2027.712..374938.505 rows=290 loops=1)
+        Join Filter: (leads_base_1.ad_name_norm = (lower(TRIM(BOTH FROM anuncios.ad_name))))
+        Rows Removed by Join Filter: 22508
+        ->  Nested Loop Left Join  (cost=100.06..111.37 rows=1 width=272) (actual time=169.500..470.017 rows=290 loops=1)
+              Join Filter: (leads_base.ad_name_norm = (lower(TRIM(BOTH FROM anuncios.ad_name))))
+              Rows Removed by Join Filter: 28363
+              ->  Foreign Scan  (cost=100.03..111.24 rows=1 width=240) (actual time=36.068..47.194 rows=290 loops=1)
+                    Relations: Aggregate on (anuncios)
+              ->  GroupAggregate  (cost=0.03..0.11 rows=1 width=64) (actual time=0.475..1.441 rows=98 loops=290)
+                    Group Key: leads_base.ad_name_norm
+                    ->  Sort  (cost=0.03..0.04 rows=1 width=100) (actual time=0.457..0.605 rows=1183 loops=290)
+                          Sort Key: leads_base.ad_name_norm, (((leads_base.email_norm || '|'::text) || (leads_base.lead_date)::text))
+                          Sort Method: quicksort  Memory: 239kB
+                          ->  CTE Scan on leads_base  (cost=0.00..0.02 rows=1 width=100) (actual time=3.622..128.621 rows=1380 loops=1)
+        ->  GroupAggregate  (cost=115.92..116.02 rows=1 width=56) (actual time=2.346..1291.179 rows=78 loops=290)
+              Group Key: leads_base_1.ad_name_norm
+              ->  Nested Loop  (cost=115.92..115.99 rows=1 width=96) (actual time=0.258..1287.326 rows=725 loops=290)
+                    Join Filter: (leads_base_1.email_norm = sub.email_norm)
+                    Rows Removed by Join Filter: 866632
+                    ->  Unique  (cost=0.03..0.04 rows=1 width=64) (actual time=0.010..1.168 rows=1179 loops=290)
+                          ->  Sort  (cost=0.03..0.04 rows=1 width=64) (actual time=0.009..0.549 rows=1232 loops=290)
+                                Sort Key: leads_base_1.ad_name_norm, leads_base_1.email_norm
+                                Sort Method: quicksort  Memory: 170kB
+                                ->  CTE Scan on leads_base leads_base_1  (cost=0.00..0.02 rows=1 width=64) (actual time=0.002..0.158 rows=1380 loops=1)
+                    ->  Subquery Scan on sub  (cost=115.89..115.94 rows=1 width=64) (actual time=0.001..1.022 rows=736 loops=341801)
+                          Filter: (sub.rn = 1)
+                          ->  WindowAgg  (cost=115.89..115.92 rows=1 width=84) (actual time=0.001..0.930 rows=736 loops=341801)
+                                Run Condition: (row_number() OVER (?) <= 1)
+                                ->  Sort  (cost=115.89..115.89 rows=1 width=262) (actual time=0.000..0.068 rows=974 loops=341801)
+                                      Sort Key: (lower(TRIM(BOTH FROM ta.email))), ((ta.created_at)::date), ta.created_at DESC
+                                      Sort Method: quicksort  Memory: 98kB
+                                      ->  Foreign Scan on typeform_aplicacoes ta  (cost=100.00..115.88 rows=1 width=262) (actual time=6.992..26.165 rows=974 loops=1)
+                                            Filter: (dados_completos IS TRUE)
+Planning Time: 0.808 ms
+Execution Time: 374950.700 ms

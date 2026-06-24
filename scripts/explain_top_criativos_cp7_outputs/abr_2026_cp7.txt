@@ -1,0 +1,54 @@
+Sort  (cost=342.73..342.74 rows=1 width=392) (actual time=309.102..309.132 rows=242 loops=1)
+  Sort Key: (COALESCE(l.leads_reais, '0'::bigint)) DESC NULLS LAST, m.investimento DESC NULLS LAST
+  Sort Method: quicksort  Memory: 91kB
+  CTE leads_base
+    ->  Foreign Scan on leads l_1  (cost=100.00..115.20 rows=1 width=100) (actual time=2.806..120.344 rows=847 loops=1)
+          Filter: ((("timestamp")::date >= '2026-04-01'::date) AND (("timestamp")::date <= '2026-04-30'::date))
+          Rows Removed by Filter: 6103
+  CTE leads
+    ->  GroupAggregate  (cost=0.03..0.11 rows=1 width=64) (actual time=123.688..124.980 rows=106 loops=1)
+          Group Key: leads_base.ad_name_norm
+          ->  Sort  (cost=0.03..0.04 rows=1 width=100) (actual time=123.654..123.915 rows=847 loops=1)
+                Sort Key: leads_base.ad_name_norm, (((leads_base.email_norm || '|'::text) || (leads_base.lead_date)::text))
+                Sort Method: quicksort  Memory: 138kB
+                ->  CTE Scan on leads_base  (cost=0.00..0.02 rows=1 width=100) (actual time=2.814..121.531 rows=847 loops=1)
+  CTE leads_emails
+    ->  HashAggregate  (cost=0.03..0.04 rows=1 width=64) (actual time=1.088..1.540 rows=826 loops=1)
+          Group Key: leads_base_1.ad_name_norm, leads_base_1.email_norm
+          Batches: 1  Memory Usage: 193kB
+          ->  CTE Scan on leads_base leads_base_1  (cost=0.00..0.02 rows=1 width=64) (actual time=0.001..0.332 rows=847 loops=1)
+  CTE aplicacoes_dedup
+    ->  Subquery Scan on sub  (cost=115.89..115.94 rows=1 width=64) (actual time=22.213..23.170 rows=701 loops=1)
+          Filter: (sub.rn = 1)
+          ->  WindowAgg  (cost=115.89..115.92 rows=1 width=84) (actual time=22.211..23.072 rows=701 loops=1)
+                Run Condition: (row_number() OVER (?) <= 1)
+                ->  Sort  (cost=115.89..115.89 rows=1 width=262) (actual time=22.187..22.271 rows=766 loops=1)
+                      Sort Key: (lower(TRIM(BOTH FROM ta.email))), ((ta.created_at)::date), ta.created_at DESC
+                      Sort Method: quicksort  Memory: 82kB
+                      ->  Foreign Scan on typeform_aplicacoes ta  (cost=100.00..115.88 rows=1 width=262) (actual time=6.408..20.770 rows=766 loops=1)
+                            Filter: (dados_completos IS TRUE)
+  CTE aplicacoes
+    ->  GroupAggregate  (cost=0.06..0.10 rows=1 width=56) (actual time=133.819..134.536 rows=92 loops=1)
+          Group Key: le.ad_name_norm
+          ->  Sort  (cost=0.06..0.07 rows=1 width=96) (actual time=133.741..133.813 rows=743 loops=1)
+                Sort Key: le.ad_name_norm, a_1.email_norm
+                Sort Method: quicksort  Memory: 94kB
+                ->  Nested Loop  (cost=0.00..0.05 rows=1 width=96) (actual time=23.367..132.185 rows=743 loops=1)
+                      Join Filter: (le.email_norm = a_1.email_norm)
+                      Rows Removed by Join Filter: 578283
+                      ->  CTE Scan on leads_emails le  (cost=0.00..0.02 rows=1 width=64) (actual time=1.118..2.120 rows=826 loops=1)
+                      ->  CTE Scan on aplicacoes_dedup a_1  (cost=0.00..0.02 rows=1 width=64) (actual time=0.027..0.089 rows=701 loops=826)
+  CTE midia
+    ->  Foreign Scan  (cost=100.03..111.24 rows=1 width=240) (actual time=33.497..39.735 rows=242 loops=1)
+          Relations: Aggregate on (anuncios)
+  ->  Nested Loop Left Join  (cost=0.00..0.12 rows=1 width=392) (actual time=293.321..308.649 rows=242 loops=1)
+        Join Filter: (a.ad_name_norm = m.ad_name_norm)
+        Rows Removed by Join Filter: 22231
+        ->  Nested Loop Left Join  (cost=0.00..0.05 rows=1 width=272) (actual time=158.706..170.035 rows=242 loops=1)
+              Join Filter: (l.ad_name_norm = m.ad_name_norm)
+              Rows Removed by Join Filter: 25614
+              ->  CTE Scan on midia m  (cost=0.00..0.02 rows=1 width=240) (actual time=33.503..40.040 rows=242 loops=1)
+              ->  CTE Scan on leads l  (cost=0.00..0.02 rows=1 width=64) (actual time=0.511..0.527 rows=106 loops=242)
+        ->  CTE Scan on aplicacoes a  (cost=0.00..0.02 rows=1 width=56) (actual time=0.553..0.564 rows=92 loops=242)
+Planning Time: 1.358 ms
+Execution Time: 313.929 ms

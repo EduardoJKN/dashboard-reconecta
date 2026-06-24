@@ -66,12 +66,14 @@ _VINC = "__vinculados__"
 _SEM = "__sem_criativo_identificado__"
 
 PERIODS: list[tuple[str, date, date]] = [
+    ("ultimos_7_dias", date(2026, 6, 17), date(2026, 6, 23)),
+    ("mes_atual_jun", date(2026, 6, 1), date(2026, 6, 23)),
+    ("mes_anterior_mai", date(2026, 5, 1), date(2026, 5, 31)),
+    ("jun_2026_parcial", date(2026, 6, 1), date(2026, 6, 15)),
+    ("sem_dados_2020", date(2020, 1, 1), date(2020, 1, 7)),
     ("abr_2026_mes", date(2026, 4, 1), date(2026, 4, 30)),
     ("abr_parcial_15", date(2026, 4, 1), date(2026, 4, 15)),
     ("mar_2026_mes", date(2026, 3, 1), date(2026, 3, 31)),
-    ("fev_2026_mes", date(2026, 2, 1), date(2026, 2, 28)),
-    ("abr_dia_10", date(2026, 4, 10), date(2026, 4, 10)),
-    ("sem_dados_2020", date(2020, 1, 1), date(2020, 1, 7)),
     ("sem_vendas_futuro", date(2030, 1, 1), date(2030, 1, 31)),
     ("cross_mar_abr", date(2026, 3, 15), date(2026, 4, 15)),
 ]

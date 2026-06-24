@@ -905,23 +905,24 @@ def _render_top12(
             if perf_debug_enabled():
                 st.caption(f"Detalhe técnico: {top_err}")
 
-        if not df_top_nome.empty:
-            top = criativos_top_por_nome_ranking(
-                df,
-                df_top_nome,
-                df_resultados_filtered,
-                sort_by=sort_field,
-                ascending=ascending,
-                top_n=12,
-            )
-        else:
-            top = criativos_ranking(
-                df,
-                sort_by=sort_field,
-                ascending=ascending,
-                top_n=12,
-                df_resultados=df_resultados_filtered,
-            )
+        with perf_timed_block("Top 12 ranking (pandas)", page=PAGE_CREATIVES):
+            if not df_top_nome.empty:
+                top = criativos_top_por_nome_ranking(
+                    df,
+                    df_top_nome,
+                    df_resultados_filtered,
+                    sort_by=sort_field,
+                    ascending=ascending,
+                    top_n=12,
+                )
+            else:
+                top = criativos_ranking(
+                    df,
+                    sort_by=sort_field,
+                    ascending=ascending,
+                    top_n=12,
+                    df_resultados=df_resultados_filtered,
+                )
     except Exception as exc:
         logger.exception("Falha na secao Top 12")
         st.error(
@@ -947,13 +948,14 @@ def _render_top12(
     if top.empty:
         st.info("Nenhum criativo com investimento no período para os filtros aplicados.")
     else:
-        rows = top.to_dict("records")
-        for i in range(0, len(rows), 4):
-            cols_grid = st.columns(4, gap="small")
-            for col, row in zip(cols_grid, rows[i:i + 4]):
-                with col:
-                    st.markdown(_creative_card_html(row), unsafe_allow_html=True)
-        _render_resultado_atribuido_top12(top)
+        with perf_timed_block("Top 12 cards (render)", page=PAGE_CREATIVES):
+            rows = top.to_dict("records")
+            for i in range(0, len(rows), 4):
+                cols_grid = st.columns(4, gap="small")
+                for col, row in zip(cols_grid, rows[i:i + 4]):
+                    with col:
+                        st.markdown(_creative_card_html(row), unsafe_allow_html=True)
+            _render_resultado_atribuido_top12(top)
 
 
 def _render_comparar_criativos(ctx: PageContext, df: pd.DataFrame) -> None:
@@ -1496,7 +1498,8 @@ def main() -> None:
 
     # --- Distribuicoes (memoria) ---
     if not df.empty:
-        _render_distribuicoes(df)
+        with perf_timed_block("Distribuicoes (pandas+charts)", page=PAGE_CREATIVES):
+            _render_distribuicoes(df)
 
     # --- Top 12 (deferido) ---
     _render_top12(ctx, df, df_res_f)

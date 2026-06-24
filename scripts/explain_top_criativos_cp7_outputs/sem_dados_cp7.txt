@@ -1,0 +1,46 @@
+Sort  (cost=342.73..342.74 rows=1 width=392) (actual time=2.374..2.383 rows=0 loops=1)
+  Sort Key: (COALESCE(l.leads_reais, '0'::bigint)) DESC NULLS LAST, m.investimento DESC NULLS LAST
+  Sort Method: quicksort  Memory: 25kB
+  CTE leads_base
+    ->  Foreign Scan on leads l_1  (cost=100.00..115.20 rows=1 width=100) (never executed)
+          Filter: ((("timestamp")::date >= '2020-01-01'::date) AND (("timestamp")::date <= '2020-01-07'::date))
+  CTE leads
+    ->  GroupAggregate  (cost=0.03..0.11 rows=1 width=64) (never executed)
+          Group Key: leads_base.ad_name_norm
+          ->  Sort  (cost=0.03..0.04 rows=1 width=100) (never executed)
+                Sort Key: leads_base.ad_name_norm, (((leads_base.email_norm || '|'::text) || (leads_base.lead_date)::text))
+                ->  CTE Scan on leads_base  (cost=0.00..0.02 rows=1 width=100) (never executed)
+  CTE leads_emails
+    ->  HashAggregate  (cost=0.03..0.04 rows=1 width=64) (never executed)
+          Group Key: leads_base_1.ad_name_norm, leads_base_1.email_norm
+          ->  CTE Scan on leads_base leads_base_1  (cost=0.00..0.02 rows=1 width=64) (never executed)
+  CTE aplicacoes_dedup
+    ->  Subquery Scan on sub  (cost=115.89..115.94 rows=1 width=64) (never executed)
+          Filter: (sub.rn = 1)
+          ->  WindowAgg  (cost=115.89..115.92 rows=1 width=84) (never executed)
+                Run Condition: (row_number() OVER (?) <= 1)
+                ->  Sort  (cost=115.89..115.89 rows=1 width=262) (never executed)
+                      Sort Key: (lower(TRIM(BOTH FROM ta.email))), ((ta.created_at)::date), ta.created_at DESC
+                      ->  Foreign Scan on typeform_aplicacoes ta  (cost=100.00..115.88 rows=1 width=262) (never executed)
+                            Filter: (dados_completos IS TRUE)
+  CTE aplicacoes
+    ->  GroupAggregate  (cost=0.06..0.10 rows=1 width=56) (never executed)
+          Group Key: le.ad_name_norm
+          ->  Sort  (cost=0.06..0.07 rows=1 width=96) (never executed)
+                Sort Key: le.ad_name_norm, a_1.email_norm
+                ->  Nested Loop  (cost=0.00..0.05 rows=1 width=96) (never executed)
+                      Join Filter: (le.email_norm = a_1.email_norm)
+                      ->  CTE Scan on leads_emails le  (cost=0.00..0.02 rows=1 width=64) (never executed)
+                      ->  CTE Scan on aplicacoes_dedup a_1  (cost=0.00..0.02 rows=1 width=64) (never executed)
+  CTE midia
+    ->  Foreign Scan  (cost=100.03..111.24 rows=1 width=240) (actual time=2.362..2.362 rows=0 loops=1)
+          Relations: Aggregate on (anuncios)
+  ->  Nested Loop Left Join  (cost=0.00..0.12 rows=1 width=392) (actual time=2.367..2.368 rows=0 loops=1)
+        Join Filter: (a.ad_name_norm = m.ad_name_norm)
+        ->  Nested Loop Left Join  (cost=0.00..0.05 rows=1 width=272) (actual time=2.366..2.367 rows=0 loops=1)
+              Join Filter: (l.ad_name_norm = m.ad_name_norm)
+              ->  CTE Scan on midia m  (cost=0.00..0.02 rows=1 width=240) (actual time=2.365..2.365 rows=0 loops=1)
+              ->  CTE Scan on leads l  (cost=0.00..0.02 rows=1 width=64) (never executed)
+        ->  CTE Scan on aplicacoes a  (cost=0.00..0.02 rows=1 width=56) (never executed)
+Planning Time: 0.830 ms
+Execution Time: 4.367 ms

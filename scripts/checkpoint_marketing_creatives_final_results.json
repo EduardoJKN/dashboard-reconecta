@@ -1,0 +1,215 @@
+[
+  {
+    "scenario": "ultimos_7_dias",
+    "data_ini": "2026-06-17",
+    "data_fim": "2026-06-23",
+    "visual_ok": true,
+    "checks": {
+      "sem_erro_streamlit": true,
+      "distribuicoes_1x_status": true,
+      "distribuicoes_1x_quality": true,
+      "distrib_timer_1x": true,
+      "top12_1x": true,
+      "comparar_1x": true,
+      "ordem_blocos": true,
+      "expander_auditoria": true,
+      "expander_perf": true,
+      "metric_cards_html": true,
+      "plotly_charts": true
+    },
+    "metrics": {
+      "page_total_seconds": 14.825,
+      "kpi_render_seconds": 6.5957,
+      "selector_render_seconds": 9.4501,
+      "funil_render_seconds": 12.5941,
+      "top12_render_seconds": 13.9067,
+      "p1_block": 6.3422,
+      "funil_block": 2.842,
+      "distrib_block": 0.0713,
+      "top12_sql_block": 0.846,
+      "top12_pandas_block": 0.3455,
+      "top12_render_block": 0.0134,
+      "top_nome_query": 0.8459,
+      "comparar_query": 0.767,
+      "query_count": 11
+    },
+    "titles_order": [
+      "Performance Meta",
+      "Funil do criativo selecionado",
+      "Por status",
+      "Por quality ranking",
+      "Top 12 criativos",
+      "Comparar criativos"
+    ]
+  },
+  {
+    "scenario": "abr_2026",
+    "data_ini": "2026-04-01",
+    "data_fim": "2026-04-30",
+    "visual_ok": true,
+    "checks": {
+      "sem_erro_streamlit": true,
+      "distribuicoes_1x_status": true,
+      "distribuicoes_1x_quality": true,
+      "distrib_timer_1x": true,
+      "top12_1x": true,
+      "comparar_1x": true,
+      "ordem_blocos": true,
+      "expander_auditoria": true,
+      "expander_perf": true,
+      "metric_cards_html": true,
+      "plotly_charts": true
+    },
+    "metrics": {
+      "page_total_seconds": 13.8821,
+      "kpi_render_seconds": 5.1465,
+      "selector_render_seconds": 8.1083,
+      "funil_render_seconds": 11.3643,
+      "top12_render_seconds": 12.6544,
+      "p1_block": 5.1423,
+      "funil_block": 2.9504,
+      "distrib_block": 0.041,
+      "top12_sql_block": 0.9742,
+      "top12_pandas_block": 0.2547,
+      "top12_render_block": 0.0116,
+      "top_nome_query": 0.974,
+      "comparar_query": 0.926,
+      "query_count": 11
+    },
+    "titles_order": [
+      "Performance Meta",
+      "Funil do criativo selecionado",
+      "Por status",
+      "Por quality ranking",
+      "Top 12 criativos",
+      "Comparar criativos"
+    ]
+  },
+  {
+    "scenario": "mai_2026",
+    "data_ini": "2026-05-01",
+    "data_fim": "2026-05-31",
+    "visual_ok": true,
+    "checks": {
+      "sem_erro_streamlit": true,
+      "distribuicoes_1x_status": true,
+      "distribuicoes_1x_quality": true,
+      "distrib_timer_1x": true,
+      "top12_1x": true,
+      "comparar_1x": true,
+      "ordem_blocos": true,
+      "expander_auditoria": true,
+      "expander_perf": true,
+      "metric_cards_html": true,
+      "plotly_charts": true
+    },
+    "metrics": {
+      "page_total_seconds": 12.9536,
+      "kpi_render_seconds": 3.5119,
+      "selector_render_seconds": 6.7513,
+      "funil_render_seconds": 10.09,
+      "top12_render_seconds": 11.501,
+      "p1_block": 3.5071,
+      "funil_block": 3.2294,
+      "distrib_block": 0.0416,
+      "top12_sql_block": 0.9977,
+      "top12_pandas_block": 0.352,
+      "top12_render_block": 0.0113,
+      "top_nome_query": 0.9976,
+      "comparar_query": 1.0974,
+      "query_count": 11
+    },
+    "titles_order": [
+      "Performance Meta",
+      "Funil do criativo selecionado",
+      "Por status",
+      "Por quality ranking",
+      "Top 12 criativos",
+      "Comparar criativos"
+    ]
+  },
+  {
+    "scenario": "jun_2026_parcial",
+    "data_ini": "2026-06-01",
+    "data_fim": "2026-06-15",
+    "visual_ok": true,
+    "checks": {
+      "sem_erro_streamlit": true,
+      "distribuicoes_1x_status": true,
+      "distribuicoes_1x_quality": true,
+      "distrib_timer_1x": true,
+      "top12_1x": true,
+      "comparar_1x": true,
+      "ordem_blocos": true,
+      "expander_auditoria": true,
+      "expander_perf": true,
+      "metric_cards_html": true,
+      "plotly_charts": true
+    },
+    "metrics": {
+      "page_total_seconds": 11.3726,
+      "kpi_render_seconds": 3.0794,
+      "selector_render_seconds": 5.7554,
+      "funil_render_seconds": 8.9548,
+      "top12_render_seconds": 10.3257,
+      "p1_block": 3.0752,
+      "funil_block": 2.6653,
+      "distrib_block": 0.0378,
+      "top12_sql_block": 0.9361,
+      "top12_pandas_block": 0.3757,
+      "top12_render_block": 0.0121,
+      "top_nome_query": 0.9359,
+      "comparar_query": 0.8409,
+      "query_count": 11
+    },
+    "titles_order": [
+      "Performance Meta",
+      "Funil do criativo selecionado",
+      "Por status",
+      "Por quality ranking",
+      "Top 12 criativos",
+      "Comparar criativos"
+    ]
+  },
+  {
+    "scenario": "sem_dados",
+    "data_ini": "2020-01-01",
+    "data_fim": "2020-01-07",
+    "visual_ok": true,
+    "checks": {
+      "sem_erro_streamlit": true,
+      "distribuicoes_1x_status": true,
+      "distribuicoes_1x_quality": true,
+      "distrib_timer_1x": true,
+      "top12_1x": true,
+      "comparar_1x": true,
+      "ordem_blocos": true,
+      "expander_auditoria": true,
+      "expander_perf": true,
+      "metric_cards_html": true,
+      "plotly_charts": true
+    },
+    "metrics": {
+      "page_total_seconds": 5.0905,
+      "kpi_render_seconds": 2.6217,
+      "selector_render_seconds": null,
+      "funil_render_seconds": null,
+      "top12_render_seconds": 4.4204,
+      "p1_block": 2.6178,
+      "funil_block": 1.0274,
+      "distrib_block": null,
+      "top12_sql_block": 0.6572,
+      "top12_pandas_block": 0.0008,
+      "top12_render_block": null,
+      "top_nome_query": 0.6571,
+      "comparar_query": 0.6656,
+      "query_count": 7
+    },
+    "titles_order": [
+      "Performance Meta",
+      "Funil do criativo selecionado",
+      "Top 12 criativos",
+      "Comparar criativos"
+    ]
+  }
+]
