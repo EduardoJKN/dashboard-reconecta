@@ -4,6 +4,7 @@ import streamlit as st
 from src.repositories import (
     get_executivas,
     get_executivas_churn_pos_venda,
+    get_executivas_comparecimento_ajustado,
     get_executivas_funil_agendamentos,
     get_executivas_lead_in_triagem,
     get_executivas_oficiais,
@@ -24,6 +25,13 @@ from src.transforms import (
     churn_pos_kpis,
     churn_pos_ranking,
     churn_pos_venda_aplicar_cadastro,
+    comparecimento_ajustado_bundle,
+    comparecimento_ajustado_filtrar_conferencia,
+    comparecimento_ajustado_filtrar_executiva,
+    comparecimento_ajustado_merge_ranking,
+    comparecimento_ajustado_validacao,
+    COMPARECIMENTO_AJUSTADO_HELP,
+    COMPARECIMENTO_CONFERENCIA_CLASSIF_OPCOES,
     executivas_churn_agregar_por_executiva,
     executivas_churn_filtrar_closer,
     executivas_churn_filtrar_recorte,
@@ -205,6 +213,28 @@ _df_churn_recorte = executivas_churn_filtrar_recorte(
 )
 _churn_funil_total = executivas_churn_total(_df_churn_recorte)
 
+# Comparecimento ajustado (teste) — activities com flags; não substitui a view.
+try:
+    _df_comp_aj_raw = get_executivas_comparecimento_ajustado(
+        ctx.data_ini, ctx.data_fim,
+    )
+except Exception:
+    _df_comp_aj_raw = pd.DataFrame()
+_times_comp_aj = list(ctx.selections.get("times") or [])
+_df_comp_aj_raw = cancelamentos_pos_filtrar_times(_df_comp_aj_raw, _times_comp_aj)
+_comp_aj_bundle = comparecimento_ajustado_bundle(
+    _df_comp_aj_raw,
+    _df_oficiais,
+)
+_kpi_comp_aj = _comp_aj_bundle["kpis"]
+_df_comp_aj = _comp_aj_bundle["linhas"]
+_comp_aj_agg = _comp_aj_bundle["agg"]
+_comp_aj_debug = _comp_aj_bundle["debug"]
+_comp_aj_debug_horario = _comp_aj_bundle["debug_horario"]
+_comp_aj_resumo_ocorridas = _comp_aj_bundle["resumo_ocorridas"]
+_comp_aj_conferencia = _comp_aj_bundle["conferencia"]
+_comp_aj_validacao = _comp_aj_bundle["validacao"]
+
 # ---------------------------------------------------------------------------
 # Seletor local de classificação (NÃO usa ctx.apply_filters — o sistema
 # global filtra linhas; aqui o que muda é a coluna lida em cada métrica).
@@ -334,14 +364,223 @@ with f2:
         int_br(agen_v),
         qual_split=_funil_qual_split,
     )
-with f3: metric_card_v2("Reunião Concluída", int_br(comp_v))
-with f4: metric_card_v2("Reunião Cancelada", int_br(k["cancelados"]))
+with f3:
+    _comp_bd: list[tuple[str, str]] = [
+        ("Concluídas no Zoho", int_br(_kpi_comp_aj["comparecimento_zoho"])),
+        (
+            "Agendadas c/ horário encerrado",
+            f"+{int_br(_kpi_comp_aj['agendadas_horario_encerrado'])}",
+        ),
+        (
+            "Em andamento",
+            f"{int_br(_kpi_comp_aj['agendadas_em_andamento'])} fora do total",
+        ),
+        (
+            "Futuras",
+            f"{int_br(_kpi_comp_aj['agendadas_futuras'])} fora do total",
+        ),
+    ]
+    metric_card_v2(
+        "Reunião Concluída",
+        int_br(_kpi_comp_aj["comparecimento_ajustado"]),
+        hint=f"Regra view (Zoho): {int_br(comp_v)} · teste operacional",
+        help=COMPARECIMENTO_AJUSTADO_HELP,
+        breakdown=_comp_bd,
+        accent=True,
+    )
+with f4:
+    _cancel_bd: list[tuple[str, str]] = [
+        ("No-show", int_br(_kpi_comp_aj["noshow"])),
+        ("Canceladas", int_br(_kpi_comp_aj["canceladas"])),
+    ]
+    metric_card_v2(
+        "Reunião Cancelada",
+        int_br(_kpi_comp_aj["reuniao_cancelada_total"]),
+        hint=f"Regra view: {int_br(k['cancelados'])}",
+        breakdown=_cancel_bd,
+    )
 with f5: metric_card_v2("Clientes Cancelados", int_br(_churn_funil_total))
 with f6: metric_card_v2("Ganhos", int_br(vend_v))
 with f7: metric_card_v2(
     "Perdidos", int_br(k["perdidos"]),
     hint=None if is_todas else "total geral · sem quebra por classif.",
 )
+
+with st.expander(
+    "Debug comparecimento ajustado (teste)",
+    expanded=False,
+):
+    _agora_dbg = _kpi_comp_aj.get("agora_brt")
+    st.markdown(
+        f"**agora_brt (comparação):** "
+        f"`{_agora_dbg.strftime('%d/%m/%Y %H:%M:%S') if _agora_dbg is not None else '—'}` "
+        f"· `start_datetime` / `end_datetime`: timestamp without time zone (horário BRT)"
+    )
+
+    if _comp_aj_debug_horario["qtd_violacoes_futuro"] > 0:
+        st.error(
+            f"Violação temporal: {_comp_aj_debug_horario['qtd_violacoes_futuro']} "
+            "reunião(ões) Agendada(s) com início futuro mal classificada(s)."
+        )
+        st.dataframe(
+            _comp_aj_debug_horario["violacoes_futuro"],
+            use_container_width=True,
+            hide_index=True,
+        )
+    if _comp_aj_debug_horario.get("qtd_violacoes_andamento_como_encerrado", 0) > 0:
+        st.error(
+            f"Violação temporal: "
+            f"{_comp_aj_debug_horario['qtd_violacoes_andamento_como_encerrado']} "
+            "reunião(ões) em andamento classificada(s) como horário encerrado."
+        )
+        st.dataframe(
+            _comp_aj_debug_horario.get("violacoes_andamento_como_encerrado", pd.DataFrame()),
+            use_container_width=True,
+            hide_index=True,
+        )
+    if _comp_aj_debug_horario.get("qtd_violacoes_encerrado_como_andamento", 0) > 0:
+        st.error(
+            f"Violação temporal: "
+            f"{_comp_aj_debug_horario['qtd_violacoes_encerrado_como_andamento']} "
+            "reunião(ões) com horário encerrado classificada(s) como em andamento."
+        )
+        st.dataframe(
+            _comp_aj_debug_horario.get("violacoes_encerrado_como_andamento", pd.DataFrame()),
+            use_container_width=True,
+            hide_index=True,
+        )
+    if _comp_aj_debug_horario.get("qtd_violacoes_passado_como_futuro", 0) > 0:
+        st.error(
+            f"Violação temporal: "
+            f"{_comp_aj_debug_horario['qtd_violacoes_passado_como_futuro']} "
+            "reunião(ões) já iniciada(s) classificada(s) como futura."
+        )
+        st.dataframe(
+            _comp_aj_debug_horario.get("violacoes_passado_como_futuro", pd.DataFrame()),
+            use_container_width=True,
+            hide_index=True,
+        )
+    if (
+        _comp_aj_debug_horario["qtd_violacoes_futuro"] == 0
+        and _comp_aj_debug_horario.get("qtd_violacoes_passado_como_futuro", 0) == 0
+        and _comp_aj_debug_horario.get("qtd_violacoes_andamento_como_encerrado", 0) == 0
+        and _comp_aj_debug_horario.get("qtd_violacoes_encerrado_como_andamento", 0) == 0
+    ):
+        st.success(
+            "✓ Classificação temporal consistente: futura / andamento / encerrado."
+        )
+
+    _val_dbg = _comp_aj_validacao
+    st.markdown(
+        f"**Cards:** Reunião Concluída (ajustado) **"
+        f"{int_br(_val_dbg['card_comparecimento_ajustado'])}** · "
+        f"Reunião Cancelada **{int_br(_val_dbg.get('card_reuniao_cancelada', 0))}**"
+    )
+    if _val_dbg.get("card_bate_agg"):
+        st.caption(
+            f"✓ Card Reunião Concluída = soma por closer "
+            f"({int_br(_val_dbg['soma_comparecimentos_ajustado_agg'])}) · "
+            "conferência com ranking na aba Top Closers"
+        )
+    if _val_dbg.get("card_bate_cancelada"):
+        st.caption(
+            f"✓ Card Reunião Cancelada = no-show + canceladas "
+            f"({int_br(_val_dbg.get('soma_noshow_agg', 0))} + "
+            f"{int_br(_val_dbg.get('soma_canceladas_agg', 0))})"
+        )
+    if _val_dbg.get("resumo_bate_card_concluida"):
+        st.caption(
+            "✓ Resumo: concluídas + agendadas c/ horário encerrado = card Reunião Concluída "
+            "(futuras e em andamento não entram)"
+        )
+    if _val_dbg.get("resumo_bate_card_cancelada"):
+        st.caption("✓ Resumo: no-show + canceladas = card Reunião Cancelada")
+    if (
+        _val_dbg.get("futura_fora_ajustado")
+        and _val_dbg.get("andamento_fora_ajustado")
+        and _val_dbg.get("futura_fora_cancelada")
+        and _val_dbg.get("andamento_fora_cancelada")
+    ):
+        st.caption(
+            "✓ Agendadas futuras e em andamento fora do comparecimento ajustado "
+            "e da reunião cancelada"
+        )
+
+    st.markdown("**Resumo das reuniões do período por status**")
+    st.caption("Todas as reuniões do período filtrado, por classificação única.")
+    st.dataframe(
+        _comp_aj_resumo_ocorridas,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("**Conferência de reuniões do período**")
+    _closers_conf = (
+        sorted(_comp_aj_conferencia["closer"].dropna().astype(str).unique().tolist())
+        if _comp_aj_conferencia is not None and not _comp_aj_conferencia.empty
+        else []
+    )
+    _fc1, _fc2, _fc3 = st.columns([1.4, 1.1, 1.5])
+    with _fc1:
+        _filt_classif = st.selectbox(
+            "Classificação",
+            COMPARECIMENTO_CONFERENCIA_CLASSIF_OPCOES,
+            key="executivas_comp_aj_conf_classif",
+        )
+    with _fc2:
+        _filt_closer = st.selectbox(
+            "Closer",
+            ["Todos"] + _closers_conf,
+            key="executivas_comp_aj_conf_closer",
+        )
+    with _fc3:
+        _filt_busca = st.text_input(
+            "Buscar nome ou e-mail",
+            key="executivas_comp_aj_conf_busca",
+            placeholder="Opcional",
+        )
+    _tbl_conf = comparecimento_ajustado_filtrar_conferencia(
+        _comp_aj_conferencia,
+        classificacao=_filt_classif,
+        closer=_filt_closer,
+        busca=_filt_busca,
+    )
+    st.caption(
+        f"{int_br(len(_tbl_conf))} reunião(ões) · classificação única por linha"
+    )
+    st.dataframe(
+        _tbl_conf,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "data_hora_criacao_agendamento": st.column_config.DatetimeColumn(
+                "Data/hora criação do agendamento",
+                format="DD/MM/YYYY HH:mm",
+            ),
+            "data_hora_reuniao": st.column_config.TextColumn(
+                "Data/hora da reunião",
+            ),
+            "entra_comparecimento_ajustado": st.column_config.CheckboxColumn(
+                "Entra comparec. ajustado",
+            ),
+            "entra_reuniao_cancelada": st.column_config.CheckboxColumn(
+                "Entra reunião cancelada",
+            ),
+        },
+    )
+
+    st.markdown("**Comparecimento ajustado por closer (ranking)**")
+    st.dataframe(
+        _comp_aj_debug,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "comparecimentos_zoho": st.column_config.NumberColumn("Zoho"),
+            "agendadas_horario_encerrado": st.column_config.NumberColumn("+horário encerrado"),
+            "comparecimentos_ajustado": st.column_config.NumberColumn("Ajustado"),
+            "diferenca_ajustado_menos_zoho": st.column_config.NumberColumn("Δ ajust−zoho"),
+        },
+    )
 
 # ---------------------------------------------------------------------------
 # Tabs — Ranking / Por time / Evolução
@@ -493,10 +732,49 @@ with tab_rank:
             ranking["pct_recebimento"] = 0.0
             ranking["ticket_medio"]    = 0.0
 
+    if ranking is not None and not ranking.empty:
+        ranking = comparecimento_ajustado_merge_ranking(ranking, _comp_aj_agg)
+        _validacao_comp_aj = comparecimento_ajustado_validacao(
+            _kpi_comp_aj,
+            _comp_aj_agg,
+            _comp_aj_resumo_ocorridas,
+            _comp_aj_conferencia,
+            ranking,
+            linhas=_df_comp_aj,
+        )
+        if not _validacao_comp_aj["card_bate_ranking"]:
+            st.warning(
+                "Divergência card × ranking no comparecimento ajustado: "
+                f"card {_validacao_comp_aj['card_comparecimento_ajustado']} · "
+                f"soma ranking {_validacao_comp_aj['soma_comparecimentos_ajustado_ranking']}."
+            )
+        else:
+            st.caption(
+                f"✓ Comparecimento ajustado: card "
+                f"{int_br(_validacao_comp_aj['card_comparecimento_ajustado'])} = "
+                f"soma ranking "
+                f"{int_br(_validacao_comp_aj['soma_comparecimentos_ajustado_ranking'])} "
+                f"(Zoho {int_br(_validacao_comp_aj['soma_comparecimentos_zoho_ranking'])} · "
+                f"+encerrado "
+                f"{int_br(_validacao_comp_aj.get('soma_agendadas_horario_encerrado_ranking', _validacao_comp_aj.get('soma_agendadas_horario_passado_ranking', 0)))})."
+            )
+        if _validacao_comp_aj.get("card_bate_cancelada"):
+            st.caption(
+                f"✓ Reunião Cancelada: card "
+                f"{int_br(_validacao_comp_aj.get('card_reuniao_cancelada', 0))} = "
+                f"no-show {int_br(_validacao_comp_aj.get('soma_noshow_agg', 0))} + "
+                f"canceladas {int_br(_validacao_comp_aj.get('soma_canceladas_agg', 0))}"
+            )
     section_title(
         "Top Closers",
         f"ranking do período · {metric_label.lower()} · {classif_sel} · "
         f"{_exibicao_label.lower()}",
+    )
+    st.caption(
+        "**Oportunidades** = deals criados no período · **Agendamentos** = reuniões "
+        "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída. "
+        "Agendamentos e comparecimentos seguem o *owner* da activity no CRM; "
+        "oportunidades e vendas seguem o closer do deal."
     )
 
     if ranking is None or ranking.empty:
@@ -559,7 +837,10 @@ with tab_rank:
             if ranking_plot.empty:
                 with st.expander("Detalhe do closer selecionado", expanded=False):
                     st.caption("Sem ranking pra detalhar nesta métrica/filtro.")
-            elif det_norm is None or det_norm.empty:
+            elif (
+                metric_col not in ("churn", "comparecimentos_ajustado")
+                and (det_norm is None or det_norm.empty)
+            ):
                 with st.expander("Detalhe do closer selecionado", expanded=False):
                     st.caption(
                         "Detalhe linha-a-linha indisponível — "
@@ -653,6 +934,32 @@ with tab_rank:
                             else:
                                 linhas_brutas = pd.DataFrame()
                         unidade_col = "deal_id"
+                    elif metric_col == "comparecimentos_ajustado":
+                        detalhe_disponivel = (
+                            _df_comp_aj is not None and not _df_comp_aj.empty
+                        )
+                        if closer_escolhido == OPCAO_TODAS:
+                            contagem_grafico = int(
+                                ranking_plot[metric_col].fillna(0).sum()
+                            )
+                            linhas_brutas = (
+                                _df_comp_aj.copy() if detalhe_disponivel
+                                else pd.DataFrame()
+                            )
+                        else:
+                            try:
+                                contagem_grafico = int(
+                                    ranking_plot.loc[
+                                        ranking_plot["executiva"] == closer_escolhido,
+                                        metric_col,
+                                    ].iloc[0]
+                                )
+                            except (IndexError, KeyError):
+                                contagem_grafico = 0
+                            linhas_brutas = comparecimento_ajustado_filtrar_executiva(
+                                _df_comp_aj, closer_escolhido,
+                            )
+                        unidade_col = "activity_id"
                     else:
                         mask_metrica = vendas_detalhe_mask_por_metrica(
                             det_norm, metric_col, ctx.data_ini, ctx.data_fim,
@@ -696,6 +1003,17 @@ with tab_rank:
                         linhas = linhas_brutas.copy()
                     linhas_duplicadas = len(linhas_brutas) - len(linhas)
 
+                    contagem_ajustado = None
+                    if (
+                        metric_col == "comparecimentos_ajustado"
+                        and "flag_comparecimento_ajustado" in linhas_brutas.columns
+                    ):
+                        contagem_ajustado = int(
+                            linhas_brutas["flag_comparecimento_ajustado"]
+                            .fillna(False)
+                            .sum()
+                        )
+
                     # ---------- Mini-cards de resumo (5 cards: 3+2) -------
                     if closer_escolhido == OPCAO_TODAS:
                         fonte = ranking_plot
@@ -708,11 +1026,19 @@ with tab_rank:
                     def _sum_money(col):
                         return float(fonte[col].fillna(0).sum()) if col in fonte.columns else 0.0
 
-                    st.markdown(
-                        f"**{closer_escolhido}** · {metric_label}: "
-                        f"gráfico {int_br(contagem_grafico)} · "
-                        f"tabela {int_br(contagem_tabela)}"
-                    )
+                    if contagem_ajustado is not None:
+                        st.markdown(
+                            f"**{closer_escolhido}** · {metric_label}: "
+                            f"gráfico {int_br(contagem_grafico)} (ajustado) · "
+                            f"tabela {int_br(contagem_tabela)} linhas "
+                            f"({int_br(contagem_ajustado)} no total ajustado)"
+                        )
+                    else:
+                        st.markdown(
+                            f"**{closer_escolhido}** · {metric_label}: "
+                            f"gráfico {int_br(contagem_grafico)} · "
+                            f"tabela {int_br(contagem_tabela)}"
+                        )
 
                     mc1, mc2, mc3 = st.columns(3, gap="small")
                     with mc1:
@@ -756,7 +1082,10 @@ with tab_rank:
                             "comparecimentos, vendas/ganhos, montante/receita, cancelados, "
                             "churn, vencidos)."
                         )
-                    elif contagem_tabela != contagem_grafico:
+                    elif (
+                        metric_col != "comparecimentos_ajustado"
+                        and contagem_tabela != contagem_grafico
+                    ):
                         delta = contagem_tabela - contagem_grafico
                         if delta < 0:
                             st.warning(
@@ -780,6 +1109,12 @@ with tab_rank:
                             f"⚙ Removidas {int_br(linhas_duplicadas)} duplicata(s) "
                             f"por `{unidade_col}`."
                         )
+                    if metric_col == "comparecimentos_ajustado" and not linhas.empty:
+                        st.caption(
+                            "A tabela lista todas as reuniões do período (owner da "
+                            "activity). A coluna **Tipo (teste)** indica se entra no "
+                            "comparecimento ajustado ou fica fora do total."
+                        )
 
                     # ---------- Tabela resumida nome-a-nome ---------------
                     if linhas.empty:
@@ -788,9 +1123,9 @@ with tab_rank:
                         )
                     else:
                         sort_cols = [
-                            c for c in ("data_churn", "data_agendamento",
-                                        "data_criacao", "data_venda",
-                                        "deal_id", "activity_id")
+                            c for c in ("start_datetime", "data_churn",
+                                        "data_agendamento", "data_criacao",
+                                        "data_venda", "deal_id", "activity_id")
                             if c in linhas.columns
                         ]
                         linhas = linhas.sort_values(
@@ -807,6 +1142,18 @@ with tab_rank:
                                 ("closer_nome",    "Closer"),
                                 ("montante",       "Montante"),
                                 ("receita",        "Receita"),
+                            ]
+                        elif metric_col == "comparecimentos_ajustado":
+                            cols_map_resumo = [
+                                ("#",                    "#"),
+                                ("nome_lead",            "Nome do cliente/lead"),
+                                ("email",                "E-mail"),
+                                ("tipo_comparecimento",  "Tipo (teste)"),
+                                ("status_reuniao",       "Status reunião"),
+                                ("deal_stage",           "Stage do deal"),
+                                ("start_datetime",       "Data/hora reunião"),
+                                ("closer_deal",          "Closer (deal)"),
+                                ("executiva",            "Owner activity"),
                             ]
                         else:
                             cols_map_resumo = [
@@ -833,6 +1180,13 @@ with tab_rank:
                         if "Data churn" in tabela_resumo.columns:
                             cfg_resumo["Data churn"] = st.column_config.DateColumn(
                                 "Data churn", format="DD/MM/YYYY"
+                            )
+                        if "Data/hora reunião" in tabela_resumo.columns:
+                            cfg_resumo["Data/hora reunião"] = (
+                                st.column_config.DatetimeColumn(
+                                    "Data/hora reunião",
+                                    format="DD/MM/YYYY HH:mm",
+                                )
                             )
                         for _ml in ("Montante", "Receita"):
                             if _ml in tabela_resumo.columns:

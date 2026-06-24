@@ -39,6 +39,37 @@ _RANKING_PCT_LABELS: dict[str, str] = {
     "pct_agendamento":    "% Agendamento",
 }
 
+# Contagens do funil — labels + help para distinguir oportunidades × agendamentos ×
+# comparecimentos no ranking (Time de Vendas → Visão Geral e Executivas & Times).
+_RANKING_COUNT_LABELS: dict[str, tuple[str, str]] = {
+    "oportunidades": (
+        "Oportunidades",
+        "Deals criados no período (zoho_deals.created_at). "
+        "Não é o mesmo que reuniões agendadas.",
+    ),
+    "agendamentos": (
+        "Agendamentos",
+        "Reuniões com data no período (start_datetime), com status definido "
+        "e exceto Vencida. Atribuídas ao owner da activity.",
+    ),
+    "comparecimentos": (
+        "Comparecimentos",
+        "Reuniões com status_reuniao Concluída/Concluído na data da call.",
+    ),
+    "comparecimentos_ajustado": (
+        "Comparec. ajustado",
+        "Concluída/Concluído + Agendada com horário encerrado (teste).",
+    ),
+    "vendas": (
+        "Vendas",
+        "Ganhos de novo cliente (stage Ganho) com data de compra no período.",
+    ),
+    "perdidos": ("Perdidos", "Deals marcados Perdido, criados no período."),
+    "cancelados": ("Cancelados", "Reuniões canceladas no período."),
+    "vencidos": ("Vencidos", "Reuniões com status Vencida no período."),
+    "churn": ("Churn", "Clientes em stage Churn (aba dedicada)."),
+}
+
 
 def ranking_column_config(
     df: pd.DataFrame,
@@ -72,6 +103,11 @@ def ranking_column_config(
     for col, label in _RANKING_PCT_LABELS.items():
         if col in df.columns:
             cfg[col] = st.column_config.NumberColumn(label, format="%.2f%%")
+    for col, (label, help_text) in _RANKING_COUNT_LABELS.items():
+        if col in df.columns:
+            cfg[col] = st.column_config.NumberColumn(
+                label, format="%d", help=help_text,
+            )
     return cfg
 
 

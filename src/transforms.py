@@ -4,6 +4,8 @@ Toda função aqui recebe DataFrames já carregados pelos repositories e retorna
 DataFrames/dicts prontos para a UI. Nenhum SQL aqui."""
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 
 from .team_classification import (
@@ -158,6 +160,7 @@ EXECUTIVAS_RANKING_METRIC_OPTIONS: dict[str, str] = {
     "Vendas":           "vendas",
     "Agendamentos":     "agendamentos",
     "Comparecimentos":  "comparecimentos",
+    "Comparecimentos (ajustado teste)": "comparecimentos_ajustado",
     "Ganhos +12":       "ganhos_mais_12",
     "Ganhos -12":       "ganhos_menos_12",
     "Ganhos Não atua":  "ganhos_nao_atua",
@@ -172,6 +175,7 @@ EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS = frozenset({
 })
 EXECUTIVAS_RANKING_METRICAS_NEUTRAS = frozenset({
     "receita", "montante", "vendas", "agendamentos", "comparecimentos",
+    "comparecimentos_ajustado",
 })
 
 RANKING_EXIBICAO_ATIVOS = "Somente ativos"
@@ -858,6 +862,809 @@ def vendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
         return base_atividade & em_agend & status_vencida
 
     return pd.Series(False, index=df_det_norm.index)
+
+
+# ---------------------------------------------------------------------------
+# Comparecimento ajustado (teste operacional — Executivas & Times)
+# ---------------------------------------------------------------------------
+
+_COMPARECIMENTO_AJUSTADO_TZ = ZoneInfo("America/Sao_Paulo")
+
+COMPARECIMENTO_AJUSTADO_HELP = (
+    "Comparecimento ajustado = status Concluída/Concluído + reuniões ainda "
+    "Agendada cujo horário previsto já encerrou (fim da reunião ≤ agora, "
+    "America/Sao_Paulo). Em andamento e futuras não entram. Canceladas, "
+    "No-show e Vencidas não entram."
+)
+
+_COMPARECIMENTO_AJUSTADO_AGG_COLS = (
+    "comparecimentos_zoho",
+    "agendadas_horario_encerrado",
+    "comparecimentos_ajustado",
+    "noshow",
+    "canceladas",
+)
+
+COMPARECIMENTO_CONFERENCIA_CLASSIF_OPCOES: tuple[str, ...] = (
+    "Todas",
+    "Concluídas no Zoho",
+    "Agendadas futuras",
+    "Agendadas em andamento",
+    "Agendadas com horário encerrado",
+    "No-show",
+    "Canceladas",
+    "Vencidas",
+)
+
+_COMPARECIMENTO_CLASSIF_DASHBOARD_LABELS: dict[str, str] = {
+    "Concluídas no Zoho": "Concluída no Zoho",
+    "Agendadas futuras": "Agendada futura",
+    "Agendadas em andamento": "Agendada em andamento",
+    "Agendadas com horário encerrado": "Agendada com horário encerrado",
+    "No-show": "No-show",
+    "Canceladas": "Cancelada",
+    "Vencidas": "Vencida",
+}
+
+_COMPARECIMENTO_OBSERVACAO: dict[str, str] = {
+    "Concluída no Zoho": "Status oficial concluído",
+    "Agendada futura": "Reunião ainda não iniciada",
+    "Agendada em andamento": "Reunião em curso (entre início e fim previstos)",
+    "Agendada com horário encerrado": (
+        "Possível reunião realizada ainda não atualizada no Zoho"
+    ),
+    "No-show": "Marcada como No-show",
+    "Cancelada": "Reunião cancelada",
+    "Vencida": "Reunião vencida/pendente fora da regra",
+    "Outro": "Fora das classificações do teste",
+}
+
+LISTA_LEIDIANNE_COMPARECIMENTOS: dict[str, int] = {
+    "Stefany Campinas": 10,
+    "Hawinne Cristina de Oliveira Freitas": 8,
+    "Leandro Alves": 6,
+    "Andrezza Ayuso Serpa": 4,
+    "Nathan Carloto": 4,
+    "Leonardo Melo Patriota": 4,
+}
+
+
+def comparecimento_ajustado_agora_brt() -> pd.Timestamp:
+    """Instante atual em America/Sao_Paulo, sem tz (pareado com start_datetime)."""
+    return pd.Timestamp.now(tz=_COMPARECIMENTO_AJUSTADO_TZ).tz_localize(None)
+
+
+def _comparecimento_ajustado_ts_naive_brt(series: pd.Series) -> pd.Series:
+    """`timestamp without time zone` = horário de parede BRT."""
+    st = pd.to_datetime(series, errors="coerce")
+    if getattr(st.dt, "tz", None) is not None:
+        st = st.dt.tz_convert(_COMPARECIMENTO_AJUSTADO_TZ).dt.tz_localize(None)
+    return st
+
+
+def _comparecimento_ajustado_start_naive_brt(series: pd.Series) -> pd.Series:
+    """Alias para `start_datetime` / `end_datetime` sem tz."""
+    return _comparecimento_ajustado_ts_naive_brt(series)
+
+
+def _comparecimento_ajustado_fim_reuniao_ref(
+    df: pd.DataFrame,
+    *,
+    start: pd.Series | None = None,
+) -> pd.Series:
+    """COALESCE(end_datetime, start_datetime + 1 hour) em horário BRT."""
+    if start is None:
+        start = _comparecimento_ajustado_start_naive_brt(df["start_datetime"])
+    if "end_datetime" in df.columns:
+        end = _comparecimento_ajustado_ts_naive_brt(df["end_datetime"])
+    else:
+        end = pd.Series(pd.NaT, index=df.index)
+    return end.where(end.notna(), start + pd.Timedelta(hours=1))
+
+
+def _comparecimento_ajustado_format_data_hora_reuniao(
+    start: pd.Series,
+    end: pd.Series | None = None,
+) -> pd.Series:
+    """Exibição: `24/06/2026 · 17:30 - 18:30` (fim com fallback +1h se nulo)."""
+    st = _comparecimento_ajustado_ts_naive_brt(start)
+    if end is not None:
+        en = _comparecimento_ajustado_ts_naive_brt(end)
+    else:
+        en = pd.Series(pd.NaT, index=st.index)
+    fim = en.where(en.notna(), st + pd.Timedelta(hours=1))
+    out = pd.Series("", index=st.index, dtype=object)
+    mask = st.notna()
+    if mask.any():
+        out.loc[mask] = (
+            st.loc[mask].dt.strftime("%d/%m/%Y")
+            + " · "
+            + st.loc[mask].dt.strftime("%H:%M")
+            + " - "
+            + fim.loc[mask].dt.strftime("%H:%M")
+        )
+    return out
+
+
+def _comparecimento_ajustado_stage_is_noshow(stage: pd.Series) -> pd.Series:
+    """No-show pelo stage do deal (inclui 'Não compareceu' e variações)."""
+    norm = stage.fillna("").astype(str).map(_normalize_nome_ranking)
+    return (
+        norm.str.contains("no-show", na=False)
+        | norm.str.contains("no show", na=False)
+        | norm.str.contains("nao compareceu", na=False)
+    )
+
+
+def comparecimento_ajustado_classificacao_dashboard(
+    df: pd.DataFrame,
+    agora_brt: pd.Timestamp,
+) -> pd.Series:
+    """Classificação única por linha — prioridade: No-show > Cancelada > Vencida >
+    Concluída no Zoho > Agendada futura > Agendada em andamento >
+    Agendada com horário encerrado > Outro."""
+    start = _comparecimento_ajustado_start_naive_brt(df["start_datetime"])
+    fim = _comparecimento_ajustado_fim_reuniao_ref(df, start=start)
+    status = df["status_reuniao"].astype(str).str.strip()
+    status_lower = status.str.lower()
+    stage = df.get("deal_stage", pd.Series("", index=df.index)).fillna("").astype(str)
+
+    is_noshow = _comparecimento_ajustado_stage_is_noshow(stage)
+    is_cancel = status_lower.isin(["cancelada", "cancelado"])
+    is_vencida = status_lower.eq("vencida")
+    is_zoho = status.isin(["Concluída", "Concluído"])
+    is_agendada = status.isin(["Agendada", "Agendado"])
+    has_start = start.notna()
+    is_futura = is_agendada & has_start & (start > agora_brt)
+    is_andamento = (
+        is_agendada & has_start & (start <= agora_brt) & fim.notna() & (fim > agora_brt)
+    )
+    is_encerrado = is_agendada & has_start & fim.notna() & (fim <= agora_brt)
+
+    cls = pd.Series("Outro", index=df.index, dtype=object)
+    cls = cls.mask(is_encerrado, "Agendada com horário encerrado")
+    cls = cls.mask(is_andamento, "Agendada em andamento")
+    cls = cls.mask(is_futura, "Agendada futura")
+    cls = cls.mask(is_zoho, "Concluída no Zoho")
+    cls = cls.mask(is_vencida, "Vencida")
+    cls = cls.mask(is_cancel & ~is_noshow, "Cancelada")
+    cls = cls.mask(is_noshow, "No-show")
+    return cls
+
+
+def comparecimento_ajustado_aplicar_flags(
+    df: pd.DataFrame,
+    agora_brt: pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """Fonte única das flags — compara data+hora completas em BRT.
+
+    `start_datetime` no banco é `timestamp without time zone` (horário BRT).
+    Não usar comparação com `now()` timestamptz (sessão UTC distorce o dia).
+    """
+    if df is None or df.empty:
+        return df
+    if agora_brt is None:
+        agora_brt = comparecimento_ajustado_agora_brt()
+    else:
+        agora_brt = pd.Timestamp(agora_brt).tz_localize(None)
+
+    out = df.copy()
+    start = _comparecimento_ajustado_start_naive_brt(out["start_datetime"])
+    fim = _comparecimento_ajustado_fim_reuniao_ref(out, start=start)
+    ja_ocorreu = start.notna() & (start < agora_brt)
+
+    out["agora_brt"] = agora_brt
+    out["fim_reuniao_ref"] = fim
+    out["flag_ja_ocorridas"] = ja_ocorreu
+    out["classificacao_dashboard"] = comparecimento_ajustado_classificacao_dashboard(
+        out, agora_brt,
+    )
+    cls = out["classificacao_dashboard"]
+
+    out["flag_comparecimento_zoho"] = cls.eq("Concluída no Zoho")
+    out["flag_agendada_horario_encerrado"] = cls.eq("Agendada com horário encerrado")
+    out["flag_agendada_em_andamento"] = cls.eq("Agendada em andamento")
+    out["flag_agendada_futura"] = cls.eq("Agendada futura")
+    out["flag_noshow"] = cls.eq("No-show")
+    out["flag_cancelada"] = cls.eq("Cancelada")
+    out["flag_fora_vencida"] = cls.eq("Vencida")
+    out["flag_comparecimento_ajustado"] = cls.isin([
+        "Concluída no Zoho",
+        "Agendada com horário encerrado",
+    ])
+    out["entra_comparecimento_ajustado"] = out["flag_comparecimento_ajustado"]
+    out["entra_reuniao_cancelada"] = cls.isin(["No-show", "Cancelada"])
+    out["observacao"] = cls.map(_COMPARECIMENTO_OBSERVACAO).fillna(
+        _COMPARECIMENTO_OBSERVACAO["Outro"],
+    )
+
+    out["tipo_comparecimento"] = cls.replace({
+        "Concluída no Zoho": "Concluída Zoho",
+        "Agendada com horário encerrado": "Agendada com horário encerrado",
+        "Agendada em andamento": "Agendada em andamento",
+        "Agendada futura": "Agendada futura",
+        "No-show": "Fora: No-show",
+        "Cancelada": "Fora: Cancelada",
+        "Vencida": "Fora: Vencida",
+    }).fillna("Outro")
+    return out
+
+
+def comparecimento_ajustado_preparar(
+    df_raw: pd.DataFrame,
+    df_cadastro: pd.DataFrame | None,
+    *,
+    filtrar_oficial: bool = False,
+) -> pd.DataFrame:
+    """Normaliza `executiva` (owner da activity) com o mesmo match de tokens
+    do ranking e, opcionalmente, restringe ao cadastro oficial ativo."""
+    if df_raw is None or df_raw.empty:
+        return pd.DataFrame()
+    out = executivas_canonicalizar_executivas(df_raw, df_cadastro)
+    if filtrar_oficial and df_cadastro is not None and not df_cadastro.empty:
+        out = executivas_filtrar_time_oficial(out, df_cadastro)
+    return out
+
+
+def comparecimento_ajustado_kpis(df: pd.DataFrame) -> dict:
+    """Totais do funil para os cards Reunião Concluída / Reunião Cancelada."""
+    empty = {
+        "comparecimento_zoho": 0,
+        "agendadas_horario_encerrado": 0,
+        "agendadas_em_andamento": 0,
+        "agendadas_futuras": 0,
+        "comparecimento_ajustado": 0,
+        "noshow": 0,
+        "canceladas": 0,
+        "reuniao_cancelada_total": 0,
+        "agora_brt": comparecimento_ajustado_agora_brt(),
+    }
+    if df is None or df.empty:
+        return empty
+    zoho = int(df["flag_comparecimento_zoho"].fillna(False).sum())
+    encerrado = int(df["flag_agendada_horario_encerrado"].fillna(False).sum())
+    andamento = int(df["flag_agendada_em_andamento"].fillna(False).sum())
+    futuras = int(df["flag_agendada_futura"].fillna(False).sum())
+    ajust = int(df["flag_comparecimento_ajustado"].fillna(False).sum())
+    noshow = int(df["flag_noshow"].fillna(False).sum())
+    canceladas = int(df["flag_cancelada"].fillna(False).sum())
+    agora = df["agora_brt"].iloc[0] if "agora_brt" in df.columns else comparecimento_ajustado_agora_brt()
+    return {
+        "comparecimento_zoho": zoho,
+        "agendadas_horario_encerrado": encerrado,
+        "agendadas_em_andamento": andamento,
+        "agendadas_futuras": futuras,
+        "comparecimento_ajustado": ajust,
+        "noshow": noshow,
+        "canceladas": canceladas,
+        "reuniao_cancelada_total": noshow + canceladas,
+        "agora_brt": agora,
+    }
+
+
+def comparecimento_ajustado_filtrar_ja_ocorridas(df: pd.DataFrame) -> pd.DataFrame:
+    """Somente reuniões com start_datetime < agora_brt (timestamp completo)."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    if "flag_ja_ocorridas" in df.columns:
+        return df.loc[df["flag_ja_ocorridas"].fillna(False)].copy()
+    agora = (
+        pd.Timestamp(df["agora_brt"].iloc[0]).tz_localize(None)
+        if "agora_brt" in df.columns and df["agora_brt"].notna().any()
+        else comparecimento_ajustado_agora_brt()
+    )
+    start = _comparecimento_ajustado_start_naive_brt(df["start_datetime"])
+    return df.loc[start.notna() & (start < agora)].copy()
+
+
+def comparecimento_ajustado_resumo_periodo_por_status(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Resumo por closer/owner — todas as reuniões do período filtrado."""
+    cols = [
+        "closer",
+        "concluídas_no_zoho",
+        "agendadas_com_horario_encerrado",
+        "agendadas_em_andamento",
+        "agendadas_futuras",
+        "no_show",
+        "canceladas",
+        "vencidas",
+        "total_reunioes_periodo",
+    ]
+    if df is None or df.empty or "executiva" not in df.columns:
+        return pd.DataFrame(columns=cols)
+    if "classificacao_dashboard" not in df.columns:
+        return pd.DataFrame(columns=cols)
+
+    def _cnt(label: str) -> pd.Series:
+        return (df["classificacao_dashboard"] == label).astype(int)
+
+    base = df.copy()
+    base["_zoho"] = _cnt("Concluída no Zoho")
+    base["_enc"] = _cnt("Agendada com horário encerrado")
+    base["_and"] = _cnt("Agendada em andamento")
+    base["_fut"] = _cnt("Agendada futura")
+    base["_ns"] = _cnt("No-show")
+    base["_canc"] = _cnt("Cancelada")
+    base["_venc"] = _cnt("Vencida")
+
+    agg = (
+        base.groupby("executiva", as_index=False)
+        .agg(
+            concluídas_no_zoho=("_zoho", "sum"),
+            agendadas_com_horario_encerrado=("_enc", "sum"),
+            agendadas_em_andamento=("_and", "sum"),
+            agendadas_futuras=("_fut", "sum"),
+            no_show=("_ns", "sum"),
+            canceladas=("_canc", "sum"),
+            vencidas=("_venc", "sum"),
+            total_reunioes_periodo=("activity_id", "count"),
+        )
+        .rename(columns={"executiva": "closer"})
+    )
+    for c in cols[1:]:
+        agg[c] = agg[c].fillna(0).astype(int)
+    agg = agg.sort_values("total_reunioes_periodo", ascending=False).reset_index(drop=True)
+    total = {c: int(agg[c].sum()) for c in cols[1:]}
+    total["closer"] = "TOTAL"
+    return pd.concat([agg, pd.DataFrame([total])], ignore_index=True)
+
+
+def comparecimento_ajustado_resumo_ocorridas_por_status(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Alias legado — usa resumo do período completo."""
+    return comparecimento_ajustado_resumo_periodo_por_status(df)
+
+
+def comparecimento_ajustado_conferencia_periodo(df: pd.DataFrame) -> pd.DataFrame:
+    """Tabela linha a linha — todas as reuniões do período filtrado."""
+    cols = [
+        "closer",
+        "nome_lead",
+        "email",
+        "data_hora_criacao_agendamento",
+        "data_hora_reuniao",
+        "status_reuniao",
+        "deal_stage",
+        "classificacao_dashboard",
+        "entra_comparecimento_ajustado",
+        "entra_reuniao_cancelada",
+        "observacao",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    criacao = df["created_time"] if "created_time" in df.columns else df.get("created_at")
+    end_col = df["end_datetime"] if "end_datetime" in df.columns else None
+
+    out = pd.DataFrame({
+        "closer": df["executiva"],
+        "nome_lead": df.get("nome_lead", ""),
+        "email": df.get("email", ""),
+        "data_hora_criacao_agendamento": criacao,
+        "data_hora_reuniao": _comparecimento_ajustado_format_data_hora_reuniao(
+            df["start_datetime"], end_col,
+        ),
+        "status_reuniao": df.get("status_reuniao", ""),
+        "deal_stage": df.get("deal_stage", ""),
+        "classificacao_dashboard": df.get("classificacao_dashboard", "Outro"),
+        "entra_comparecimento_ajustado": df.get(
+            "entra_comparecimento_ajustado", False,
+        ),
+        "entra_reuniao_cancelada": df.get("entra_reuniao_cancelada", False),
+        "observacao": df.get("observacao", ""),
+    })
+    sort_start = _comparecimento_ajustado_ts_naive_brt(df["start_datetime"])
+    return out.iloc[sort_start.sort_values(ascending=False).index].reset_index(drop=True)
+
+
+def comparecimento_ajustado_conferencia_ocorridas(df: pd.DataFrame) -> pd.DataFrame:
+    """Alias legado — conferência do período completo."""
+    return comparecimento_ajustado_conferencia_periodo(df)
+
+
+def comparecimento_ajustado_filtrar_conferencia(
+    df: pd.DataFrame,
+    *,
+    classificacao: str = "Todas",
+    closer: str = "Todos",
+    busca: str = "",
+) -> pd.DataFrame:
+    """Filtros da tabela de conferência (classificação, closer, nome/email)."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if classificacao and classificacao != "Todas":
+        label = _COMPARECIMENTO_CLASSIF_DASHBOARD_LABELS.get(classificacao, classificacao)
+        out = out.loc[out["classificacao_dashboard"].astype(str) == label]
+    if closer and closer != "Todos" and "closer" in out.columns:
+        out = out.loc[out["closer"].astype(str).str.strip() == str(closer).strip()]
+    termo = (busca or "").strip().lower()
+    if termo:
+        nome = out.get("nome_lead", pd.Series("", index=out.index)).fillna("").astype(str).str.lower()
+        email = out.get("email", pd.Series("", index=out.index)).fillna("").astype(str).str.lower()
+        out = out.loc[nome.str.contains(termo, na=False) | email.str.contains(termo, na=False)]
+    return out.reset_index(drop=True)
+
+
+def comparecimento_ajustado_por_executiva(df: pd.DataFrame) -> pd.DataFrame:
+    """Agrega por `executiva` (owner da activity = ranking dashboard)."""
+    cols = list(_COMPARECIMENTO_AJUSTADO_AGG_COLS)
+    if df is None or df.empty or "executiva" not in df.columns:
+        return pd.DataFrame(columns=["executiva"] + cols)
+    return (
+        df.groupby("executiva", as_index=False)
+        .agg(
+            comparecimentos_zoho=("flag_comparecimento_zoho", "sum"),
+            agendadas_horario_encerrado=("flag_agendada_horario_encerrado", "sum"),
+            comparecimentos_ajustado=("flag_comparecimento_ajustado", "sum"),
+            noshow=("flag_noshow", "sum"),
+            canceladas=("flag_cancelada", "sum"),
+        )
+    )
+
+
+def comparecimento_ajustado_debug_horario(df: pd.DataFrame) -> dict:
+    """Validação temporal: futura / andamento / encerrado vs agora BRT."""
+    agora = comparecimento_ajustado_agora_brt()
+    empty_cols = [
+        "executiva", "nome_lead", "email", "start_datetime", "end_datetime",
+        "status_reuniao", "deal_stage", "classificacao_dashboard",
+    ]
+    if df is None or df.empty:
+        return {
+            "agora_brt": agora,
+            "lista_encerrado": pd.DataFrame(),
+            "violacoes_futuro": pd.DataFrame(),
+            "violacoes_andamento_como_encerrado": pd.DataFrame(),
+            "violacoes_encerrado_como_andamento": pd.DataFrame(),
+            "violacoes_passado_como_futuro": pd.DataFrame(),
+            "qtd_violacoes_futuro": 0,
+            "qtd_violacoes_andamento_como_encerrado": 0,
+            "qtd_violacoes_encerrado_como_andamento": 0,
+            "qtd_violacoes_passado_como_futuro": 0,
+        }
+    if "agora_brt" in df.columns and df["agora_brt"].notna().any():
+        agora = pd.Timestamp(df["agora_brt"].iloc[0]).tz_localize(None)
+
+    cols = [c for c in empty_cols if c in df.columns]
+    status = df["status_reuniao"].astype(str).str.strip()
+    is_agendada = status.isin(["Agendada", "Agendado"])
+    start = _comparecimento_ajustado_start_naive_brt(df["start_datetime"])
+    fim = (
+        _comparecimento_ajustado_fim_reuniao_ref(df, start=start)
+        if "fim_reuniao_ref" not in df.columns
+        else _comparecimento_ajustado_ts_naive_brt(df["fim_reuniao_ref"])
+    )
+    cls = df["classificacao_dashboard"].astype(str)
+
+    encerrado = df.loc[cls == "Agendada com horário encerrado", cols].copy()
+    viol_futuro = df.loc[
+        is_agendada & start.notna() & (start > agora)
+        & (cls != "Agendada futura"),
+        cols,
+    ].copy()
+    viol_andamento_como_encerrado = df.loc[
+        is_agendada & start.notna() & fim.notna()
+        & (start <= agora) & (fim > agora)
+        & (cls == "Agendada com horário encerrado"),
+        cols,
+    ].copy()
+    viol_encerrado_como_andamento = df.loc[
+        is_agendada & fim.notna() & (fim <= agora)
+        & (cls == "Agendada em andamento"),
+        cols,
+    ].copy()
+    viol_passado_como_futuro = df.loc[
+        is_agendada & start.notna() & (start <= agora)
+        & (cls == "Agendada futura"),
+        cols,
+    ].copy()
+
+    sort_col = "start_datetime" if "start_datetime" in encerrado.columns else None
+    if sort_col and not encerrado.empty:
+        encerrado = encerrado.sort_values(sort_col)
+    return {
+        "agora_brt": agora,
+        "lista_encerrado": encerrado,
+        "lista_pendente": encerrado,
+        "violacoes_futuro": viol_futuro,
+        "violacoes_andamento_como_encerrado": viol_andamento_como_encerrado,
+        "violacoes_encerrado_como_andamento": viol_encerrado_como_andamento,
+        "violacoes_passado_como_futuro": viol_passado_como_futuro,
+        "qtd_violacoes_futuro": len(viol_futuro),
+        "qtd_violacoes_andamento_como_encerrado": len(viol_andamento_como_encerrado),
+        "qtd_violacoes_encerrado_como_andamento": len(viol_encerrado_como_andamento),
+        "qtd_violacoes_passado_como_futuro": len(viol_passado_como_futuro),
+    }
+
+
+def comparecimento_ajustado_debug_tabela(agg: pd.DataFrame) -> pd.DataFrame:
+    """Debug por closer: zoho, pendente, ajustado e Δ ajustado−zoho + TOTAL."""
+    cols = [
+        "executiva",
+        "comparecimentos_zoho",
+        "agendadas_horario_encerrado",
+        "comparecimentos_ajustado",
+        "diferenca_ajustado_menos_zoho",
+    ]
+    if agg is None or agg.empty:
+        return pd.DataFrame(columns=cols)
+    out = agg.copy()
+    out["diferenca_ajustado_menos_zoho"] = (
+        out["comparecimentos_ajustado"].fillna(0).astype(int)
+        - out["comparecimentos_zoho"].fillna(0).astype(int)
+    )
+    out = out[cols].sort_values(
+        "comparecimentos_ajustado", ascending=False,
+    ).reset_index(drop=True)
+    total = {
+        "executiva": "TOTAL",
+        "comparecimentos_zoho": int(out["comparecimentos_zoho"].sum()),
+        "agendadas_horario_encerrado": int(out["agendadas_horario_encerrado"].sum()),
+        "comparecimentos_ajustado": int(out["comparecimentos_ajustado"].sum()),
+        "diferenca_ajustado_menos_zoho": int(
+            out["diferenca_ajustado_menos_zoho"].sum(),
+        ),
+    }
+    return pd.concat([out, pd.DataFrame([total])], ignore_index=True)
+
+
+def comparecimento_ajustado_validacao(
+    kpis: dict,
+    agg: pd.DataFrame,
+    resumo_ocorridas: pd.DataFrame | None = None,
+    conferencia: pd.DataFrame | None = None,
+    ranking: pd.DataFrame | None = None,
+    linhas: pd.DataFrame | None = None,
+) -> dict:
+    """Confere invariantes card ↔ agregados ↔ resumo ↔ conferência."""
+    card_ajustado = int((kpis or {}).get("comparecimento_ajustado", 0) or 0)
+    card_cancel = int((kpis or {}).get("reuniao_cancelada_total", 0) or 0)
+    soma_zoho = int(agg["comparecimentos_zoho"].sum()) if agg is not None and not agg.empty else 0
+    soma_enc = int(agg["agendadas_horario_encerrado"].sum()) if agg is not None and not agg.empty else 0
+    soma_ajustado_agg = int(agg["comparecimentos_ajustado"].sum()) if agg is not None and not agg.empty else 0
+    soma_noshow_agg = int(agg["noshow"].sum()) if agg is not None and not agg.empty and "noshow" in agg.columns else 0
+    soma_canceladas_agg = int(agg["canceladas"].sum()) if agg is not None and not agg.empty and "canceladas" in agg.columns else 0
+    soma_ajustado_ranking = 0
+    if ranking is not None and not ranking.empty and "comparecimentos_ajustado" in ranking.columns:
+        soma_ajustado_ranking = int(ranking["comparecimentos_ajustado"].fillna(0).sum())
+
+    resumo_zoho = resumo_enc = resumo_ns = resumo_canc = 0
+    if resumo_ocorridas is not None and not resumo_ocorridas.empty:
+        tot = resumo_ocorridas.loc[resumo_ocorridas["closer"].astype(str) == "TOTAL"]
+        if not tot.empty:
+            r = tot.iloc[0]
+            resumo_zoho = int(r.get("concluídas_no_zoho", 0) or 0)
+            resumo_enc = int(r.get("agendadas_com_horario_encerrado", 0) or 0)
+            resumo_ns = int(r.get("no_show", 0) or 0)
+            resumo_canc = int(r.get("canceladas", 0) or 0)
+
+    agora = pd.Timestamp((kpis or {}).get("agora_brt")).tz_localize(None) if (kpis or {}).get("agora_brt") is not None else None
+    viol_futuro_mal = viol_andamento_como_encerrado = viol_encerrado_como_andamento = 0
+    viol_passado_como_futuro = 0
+    futura_entra_ajustado = andamento_entra_ajustado = futura_entra_cancelada = 0
+    andamento_entra_cancelada = 0
+    ref = linhas if linhas is not None and not linhas.empty else conferencia
+    if ref is not None and not ref.empty and agora is not None:
+        if linhas is not None and not linhas.empty and "start_datetime" in linhas.columns:
+            start = _comparecimento_ajustado_ts_naive_brt(linhas["start_datetime"])
+            fim = _comparecimento_ajustado_fim_reuniao_ref(linhas, start=start)
+        else:
+            start = _comparecimento_ajustado_ts_naive_brt(ref["data_hora_inicio_reuniao"])
+            end_raw = (
+                _comparecimento_ajustado_ts_naive_brt(ref["data_hora_fim_reuniao"])
+                if "data_hora_fim_reuniao" in ref.columns
+                else pd.Series(pd.NaT, index=ref.index)
+            )
+            fim = end_raw.where(end_raw.notna(), start + pd.Timedelta(hours=1))
+        cls = ref["classificacao_dashboard"].astype(str)
+        status = ref.get("status_reuniao", pd.Series("", index=ref.index))
+        is_agendada = status.astype(str).str.strip().isin(["Agendada", "Agendado"])
+
+        viol_futuro_mal = int(
+            (is_agendada & start.notna() & (start > agora) & (cls != "Agendada futura")).sum(),
+        )
+        viol_andamento_como_encerrado = int(
+            (
+                is_agendada & start.notna() & fim.notna()
+                & (start <= agora) & (fim > agora)
+                & (cls == "Agendada com horário encerrado")
+            ).sum(),
+        )
+        viol_encerrado_como_andamento = int(
+            (
+                is_agendada & fim.notna() & (fim <= agora)
+                & (cls == "Agendada em andamento")
+            ).sum(),
+        )
+        viol_passado_como_futuro = int(
+            (is_agendada & start.notna() & (start <= agora) & (cls == "Agendada futura")).sum(),
+        )
+        fut_mask = cls == "Agendada futura"
+        and_mask = cls == "Agendada em andamento"
+        futura_entra_ajustado = int(
+            (fut_mask & ref["entra_comparecimento_ajustado"].fillna(False)).sum(),
+        )
+        andamento_entra_ajustado = int(
+            (and_mask & ref["entra_comparecimento_ajustado"].fillna(False)).sum(),
+        )
+        futura_entra_cancelada = int(
+            (fut_mask & ref["entra_reuniao_cancelada"].fillna(False)).sum(),
+        )
+        andamento_entra_cancelada = int(
+            (and_mask & ref["entra_reuniao_cancelada"].fillna(False)).sum(),
+        )
+
+    soma_cancel_card_parts = int((kpis or {}).get("noshow", 0) or 0) + int(
+        (kpis or {}).get("canceladas", 0) or 0,
+    )
+    return {
+        "card_comparecimento_ajustado": card_ajustado,
+        "soma_comparecimentos_zoho_ranking": soma_zoho,
+        "soma_agendadas_horario_encerrado_ranking": soma_enc,
+        "soma_agendadas_horario_passado_ranking": soma_enc,
+        "soma_comparecimentos_ajustado_agg": soma_ajustado_agg,
+        "soma_comparecimentos_ajustado_ranking": soma_ajustado_ranking,
+        "card_bate_agg": card_ajustado == soma_ajustado_agg,
+        "card_bate_ranking": card_ajustado == soma_ajustado_ranking,
+        "agg_bate_ranking": soma_ajustado_agg == soma_ajustado_ranking,
+        "card_reuniao_cancelada": card_cancel,
+        "soma_noshow_agg": soma_noshow_agg,
+        "soma_canceladas_agg": soma_canceladas_agg,
+        "card_bate_cancelada": card_cancel == soma_noshow_agg + soma_canceladas_agg,
+        "card_bate_cancelada_kpis": card_cancel == soma_cancel_card_parts,
+        "resumo_bate_card_concluida": (resumo_zoho + resumo_enc) == card_ajustado,
+        "resumo_bate_card_cancelada": (resumo_ns + resumo_canc) == card_cancel,
+        "sem_futuro_mal_classificado": viol_futuro_mal == 0,
+        "sem_andamento_como_encerrado": viol_andamento_como_encerrado == 0,
+        "sem_encerrado_como_andamento": viol_encerrado_como_andamento == 0,
+        "sem_futuro_como_passado": viol_andamento_como_encerrado == 0,
+        "sem_passado_como_futuro": viol_passado_como_futuro == 0,
+        "futura_fora_ajustado": futura_entra_ajustado == 0,
+        "andamento_fora_ajustado": andamento_entra_ajustado == 0,
+        "futura_fora_cancelada": futura_entra_cancelada == 0,
+        "andamento_fora_cancelada": andamento_entra_cancelada == 0,
+        "agora_brt": (kpis or {}).get("agora_brt"),
+    }
+
+
+def comparecimento_ajustado_bundle(
+    df_raw: pd.DataFrame,
+    df_cadastro: pd.DataFrame | None,
+    *,
+    filtrar_oficial: bool = False,
+    agora_brt: pd.Timestamp | None = None,
+) -> dict:
+    """Fonte única: linhas preparadas, KPIs do card, agregado e debug."""
+    agora = agora_brt or comparecimento_ajustado_agora_brt()
+    linhas = comparecimento_ajustado_preparar(
+        df_raw, df_cadastro, filtrar_oficial=filtrar_oficial,
+    )
+    linhas = comparecimento_ajustado_aplicar_flags(linhas, agora_brt=agora)
+    kpis = comparecimento_ajustado_kpis(linhas)
+    agg = comparecimento_ajustado_por_executiva(linhas)
+    debug = comparecimento_ajustado_debug_tabela(agg)
+    debug_horario = comparecimento_ajustado_debug_horario(linhas)
+    resumo_periodo = comparecimento_ajustado_resumo_periodo_por_status(linhas)
+    conferencia = comparecimento_ajustado_conferencia_periodo(linhas)
+    validacao = comparecimento_ajustado_validacao(
+        kpis, agg, resumo_periodo, conferencia, linhas=linhas,
+    )
+    validacao["horario_sem_violacoes"] = (
+        debug_horario["qtd_violacoes_futuro"] == 0
+        and debug_horario.get("qtd_violacoes_passado_como_futuro", 0) == 0
+        and debug_horario.get("qtd_violacoes_andamento_como_encerrado", 0) == 0
+        and debug_horario.get("qtd_violacoes_encerrado_como_andamento", 0) == 0
+    )
+    return {
+        "linhas": linhas,
+        "kpis": kpis,
+        "agg": agg,
+        "debug": debug,
+        "debug_horario": debug_horario,
+        "resumo_periodo": resumo_periodo,
+        "resumo_ocorridas": resumo_periodo,
+        "conferencia": conferencia,
+        "validacao": validacao,
+        "agora_brt": agora,
+    }
+
+
+def comparecimento_ajustado_merge_ranking(
+    ranking: pd.DataFrame,
+    agg: pd.DataFrame,
+) -> pd.DataFrame:
+    """Anexa colunas do teste ao ranking sem remover `comparecimentos`."""
+    if ranking is None or ranking.empty:
+        return ranking
+    ranking = ranking.copy()
+    for c in _COMPARECIMENTO_AJUSTADO_AGG_COLS:
+        if c in ranking.columns:
+            ranking = ranking.drop(columns=[c])
+    if agg is None or agg.empty:
+        for c in _COMPARECIMENTO_AJUSTADO_AGG_COLS:
+            ranking[c] = 0
+        return ranking
+    merged = ranking.merge(agg, on="executiva", how="left")
+    for c in _COMPARECIMENTO_AJUSTADO_AGG_COLS:
+        if c in merged.columns:
+            merged[c] = merged[c].fillna(0).astype(int)
+    if "comparecimentos_zoho" in merged.columns and "comparecimentos_ajustado" in merged.columns:
+        viol = merged["comparecimentos_ajustado"] < merged["comparecimentos_zoho"]
+        if viol.any():
+            merged.loc[viol, "comparecimentos_ajustado"] = merged.loc[
+                viol, "comparecimentos_zoho",
+            ]
+    return merged
+
+
+def comparecimento_ajustado_filtrar_executiva(
+    df: pd.DataFrame,
+    executiva_nome: str,
+) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    nome = str(executiva_nome or "").strip()
+    return df.loc[df["executiva"].astype(str).str.strip() == nome].copy()
+
+
+def comparecimento_ajustado_tabela_leidianne(
+    agg: pd.DataFrame,
+) -> pd.DataFrame:
+    """Comparativo semana atual: ajustado vs amostra Leidianne."""
+    rows: list[dict] = []
+    for closer, lista_n in LISTA_LEIDIANNE_COMPARECIMENTOS.items():
+        if agg is not None and not agg.empty:
+            m = agg["executiva"].astype(str).str.strip() == closer
+            row = agg.loc[m]
+            if not row.empty:
+                r = row.iloc[0]
+                zoho = int(r.get("comparecimentos_zoho", 0) or 0)
+                pend = int(r.get("agendadas_horario_encerrado", 0) or 0)
+                ajust = int(r.get("comparecimentos_ajustado", 0) or 0)
+            else:
+                zoho = pend = ajust = 0
+        else:
+            zoho = pend = ajust = 0
+        rows.append({
+            "closer": closer,
+            "comparecimentos_zoho": zoho,
+            "agendadas_horario_encerrado": pend,
+            "comparecimentos_ajustado": ajust,
+            "lista_leidianne": lista_n,
+            "diferenca_ajustado_vs_lista": ajust - lista_n,
+        })
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "closer", "comparecimentos_zoho", "agendadas_horario_encerrado",
+                "comparecimentos_ajustado", "lista_leidianne",
+                "diferenca_ajustado_vs_lista",
+            ],
+        )
+    out = pd.DataFrame(rows)
+    out = pd.concat(
+        [
+            out,
+            pd.DataFrame([{
+                "closer": "TOTAL",
+                "comparecimentos_zoho": int(out["comparecimentos_zoho"].sum()),
+                "agendadas_horario_encerrado": int(
+                    out["agendadas_horario_encerrado"].sum(),
+                ),
+                "comparecimentos_ajustado": int(out["comparecimentos_ajustado"].sum()),
+                "lista_leidianne": int(out["lista_leidianne"].sum()),
+                "diferenca_ajustado_vs_lista": int(
+                    out["diferenca_ajustado_vs_lista"].sum(),
+                ),
+            }]),
+        ],
+        ignore_index=True,
+    )
+    return out
 
 
 def vendas_detalhe_filtrar_closer(df_det_norm: pd.DataFrame,

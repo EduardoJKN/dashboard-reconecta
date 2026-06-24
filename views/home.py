@@ -410,6 +410,11 @@ section_title(
     f"ranking do período · {metric_label_home.lower()} · "
     f"{_exibicao_label_home.lower()}",
 )
+st.caption(
+    "**Oportunidades** = deals criados no período · **Agendamentos** = reuniões "
+    "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída. "
+    "Agendamentos e comparecimentos seguem o *owner* da activity no CRM."
+)
 
 if ranking_home is None or ranking_home.empty:
     st.info("Sem dados de ranking no período/filtros atuais.")

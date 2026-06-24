@@ -497,6 +497,23 @@ def get_vendas_leads_detalhe_diario(data_ini: date,
     return get_prevendas_leads_detalhe_diario(data_ini, data_fim)
 
 
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def get_executivas_comparecimento_ajustado(
+    data_ini: date,
+    data_fim: date,
+) -> pd.DataFrame:
+    """Activities com flags de comparecimento ajustado (teste operacional)."""
+    df = run_sql_file(
+        "executivas_comparecimento_ajustado.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty:
+        for col in ("start_datetime", "end_datetime", "created_time", "data_reuniao"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col])
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pré-vendas…")
 def get_prevendas_sdrs_oficiais() -> pd.DataFrame:
     return run_sql_file("prevendas_sdrs_oficiais.sql")
