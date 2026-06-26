@@ -27,6 +27,7 @@ WITH base_dados AS (
         d.data_hora_compra::date AS data_venda,
         d.stage,
         d.tipo_venda,
+        NULLIF(btrim(d.forma_venda), '') AS forma_venda,
         CASE
             WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
             ELSE REPLACE(
@@ -158,7 +159,8 @@ activity_rows AS (
         b.deal_id,
         a.activity_id,
         NULL::numeric AS montante,
-        NULL::numeric AS receita
+        NULL::numeric AS receita,
+        NULL::text AS forma_venda
     FROM acts a
     JOIN base_dados b
       ON a.act_deal_id = b.deal_id
@@ -189,6 +191,7 @@ sales_base AS (
         b.deal_id,
         b.montante,
         b.receita,
+        b.forma_venda,
         b.lead_created_at
     FROM base_dados b
     LEFT JOIN zoho_users u
@@ -223,7 +226,8 @@ sales_rows AS (
         sb.deal_id,
         NULL::text AS activity_id,
         sb.montante,
-        sb.receita
+        sb.receita,
+        sb.forma_venda
     FROM sales_base sb
 ),
 final_rows AS (
@@ -247,7 +251,8 @@ final_rows AS (
         deal_id,
         activity_id,
         montante,
-        receita
+        receita,
+        forma_venda
     FROM activity_rows a
 
     UNION ALL
@@ -272,7 +277,8 @@ final_rows AS (
         deal_id,
         activity_id,
         montante,
-        receita
+        receita,
+        forma_venda
     FROM sales_rows
 )
 -- `time_vendas` é coluna nova adicionada para o Top Closers de Vendas
@@ -302,6 +308,7 @@ SELECT
     deal_id,
     activity_id,
     montante,
-    receita
+    receita,
+    forma_venda
 FROM final_rows
 ORDER BY COALESCE(data_agendamento, data_criacao, data_venda), deal_id, activity_id NULLS LAST;

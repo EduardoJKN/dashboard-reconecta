@@ -64,6 +64,8 @@ from src.transforms import (
     STAGE_LABEL_NAO_QUALIFICADOS,
     STAGE_LABEL_QUALIFICADOS,
     vendas_detalhe_mask_por_metrica,
+    vendas_forma_venda_breakdown,
+    vendas_forma_venda_breakdown_rows,
     vendas_normalizar_detalhe,
 )
 from src.ui.charts import bar_etapa_distribuicao, bar_ranked, bar_simple, line
@@ -1026,6 +1028,22 @@ with tab_rank:
                     def _sum_money(col):
                         return float(fonte[col].fillna(0).sum()) if col in fonte.columns else 0.0
 
+                    _forma_vendas_breakdown = None
+                    if (det_norm is not None and not det_norm.empty
+                            and "forma_venda" in det_norm.columns):
+                        _closer_forma = (
+                            None if closer_escolhido == OPCAO_TODAS
+                            else closer_escolhido
+                        )
+                        _forma_bd = vendas_forma_venda_breakdown(
+                            det_norm, ctx.data_ini, ctx.data_fim,
+                            closer=_closer_forma,
+                        )
+                        _forma_vendas_breakdown = [
+                            (lbl, int_br(val))
+                            for lbl, val in vendas_forma_venda_breakdown_rows(_forma_bd)
+                        ]
+
                     if contagem_ajustado is not None:
                         st.markdown(
                             f"**{closer_escolhido}** · {metric_label}: "
@@ -1042,8 +1060,12 @@ with tab_rank:
 
                     mc1, mc2, mc3 = st.columns(3, gap="small")
                     with mc1:
-                        metric_card_v2("Vendas", int_br(_sum_col("vendas")),
-                                       hint="deals ganhos · Novo cliente", accent=True)
+                        metric_card_v2(
+                            "Vendas", int_br(_sum_col("vendas")),
+                            hint="deals ganhos · Novo cliente",
+                            accent=True,
+                            breakdown=_forma_vendas_breakdown,
+                        )
                     with mc2:
                         metric_card_v2("Agendamentos", int_br(_sum_col("agendamentos")),
                                        hint="status_reuniao IS NOT NULL")

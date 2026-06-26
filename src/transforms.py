@@ -864,6 +864,78 @@ def vendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
     return pd.Series(False, index=df_det_norm.index)
 
 
+# Valores canônicos de `zoho_deals.forma_venda` — espelham
+# one_page_novos_forma_venda.sql (card Novos da One Page).
+FORMA_VENDA_EM_CALL = "Em call"
+FORMA_VENDA_FOLLOW_UP = "Follow up"
+
+
+def vendas_forma_venda_breakdown(
+    df_det_norm: pd.DataFrame,
+    data_ini,
+    data_fim,
+    closer: str | None = None,
+) -> dict[str, int]:
+    """Contagem Em call / Follow up no universo de vendas do Top Closers.
+
+    Usa o detalhe linha-a-linha (`tipo_registro_base = Venda`, compra no
+    período) com os mesmos filtros de closer/time já aplicados em
+    `df_det_norm`. A classificação segue `forma_venda` do deal — mesma
+    regra do card Novos na One Page (`one_page_novos_forma_venda.sql`).
+
+    O total principal do card Vendas continua vindo do ranking; este dict
+    alimenta apenas o detalhamento. `sem_classificacao` cobre deals sem
+    `forma_venda` reconhecida (null, vazio ou valor fora de Em call/Follow).
+    """
+    empty = {
+        "em_call": 0,
+        "follow": 0,
+        "sem_classificacao": 0,
+        "detalhe_total": 0,
+    }
+    if df_det_norm is None or df_det_norm.empty:
+        return empty
+
+    mask = vendas_detalhe_mask_por_metrica(df_det_norm, "vendas", data_ini, data_fim)
+    if closer is not None:
+        mask &= vendas_detalhe_filtrar_closer(df_det_norm, closer)
+
+    vendas_df = df_det_norm.loc[mask]
+    if vendas_df.empty or "deal_id" not in vendas_df.columns:
+        return empty
+
+    deals = vendas_df.drop_duplicates(subset=["deal_id"], keep="first")
+    detalhe_total = int(deals["deal_id"].nunique(dropna=False))
+
+    forma_col = deals.get("forma_venda", pd.Series("", index=deals.index))
+    forma = forma_col.fillna("").astype(str).str.strip()
+
+    em_call = int((forma == FORMA_VENDA_EM_CALL).sum())
+    follow = int((forma == FORMA_VENDA_FOLLOW_UP).sum())
+    sem_classificacao = max(0, detalhe_total - em_call - follow)
+
+    return {
+        "em_call": em_call,
+        "follow": follow,
+        "sem_classificacao": sem_classificacao,
+        "detalhe_total": detalhe_total,
+    }
+
+
+def vendas_forma_venda_breakdown_rows(
+    breakdown: dict[str, int],
+) -> list[tuple[str, int]]:
+    """Linhas (rótulo, contagem bruta) para o breakdown do card Vendas."""
+    rows: list[tuple[str, int]] = [
+        ("Em call", int(breakdown.get("em_call", 0))),
+        ("Follow up", int(breakdown.get("follow", 0))),
+    ]
+    sem = int(breakdown.get("sem_classificacao", 0))
+    if sem > 0:
+        rows.append(("Sem forma", sem))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Comparecimento ajustado (teste operacional — Executivas & Times)
 # ---------------------------------------------------------------------------

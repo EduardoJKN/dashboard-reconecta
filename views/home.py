@@ -32,6 +32,8 @@ from src.transforms import (
     vendas_detalhe_filtrar_closer,
     vendas_detalhe_filtrar_time,
     vendas_detalhe_mask_por_metrica,
+    vendas_forma_venda_breakdown,
+    vendas_forma_venda_breakdown_rows,
     vendas_normalizar_detalhe,
     visao_geral_kpis,
 )
@@ -620,6 +622,22 @@ else:
                 def _sum_money_h(col):
                     return float(fonte_h[col].fillna(0).sum()) if col in fonte_h.columns else 0.0
 
+                _forma_vendas_breakdown_h = None
+                if (det_norm is not None and not det_norm.empty
+                        and "forma_venda" in det_norm.columns):
+                    _closer_forma_h = (
+                        None if closer_escolhido_h == OPCAO_TODOS_HOME
+                        else closer_escolhido_h
+                    )
+                    _forma_bd_h = vendas_forma_venda_breakdown(
+                        det_norm, ctx.data_ini, ctx.data_fim,
+                        closer=_closer_forma_h,
+                    )
+                    _forma_vendas_breakdown_h = [
+                        (lbl, int_br(val))
+                        for lbl, val in vendas_forma_venda_breakdown_rows(_forma_bd_h)
+                    ]
+
                 st.markdown(
                     f"**{closer_escolhido_h}** · {metric_label_home}: "
                     f"gráfico {int_br(contagem_graf_h)} · "
@@ -628,8 +646,12 @@ else:
 
                 mc1, mc2, mc3 = st.columns(3, gap="small")
                 with mc1:
-                    metric_card_v2("Vendas", int_br(_sum_col_h("vendas")),
-                                   hint="deals ganhos · Novo cliente", accent=True)
+                    metric_card_v2(
+                        "Vendas", int_br(_sum_col_h("vendas")),
+                        hint="deals ganhos · Novo cliente",
+                        accent=True,
+                        breakdown=_forma_vendas_breakdown_h,
+                    )
                 with mc2:
                     metric_card_v2("Agendamentos", int_br(_sum_col_h("agendamentos")),
                                    hint="status_reuniao IS NOT NULL")
