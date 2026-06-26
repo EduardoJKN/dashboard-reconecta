@@ -167,7 +167,13 @@ EXECUTIVAS_RANKING_METRIC_OPTIONS: dict[str, str] = {
     "Cancelados":       "cancelados",
     "Clientes Cancelados": "churn",
     "Vencidos":         "vencidos",
+    "Tempo médio entrada → ganho": "ciclo_entrada_medio_dias",
+    "Tempo médio call → ganho":    "ciclo_call_medio_dias",
 }
+EXECUTIVAS_RANKING_METRICAS_CICLO = frozenset({
+    "ciclo_entrada_medio_dias",
+    "ciclo_call_medio_dias",
+})
 EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS = frozenset({
     "receita", "montante",
     "receita_mais_12", "receita_menos_12", "receita_nao_atua",
@@ -407,6 +413,10 @@ COLUNAS_PRINCIPAIS_RANKING = [
     "pct_vendas",
     "pct_recebimento",
     "ticket_medio",
+    "ciclo_entrada_medio_dias",
+    "ciclo_call_medio_dias",
+    "n_ciclo_entrada",
+    "n_ciclo_call",
 ]
 
 
@@ -934,6 +944,381 @@ def vendas_forma_venda_breakdown_rows(
     if sem > 0:
         rows.append(("Sem forma", sem))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Tempo de ciclo de venda (Executivas & Times — deals ganhos no período)
+# ---------------------------------------------------------------------------
+
+CICLO_VENDA_COLS_RANKING = (
+    "ciclo_entrada_medio_dias",
+    "ciclo_call_medio_dias",
+    "n_ciclo_entrada",
+    "n_ciclo_call",
+)
+
+_CICLO_VENDA_COLS_FLOAT = frozenset({
+    "ciclo_entrada_medio_dias",
+    "ciclo_call_medio_dias",
+    "ciclo_entrada_dias",
+    "ciclo_call_dias",
+    "ciclo_entrada_mais_12",
+    "ciclo_call_mais_12",
+    "ciclo_entrada_menos_12",
+    "ciclo_call_menos_12",
+    "pct_vendas_ciclo",
+    "pct_vendas",
+    "x_valor",
+    "y_valor",
+})
+
+_CICLO_VENDA_COLS_INT = frozenset({
+    "n_ciclo_entrada",
+    "n_ciclo_call",
+    "vendas_ciclo",
+    "vendas_mais_12",
+    "vendas_menos_12",
+})
+
+
+def ciclo_venda_coercer_colunas_numericas(df: pd.DataFrame) -> pd.DataFrame:
+    """Garante dtypes numéricos nas colunas de ciclo (float/int).
+
+    Se alguma coluna já tiver sido formatada como texto (ex.: ``12,4 dias``),
+    remove o sufixo e normaliza vírgula decimal antes de converter.
+    """
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    for col in out.columns:
+        if col in _CICLO_VENDA_COLS_FLOAT or col.endswith("_dias"):
+            ser = out[col]
+            if ser.dtype == object:
+                ser = (
+                    ser.astype(str)
+                    .str.replace("dias", "", regex=False)
+                    .str.strip()
+                    .str.replace(",", ".", regex=False)
+                )
+            out[col] = pd.to_numeric(ser, errors="coerce")
+        elif col in _CICLO_VENDA_COLS_INT or col.startswith("n_ciclo"):
+            out[col] = (
+                pd.to_numeric(out[col], errors="coerce")
+                .fillna(0)
+                .astype("int64")
+            )
+    return out
+
+
+def ciclo_venda_dtypes_resumo(df: pd.DataFrame) -> dict[str, str]:
+    """Dtypes das colunas de ciclo — útil para diagnóstico antes dos gráficos."""
+    if df is None or df.empty:
+        return {}
+    cols = [c for c in CICLO_VENDA_COLS_RANKING if c in df.columns]
+    return {c: str(df[c].dtype) for c in cols}
+
+
+def ciclo_venda_anotar_classificacao(df: pd.DataFrame) -> pd.DataFrame:
+    """Flags +12/-12 no detalhe de ciclo (2 fontes — mesma regra do detalhe Vendas)."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    crm = out.get("classificacao_crm", pd.Series("", index=out.index)).fillna("").astype(str)
+    ext = out.get("classificado", pd.Series("", index=out.index)).fillna("").astype(str)
+    flag_mais = (crm == "Atua +12") | (ext == "Atua +12")
+    flag_menos = (crm == "Atua -12") | (ext == "Atua -12")
+    flag_nao = (crm == "Não atua") | (ext == "Não atua")
+    out["is_mais_12"] = flag_mais
+    out["is_menos_12"] = ~flag_mais & flag_menos
+    out["is_nao_atua"] = ~flag_mais & ~flag_menos & flag_nao
+    out["is_sem_classificacao"] = ~flag_mais & ~flag_menos & ~flag_nao
+    return out
+
+
+def ciclo_venda_preparar(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """Calcula ciclo em dias por deal ganho a partir de `executivas_ciclo_venda.sql`.
+
+    Regras documentadas:
+      - ts_entrada = COALESCE(ts_lead, ts_deal) — lead pareado ou criação do deal
+      - ciclo_entrada_dias = ts_venda - ts_entrada (≥ 0)
+      - ciclo_call_dias = ts_venda - ts_comparecimento quando a 1ª reunião
+        concluída antes do ganho existe (SQL já filtra Concluída/Concluído)
+    """
+    if df_raw is None or df_raw.empty:
+        return pd.DataFrame()
+    out = df_raw.copy()
+    for col in ("ts_lead", "ts_deal", "ts_comparecimento", "ts_venda"):
+        if col in out.columns:
+            out[col] = pd.to_datetime(out[col], errors="coerce")
+    ts_entrada = out["ts_lead"].where(out["ts_lead"].notna(), out["ts_deal"])
+    delta_entrada = (out["ts_venda"] - ts_entrada).dt.total_seconds() / 86400.0
+    out["ciclo_entrada_dias"] = delta_entrada.where(
+        ts_entrada.notna() & out["ts_venda"].notna() & (delta_entrada >= 0)
+    )
+    delta_call = (out["ts_venda"] - out["ts_comparecimento"]).dt.total_seconds() / 86400.0
+    out["ciclo_call_dias"] = delta_call.where(
+        out["ts_comparecimento"].notna()
+        & out["ts_venda"].notna()
+        & (delta_call >= 0)
+    )
+    return ciclo_venda_anotar_classificacao(out)
+
+
+def ciclo_venda_filtrar(
+    df: pd.DataFrame,
+    segmentacao: str = "Todas",
+    funil: str = "Todos",
+    times_sel: list | None = None,
+) -> pd.DataFrame:
+    """Recorte do detalhe de ciclo por +12/-12, funil/canal e times."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if segmentacao == "+12" and "is_mais_12" in out.columns:
+        out = out.loc[out["is_mais_12"]].copy()
+    elif segmentacao == "-12" and "is_menos_12" in out.columns:
+        out = out.loc[out["is_menos_12"]].copy()
+    elif segmentacao == "Não atua" and "is_nao_atua" in out.columns:
+        out = out.loc[out["is_nao_atua"]].copy()
+    elif segmentacao == "Sem classificação" and "is_sem_classificacao" in out.columns:
+        out = out.loc[out["is_sem_classificacao"]].copy()
+    if funil and funil != "Todos":
+        if funil in ("Inbound", "SS/Fábrica") and "canal_origem" in out.columns:
+            out = out.loc[out["canal_origem"].astype(str).str.strip() == funil].copy()
+        elif funil == "Sem origem" and "funil_origem" in out.columns:
+            fo = out["funil_origem"].astype(str).str.strip()
+            out = out.loc[
+                fo.str.lower().eq("sem origem") | fo.eq("") | out["funil_origem"].isna()
+            ].copy()
+    if times_sel and "time_vendas" in out.columns:
+        mask = pd.Series(False, index=out.index)
+        for t in times_sel:
+            mask |= out["time_vendas"].astype(str).str.strip() == str(t).strip()
+        out = out.loc[mask].copy()
+    return out
+
+
+def ciclo_venda_resolver_executiva(
+    closer: str,
+    df_oficiais: pd.DataFrame | None,
+) -> str:
+    """Nome canônico do ranking a partir do closer vindo do SQL."""
+    raw = (closer if isinstance(closer, str) else "") or ""
+    raw = raw.strip()
+    if not raw or raw == "Sem Closer":
+        return raw
+    tokens = _build_executivas_oficiais_tokens(df_oficiais)
+    if tokens:
+        canon = _match_oficial_por_tokens(raw, tokens)
+        if canon:
+            return canon
+    return raw
+
+
+def _ciclo_venda_media_valida(series: pd.Series) -> float:
+    valid = series.dropna()
+    valid = valid[valid >= 0]
+    if valid.empty:
+        return float("nan")
+    return float(valid.mean())
+
+
+def _ciclo_venda_agg_grupo(grp: pd.DataFrame) -> dict:
+    n_vendas = int(len(grp))
+    n_entrada = int(grp["ciclo_entrada_dias"].notna().sum()) if "ciclo_entrada_dias" in grp.columns else 0
+    n_call = int(grp["ciclo_call_dias"].notna().sum()) if "ciclo_call_dias" in grp.columns else 0
+    return {
+        "vendas_ciclo": n_vendas,
+        "ciclo_entrada_medio_dias": _ciclo_venda_media_valida(grp.get("ciclo_entrada_dias", pd.Series(dtype=float))),
+        "ciclo_call_medio_dias": _ciclo_venda_media_valida(grp.get("ciclo_call_dias", pd.Series(dtype=float))),
+        "n_ciclo_entrada": n_entrada,
+        "n_ciclo_call": n_call,
+    }
+
+
+def ciclo_venda_agregar_por_closer(
+    df: pd.DataFrame,
+    df_oficiais: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Médias de ciclo por closer (coluna `executiva` alinhada ao ranking)."""
+    cols = [
+        "executiva", "time_vendas", "vendas_ciclo", "pct_vendas_ciclo",
+        "ciclo_entrada_medio_dias", "ciclo_call_medio_dias",
+        "n_ciclo_entrada", "n_ciclo_call",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+    tmp = df.copy()
+    tmp["executiva"] = tmp["closer"].apply(
+        lambda c: ciclo_venda_resolver_executiva(c, df_oficiais)
+    )
+    total_vendas = len(tmp)
+    rows: list[dict] = []
+    for executiva, grp in tmp.groupby("executiva", sort=False):
+        row = _ciclo_venda_agg_grupo(grp)
+        row["executiva"] = executiva
+        row["time_vendas"] = (
+            grp["time_vendas"].mode().iloc[0]
+            if "time_vendas" in grp.columns and not grp["time_vendas"].empty
+            else ""
+        )
+        row["pct_vendas_ciclo"] = (
+            row["vendas_ciclo"] / total_vendas * 100 if total_vendas else 0.0
+        )
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = ciclo_venda_coercer_colunas_numericas(out)
+    return out[cols] if not out.empty else pd.DataFrame(columns=cols)
+
+
+def ciclo_venda_merge_ranking(
+    ranking: pd.DataFrame,
+    ciclo_por_closer: pd.DataFrame,
+) -> pd.DataFrame:
+    """Injeta colunas de ciclo no ranking por match de `executiva`."""
+    if ranking is None or ranking.empty:
+        return ranking
+    out = ranking.copy()
+    for col in CICLO_VENDA_COLS_RANKING:
+        if col.endswith("_dias"):
+            out[col] = float("nan")
+        else:
+            out[col] = 0
+    if ciclo_por_closer is None or ciclo_por_closer.empty:
+        return ciclo_venda_coercer_colunas_numericas(out)
+    ciclo_lookup = ciclo_venda_coercer_colunas_numericas(ciclo_por_closer.copy())
+    for idx, nome in out["executiva"].items():
+        lookup_row = None
+        match = ciclo_lookup.loc[ciclo_lookup["executiva"] == nome]
+        if not match.empty:
+            lookup_row = match.iloc[0]
+        else:
+            for _, row in ciclo_lookup.iterrows():
+                if _executivas_churn_nomes_casam(str(nome), str(row["executiva"])):
+                    lookup_row = row
+                    break
+        if lookup_row is None:
+            continue
+        for col in CICLO_VENDA_COLS_RANKING:
+            if col in lookup_row.index:
+                out.at[idx, col] = lookup_row[col]
+    return ciclo_venda_coercer_colunas_numericas(out)
+
+
+def ciclo_venda_tabela_por_time(df: pd.DataFrame) -> pd.DataFrame:
+    """Consolida ciclo por time com breakdown +12/-12."""
+    base_cols = [
+        "time_vendas", "vendas", "pct_vendas",
+        "ciclo_entrada_medio_dias", "ciclo_call_medio_dias",
+        "vendas_mais_12", "ciclo_entrada_mais_12", "ciclo_call_mais_12",
+        "vendas_menos_12", "ciclo_entrada_menos_12", "ciclo_call_menos_12",
+    ]
+    if df is None or df.empty or "time_vendas" not in df.columns:
+        return pd.DataFrame(columns=base_cols)
+    total = len(df)
+    rows: list[dict] = []
+    for time_nome, grp in df.groupby("time_vendas", sort=False):
+        base = _ciclo_venda_agg_grupo(grp)
+        row = {
+            "time_vendas": time_nome,
+            "vendas": base["vendas_ciclo"],
+            "pct_vendas": base["vendas_ciclo"] / total * 100 if total else 0.0,
+            "ciclo_entrada_medio_dias": base["ciclo_entrada_medio_dias"],
+            "ciclo_call_medio_dias": base["ciclo_call_medio_dias"],
+        }
+        if "is_mais_12" in grp.columns:
+            g12 = grp.loc[grp["is_mais_12"]]
+            a12 = _ciclo_venda_agg_grupo(g12)
+            row["vendas_mais_12"] = a12["vendas_ciclo"]
+            row["ciclo_entrada_mais_12"] = a12["ciclo_entrada_medio_dias"]
+            row["ciclo_call_mais_12"] = a12["ciclo_call_medio_dias"]
+        else:
+            row["vendas_mais_12"] = 0
+            row["ciclo_entrada_mais_12"] = float("nan")
+            row["ciclo_call_mais_12"] = float("nan")
+        if "is_menos_12" in grp.columns:
+            g_12 = grp.loc[grp["is_menos_12"]]
+            a_12 = _ciclo_venda_agg_grupo(g_12)
+            row["vendas_menos_12"] = a_12["vendas_ciclo"]
+            row["ciclo_entrada_menos_12"] = a_12["ciclo_entrada_medio_dias"]
+            row["ciclo_call_menos_12"] = a_12["ciclo_call_medio_dias"]
+        else:
+            row["vendas_menos_12"] = 0
+            row["ciclo_entrada_menos_12"] = float("nan")
+            row["ciclo_call_menos_12"] = float("nan")
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    return ciclo_venda_coercer_colunas_numericas(out)[base_cols]
+
+
+def ciclo_venda_xy_dataset(
+    ciclo_por_closer: pd.DataFrame,
+    tipo_ciclo: str,
+    eixo_x: str,
+) -> pd.DataFrame:
+    """Prepara pontos do scatter (1 row por closer com eixo X/Y definidos)."""
+    if ciclo_por_closer is None or ciclo_por_closer.empty:
+        return pd.DataFrame()
+    y_col = (
+        "ciclo_entrada_medio_dias" if tipo_ciclo == "entrada"
+        else "ciclo_call_medio_dias"
+    )
+    out = ciclo_venda_coercer_colunas_numericas(ciclo_por_closer.copy())
+    out = out.loc[out[y_col].notna()].copy()
+    if out.empty:
+        return out
+    if eixo_x == "percentual":
+        out["x_valor"] = out.get("pct_vendas_ciclo", 0.0)
+        out["x_label"] = "pct"
+    else:
+        out["x_valor"] = out.get("vendas_ciclo", out.get("n_ciclo_entrada", 0))
+        out["x_label"] = "qtd"
+    out["y_valor"] = out[y_col]
+    return ciclo_venda_coercer_colunas_numericas(out)
+
+
+def ciclo_venda_validacao(
+    n_deals_ciclo: int,
+    n_vendas_ranking: int,
+    ciclo_por_closer: pd.DataFrame,
+) -> dict:
+    """Conferência: total de deals no SQL vs vendas do ranking."""
+    soma_closer = (
+        int(ciclo_por_closer["vendas_ciclo"].sum())
+        if ciclo_por_closer is not None and not ciclo_por_closer.empty
+        else 0
+    )
+    return {
+        "n_deals_ciclo": n_deals_ciclo,
+        "n_vendas_ranking": n_vendas_ranking,
+        "soma_vendas_por_closer": soma_closer,
+        "bate_ranking": n_deals_ciclo == n_vendas_ranking == soma_closer,
+    }
+
+
+CICLO_VENDA_FUNIL_OPCOES: tuple[str, ...] = ("Inbound", "SS/Fábrica", "Sem origem")
+
+
+def _ciclo_venda_tem_sem_origem(df: pd.DataFrame) -> bool:
+    if df is None or df.empty or "funil_origem" not in df.columns:
+        return False
+    fo = df["funil_origem"].astype(str).str.strip()
+    return fo.str.lower().eq("sem origem").any() or fo.eq("").any() or df["funil_origem"].isna().any()
+
+
+def ciclo_venda_opcoes_funil(df: pd.DataFrame) -> list[str]:
+    """Opções do filtro Funil / canal — apenas Inbound, SS/Fábrica e Sem origem."""
+    opts = ["Todos"]
+    if df is None or df.empty:
+        return opts
+    if "canal_origem" in df.columns:
+        for c in ("Inbound", "SS/Fábrica"):
+            if (df["canal_origem"].astype(str).str.strip() == c).any():
+                opts.append(c)
+    if _ciclo_venda_tem_sem_origem(df):
+        opts.append("Sem origem")
+    return opts
 
 
 # ---------------------------------------------------------------------------

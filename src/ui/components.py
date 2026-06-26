@@ -70,6 +70,25 @@ _RANKING_COUNT_LABELS: dict[str, tuple[str, str]] = {
     "churn": ("Churn", "Clientes em stage Churn (aba dedicada)."),
 }
 
+_RANKING_CICLO_LABELS: dict[str, tuple[str, str]] = {
+    "ciclo_entrada_medio_dias": (
+        "Tempo médio entrada → ganho",
+        "Média em dias entre entrada do lead/deal e data de compra (deals ganhos).",
+    ),
+    "ciclo_call_medio_dias": (
+        "Tempo médio call → ganho",
+        "Média em dias entre 1ª reunião concluída e data de compra.",
+    ),
+    "n_ciclo_entrada": (
+        "Vendas c/ ciclo entrada",
+        "Deals com data suficiente para calcular entrada → ganho.",
+    ),
+    "n_ciclo_call": (
+        "Vendas c/ ciclo call",
+        "Deals com reunião concluída antes do ganho.",
+    ),
+}
+
 
 def ranking_column_config(
     df: pd.DataFrame,
@@ -107,6 +126,12 @@ def ranking_column_config(
         if col in df.columns:
             cfg[col] = st.column_config.NumberColumn(
                 label, format="%d", help=help_text,
+            )
+    for col, (label, help_text) in _RANKING_CICLO_LABELS.items():
+        if col in df.columns:
+            fmt = "%.0f" if col.endswith("_dias") else "%d"
+            cfg[col] = st.column_config.NumberColumn(
+                label, format=fmt, help=help_text,
             )
     return cfg
 

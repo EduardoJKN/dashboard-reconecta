@@ -4,6 +4,7 @@ import streamlit as st
 from src.repositories import (
     get_executivas,
     get_executivas_churn_pos_venda,
+    get_executivas_ciclo_venda,
     get_executivas_comparecimento_ajustado,
     get_executivas_funil_agendamentos,
     get_executivas_lead_in_triagem,
@@ -16,6 +17,7 @@ from src.repositories import (
 from src.transforms import (
     CHURN_POS_SEM_IDENTIFICADO,
     EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
+    EXECUTIVAS_RANKING_METRICAS_CICLO,
     EXECUTIVAS_RANKING_METRICAS_NEUTRAS,
     EXECUTIVAS_RANKING_METRIC_OPTIONS,
     RANKING_EXIBICAO_ATIVOS,
@@ -30,6 +32,14 @@ from src.transforms import (
     comparecimento_ajustado_filtrar_executiva,
     comparecimento_ajustado_merge_ranking,
     comparecimento_ajustado_validacao,
+    ciclo_venda_agregar_por_closer,
+    ciclo_venda_filtrar,
+    ciclo_venda_merge_ranking,
+    ciclo_venda_opcoes_funil,
+    ciclo_venda_preparar,
+    ciclo_venda_tabela_por_time,
+    ciclo_venda_validacao,
+    ciclo_venda_xy_dataset,
     COMPARECIMENTO_AJUSTADO_HELP,
     COMPARECIMENTO_CONFERENCIA_CLASSIF_OPCOES,
     executivas_churn_agregar_por_executiva,
@@ -68,7 +78,7 @@ from src.transforms import (
     vendas_forma_venda_breakdown_rows,
     vendas_normalizar_detalhe,
 )
-from src.ui.charts import bar_etapa_distribuicao, bar_ranked, bar_simple, line
+from src.ui.charts import bar_etapa_distribuicao, bar_ranked, bar_simple, line, scatter_ciclo_venda
 from src.ui.components import metric_card_v2, ranking_column_config, section_title
 from src.ui.page import start_page
 from src.ui.theme import brl, int_br, pct
@@ -767,6 +777,43 @@ with tab_rank:
                 f"no-show {int_br(_validacao_comp_aj.get('soma_noshow_agg', 0))} + "
                 f"canceladas {int_br(_validacao_comp_aj.get('soma_canceladas_agg', 0))}"
             )
+
+    # -------------------------------------------------------------------------
+    # Tempo de ciclo de venda — deals ganhos (SQL dedicado + agregação Python)
+    # -------------------------------------------------------------------------
+    try:
+        _df_ciclo_raw = get_executivas_ciclo_venda(ctx.data_ini, ctx.data_fim)
+    except Exception as e:
+        st.error(f"Falha ao carregar tempo de ciclo de venda: {e}")
+        _df_ciclo_raw = pd.DataFrame()
+    _df_ciclo_prep = ciclo_venda_preparar(_df_ciclo_raw)
+    _seg_ciclo_rank = (
+        classif_sel
+        if classif_sel in ("+12", "-12", "Não atua", "Sem classificação")
+        else "Todas"
+    )
+    _df_ciclo_base = ciclo_venda_filtrar(
+        _df_ciclo_prep,
+        segmentacao=_seg_ciclo_rank,
+        funil="Todos",
+        times_sel=_times_sel_global or None,
+    )
+    _ciclo_por_closer = ciclo_venda_agregar_por_closer(
+        _df_ciclo_base, _df_cadastro_ranking,
+    )
+    if ranking is not None and not ranking.empty:
+        ranking = ciclo_venda_merge_ranking(ranking, _ciclo_por_closer)
+    _n_vendas_ranking = (
+        int(ranking["vendas"].fillna(0).sum())
+        if ranking is not None and not ranking.empty and "vendas" in ranking.columns
+        else 0
+    )
+    _validacao_ciclo = ciclo_venda_validacao(
+        len(_df_ciclo_base),
+        _n_vendas_ranking,
+        _ciclo_por_closer,
+    )
+
     section_title(
         "Top Closers",
         f"ranking do período · {metric_label.lower()} · {classif_sel} · "
@@ -794,6 +841,7 @@ with tab_rank:
             metric_base = _RANKING_METRIC_OPTIONS[metric_label]
             metric_col = _resolve_metric_col(metric_base)
             is_money = metric_col in _METRICAS_FINANCEIRAS
+            is_ciclo = metric_col in EXECUTIVAS_RANKING_METRICAS_CICLO
 
             # Aviso quando o classif sobrescreve o universo de uma métrica
             # neutra (ex.: classif='+12' + métrica='Vendas' → ganhos_mais_12).
@@ -811,6 +859,9 @@ with tab_rank:
             else:
                 if metric_col == "churn":
                     ranking_plot = executivas_ranking_plot_churn(_churn_por_exec)
+                elif is_ciclo:
+                    ranking_plot = ranking[ranking[metric_col].notna()].copy()
+                    ranking_plot = ranking_plot.sort_values(metric_col, ascending=True)
                 else:
                     ranking_plot = ranking[ranking[metric_col].fillna(0) > 0].copy()
                     ranking_plot = ranking_plot.sort_values(
@@ -822,7 +873,10 @@ with tab_rank:
                 else:
                     fig_top = bar_ranked(
                         ranking_plot, "executiva", metric_col,
-                        top_n=12, height=320, money=is_money,
+                        top_n=12, height=320,
+                        money=is_money,
+                        days_format=is_ciclo,
+                        lower_is_better=is_ciclo,
                     )
                     chart_state = st.plotly_chart(
                         fig_top,
@@ -841,12 +895,20 @@ with tab_rank:
                     st.caption("Sem ranking pra detalhar nesta métrica/filtro.")
             elif (
                 metric_col not in ("churn", "comparecimentos_ajustado")
+                and metric_col not in EXECUTIVAS_RANKING_METRICAS_CICLO
                 and (det_norm is None or det_norm.empty)
             ):
                 with st.expander("Detalhe do closer selecionado", expanded=False):
                     st.caption(
                         "Detalhe linha-a-linha indisponível — "
                         "`get_vendas_leads_detalhe_diario` não devolveu linhas."
+                    )
+            elif metric_col in EXECUTIVAS_RANKING_METRICAS_CICLO:
+                with st.expander("Detalhe do closer selecionado", expanded=False):
+                    st.caption(
+                        "Tempo de ciclo é calculado por deal ganho "
+                        "(`executivas_ciclo_venda.sql`). Use o gráfico XY abaixo "
+                        "e as colunas de ciclo no ranking completo."
                     )
             else:
                 closers_disponiveis = ranking_plot["executiva"].dropna().astype(str).tolist()
@@ -1300,6 +1362,111 @@ with tab_rank:
                     column_config=ranking_column_config(df_detalhado, pin_executiva=True),
                 )
 
+    # =========================================================================
+    # Gráfico XY — tempo de ciclo × volume (complementar ao Top Closers)
+    # =========================================================================
+    section_title(
+        "Tempo de ciclo de venda por closer",
+        "relação entre volume de vendas e tempo médio de fechamento",
+    )
+    st.caption(
+        "Universo: vendas ganhas (stage Ganho · Novo cliente · data de compra no "
+        "período). **Entrada → ganho** = compra − lead/deal; **Call → ganho** = "
+        "compra − 1ª reunião concluída antes do ganho. Deals sem data suficiente "
+        "são ignorados no tempo médio (ver contagem no ranking completo)."
+    )
+    if _validacao_ciclo["bate_ranking"]:
+        st.caption(
+            f"✓ Vendas consideradas no ciclo: {int_br(_validacao_ciclo['n_deals_ciclo'])} "
+            f"= soma ranking ({int_br(_validacao_ciclo['n_vendas_ranking'])})."
+        )
+    elif _validacao_ciclo["n_deals_ciclo"] > 0:
+        st.warning(
+            "Divergência vendas ciclo × ranking: "
+            f"SQL {int_br(_validacao_ciclo['n_deals_ciclo'])} · "
+            f"ranking {int_br(_validacao_ciclo['n_vendas_ranking'])} · "
+            f"soma closers {int_br(_validacao_ciclo['soma_vendas_por_closer'])}. "
+            "Pode ocorrer por diferença de classificação (+12/-12) entre view e "
+            "detalhe ou closers sem match no cadastro."
+        )
+
+    if _df_ciclo_prep is None or _df_ciclo_prep.empty:
+        st.info("Sem vendas ganhas no período para calcular tempo de ciclo.")
+    else:
+        _c1, _c2, _c3, _c4 = st.columns(4, gap="small")
+        with _c1:
+            _ciclo_tipo = st.radio(
+                "Tipo de ciclo",
+                ("Entrada do lead → ganho", "Call → ganho"),
+                horizontal=False,
+                key="executivas_ciclo_tipo",
+            )
+        with _c2:
+            _ciclo_eixo_x = st.radio(
+                "Eixo X",
+                ("Quantidade de vendas", "% das vendas"),
+                horizontal=False,
+                key="executivas_ciclo_eixo_x",
+            )
+        with _c3:
+            _ciclo_segment = st.radio(
+                "Segmentação",
+                ("Todas", "+12", "-12"),
+                horizontal=False,
+                key="executivas_ciclo_segment",
+            )
+        with _c4:
+            _funil_opts = ciclo_venda_opcoes_funil(_df_ciclo_prep)
+            _ciclo_funil = st.selectbox(
+                "Funil / canal",
+                _funil_opts,
+                key="executivas_ciclo_funil",
+            )
+
+        _df_ciclo_xy = ciclo_venda_filtrar(
+            _df_ciclo_prep,
+            segmentacao=_ciclo_segment,
+            funil=_ciclo_funil,
+            times_sel=_times_sel_global or None,
+        )
+        _ciclo_xy_agg = ciclo_venda_agregar_por_closer(
+            _df_ciclo_xy, _df_cadastro_ranking,
+        )
+        _tipo_key = "entrada" if "Entrada" in _ciclo_tipo else "call"
+        _eixo_key = "percentual" if "%" in _ciclo_eixo_x else "quantidade"
+        _df_xy_plot = ciclo_venda_xy_dataset(
+            _ciclo_xy_agg, _tipo_key, _eixo_key,
+        )
+        if _df_xy_plot.empty:
+            st.info("Sem closers com tempo de ciclo calculável neste recorte.")
+        else:
+            _y_col = (
+                "ciclo_entrada_medio_dias" if _tipo_key == "entrada"
+                else "ciclo_call_medio_dias"
+            )
+            _avg_y = float(_df_xy_plot[_y_col].mean())
+            _x_title = (
+                "% das vendas no recorte"
+                if _eixo_key == "percentual"
+                else "Quantidade de vendas"
+            )
+            _y_title = (
+                "Tempo médio entrada → ganho (dias)"
+                if _tipo_key == "entrada"
+                else "Tempo médio call → ganho (dias)"
+            )
+            st.plotly_chart(
+                scatter_ciclo_venda(
+                    _df_xy_plot,
+                    x_title=_x_title,
+                    y_title=_y_title,
+                    avg_y=_avg_y,
+                    x_is_percent=_eixo_key == "percentual",
+                ),
+                use_container_width=True,
+                key="executivas_ciclo_scatter",
+            )
+
 with tab_time:
     por_time_raw = executivas_por_time(df_filtrado)
     if por_time_raw.empty:
@@ -1326,8 +1493,15 @@ with tab_time:
         c1, c2 = st.columns(2, gap="large")
         with c1:
             if tem_fin:
+                st.markdown("**Receita por time**")
+                st.caption("Soma da receita de vendas ganhas no período")
                 st.plotly_chart(
-                    bar_simple(por_time, "time_vendas", "receita", money=True, rotate_x=True),
+                    bar_simple(
+                        por_time, "time_vendas", "receita",
+                        money=True, rotate_x=True,
+                        x_title="Time", y_title="Receita",
+                        height=320,
+                    ),
                     use_container_width=True,
                 )
             else:
@@ -1336,12 +1510,110 @@ with tab_time:
                     "a view só expõe valores financeiros nos buckets +12, -12 e Não atua."
                 )
         with c2:
+            st.markdown("**Vendas por time**")
+            st.caption("Quantidade de vendas ganhas no período")
             st.plotly_chart(
-                bar_simple(por_time, "time_vendas", "vendas", rotate_x=True),
+                bar_simple(
+                    por_time, "time_vendas", "vendas",
+                    rotate_x=True,
+                    x_title="Time", y_title="Vendas",
+                    height=320,
+                ),
                 use_container_width=True,
             )
         with st.expander("Tabela detalhada por time"):
             st.dataframe(por_time, use_container_width=True, hide_index=True)
+
+        # --- Tempo de ciclo consolidado por time ---------------------------
+        if _df_ciclo_prep is not None and not _df_ciclo_prep.empty:
+            section_title(
+                "Tempo de ciclo de venda por time",
+                f"{classif_sel} · vendas ganhas no período",
+            )
+            _df_ciclo_time = ciclo_venda_filtrar(
+                _df_ciclo_prep,
+                segmentacao=classif_sel if classif_sel in ("+12", "-12") else "Todas",
+                funil="Todos",
+                times_sel=_times_sel_global or None,
+            )
+            _tabela_ciclo_time = ciclo_venda_tabela_por_time(_df_ciclo_time)
+            if _tabela_ciclo_time.empty:
+                st.info("Sem vendas ganhas para ciclo neste recorte de times.")
+            else:
+                _tc1, _tc2 = st.columns(2, gap="small")
+                with _tc1:
+                    _tipo_time = st.radio(
+                        "Tipo de ciclo (gráfico)",
+                        ("Entrada → ganho", "Call → ganho"),
+                        horizontal=True,
+                        key="executivas_ciclo_time_tipo",
+                    )
+                with _tc2:
+                    _eixo_time = st.radio(
+                        "Eixo X (gráfico)",
+                        ("Quantidade", "Percentual"),
+                        horizontal=True,
+                        key="executivas_ciclo_time_eixo",
+                    )
+                _plot_time = _tabela_ciclo_time.rename(columns={
+                    "time_vendas": "executiva",
+                    "vendas": "vendas_ciclo",
+                    "pct_vendas": "pct_vendas_ciclo",
+                    "ciclo_entrada_medio_dias": "ciclo_entrada_medio_dias",
+                    "ciclo_call_medio_dias": "ciclo_call_medio_dias",
+                })
+                _tipo_t = "entrada" if "Entrada" in _tipo_time else "call"
+                _eixo_t = "percentual" if _eixo_time == "Percentual" else "quantidade"
+                _df_xy_time = ciclo_venda_xy_dataset(_plot_time, _tipo_t, _eixo_t)
+                if not _df_xy_time.empty:
+                    _y_ct = (
+                        "ciclo_entrada_medio_dias" if _tipo_t == "entrada"
+                        else "ciclo_call_medio_dias"
+                    )
+                    st.plotly_chart(
+                        scatter_ciclo_venda(
+                            _df_xy_time,
+                            label_col="executiva",
+                            x_title="Quantidade de vendas" if _eixo_t == "quantidade" else "% das vendas",
+                            y_title=_y_ct.replace("_", " "),
+                            avg_y=float(_df_xy_time[_y_ct].mean()),
+                            height=360,
+                            x_is_percent=_eixo_t == "percentual",
+                        ),
+                        use_container_width=True,
+                        key="executivas_ciclo_time_scatter",
+                    )
+                with st.expander("Tabela de ciclo por time (+12 / -12)"):
+                    st.dataframe(
+                        _tabela_ciclo_time,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "time_vendas": st.column_config.TextColumn("Time", pinned=True),
+                            "vendas": st.column_config.NumberColumn("Vendas", format="%d"),
+                            "pct_vendas": st.column_config.NumberColumn("% vendas", format="%.1f%%"),
+                            "ciclo_entrada_medio_dias": st.column_config.NumberColumn(
+                                "Entrada → ganho (d)", format="%.0f",
+                            ),
+                            "ciclo_call_medio_dias": st.column_config.NumberColumn(
+                                "Call → ganho (d)", format="%.0f",
+                            ),
+                            "vendas_mais_12": st.column_config.NumberColumn("Vendas +12", format="%d"),
+                            "ciclo_entrada_mais_12": st.column_config.NumberColumn(
+                                "Entrada +12 (d)", format="%.0f",
+                            ),
+                            "ciclo_call_mais_12": st.column_config.NumberColumn(
+                                "Call +12 (d)", format="%.0f",
+                            ),
+                            "vendas_menos_12": st.column_config.NumberColumn("Vendas -12", format="%d"),
+                            "ciclo_entrada_menos_12": st.column_config.NumberColumn(
+                                "Entrada -12 (d)", format="%.0f",
+                            ),
+                            "ciclo_call_menos_12": st.column_config.NumberColumn(
+                                "Call -12 (d)", format="%.0f",
+                            ),
+                        },
+                    )
 
 with tab_temp:
     diario_raw = executivas_por_dia(df_filtrado)
@@ -1350,14 +1622,14 @@ with tab_temp:
     st.plotly_chart(
         line(diario, "data_ref",
              ["oportunidades", "agendamentos", "comparecimentos", "vendas"],
-             height=340),
+             height=340, show_value_labels=True),
         use_container_width=True,
     )
     if tem_fin:
         section_title("Receita × Montante (diário)")
         st.plotly_chart(
             line(diario, "data_ref", ["receita", "montante"],
-                 height=280, money_axis="y"),
+                 height=280, money_axis="y", show_value_labels=True),
             use_container_width=True,
         )
     else:

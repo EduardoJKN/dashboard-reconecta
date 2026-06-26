@@ -819,6 +819,26 @@ def get_notificacoes_leads_sdr(data_ini: date,
     return df
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo tempo de ciclo de venda…")
+def get_executivas_ciclo_venda(data_ini: date,
+                               data_fim: date) -> pd.DataFrame:
+    """Deals ganhos no período com timestamps para ciclo de venda (Executivas).
+
+    Fonte: `src/queries/executivas_ciclo_venda.sql` — mesma base de datas
+    de `jornada_lead_venda.sql`, enriquecida com closer, time, classificação
+    e funil. Deltas calculados no Python (`ciclo_venda_preparar`).
+    """
+    df = run_sql_file(
+        "executivas_ciclo_venda.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty:
+        for col in ("ts_lead", "ts_deal", "ts_comparecimento", "ts_venda"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col])
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo jornada do lead até a venda…")
 def get_jornada_lead_venda(data_ini: date,
                            data_fim: date) -> pd.DataFrame:

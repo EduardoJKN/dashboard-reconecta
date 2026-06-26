@@ -6,6 +6,7 @@ import streamlit as st
 from src.repositories import (
     get_executivas,
     get_executivas_churn_pos_venda,
+    get_executivas_ciclo_venda,
     get_executivas_oficiais,
     get_executivas_oficiais_todas,
     get_investimento_diario,
@@ -14,8 +15,13 @@ from src.repositories import (
     get_vendas_leads_detalhe_diario,
 )
 from src.transforms import (
+    EXECUTIVAS_RANKING_METRICAS_CICLO,
     EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
     EXECUTIVAS_RANKING_METRIC_OPTIONS,
+    ciclo_venda_agregar_por_closer,
+    ciclo_venda_filtrar,
+    ciclo_venda_merge_ranking,
+    ciclo_venda_preparar,
     delta_pct,
     executivas_churn_agregar_por_executiva,
     executivas_churn_filtrar_closer,
@@ -406,6 +412,19 @@ ranking_home = executivas_ranking_com_churn(
     executivas_ranking(df_ranking_base_home),
     _churn_por_exec_home,
 )
+try:
+    _df_ciclo_raw_home = get_executivas_ciclo_venda(ctx.data_ini, ctx.data_fim)
+except Exception:
+    _df_ciclo_raw_home = pd.DataFrame()
+_df_ciclo_home = ciclo_venda_filtrar(
+    ciclo_venda_preparar(_df_ciclo_raw_home),
+    times_sel=_times_sel_home or None,
+)
+_ciclo_closer_home = ciclo_venda_agregar_por_closer(
+    _df_ciclo_home, _df_cadastro_ranking_home,
+)
+if ranking_home is not None and not ranking_home.empty:
+    ranking_home = ciclo_venda_merge_ranking(ranking_home, _ciclo_closer_home)
 
 section_title(
     "Top Closers",
@@ -432,6 +451,7 @@ else:
     with col_grafico_h:
         metric_col_home = _RANKING_METRIC_OPTIONS[metric_label_home]
         is_money_home = metric_col_home in _METRICAS_FINANCEIRAS
+        is_ciclo_home = metric_col_home in EXECUTIVAS_RANKING_METRICAS_CICLO
 
         if metric_col_home not in ranking_home.columns:
             st.warning(
@@ -443,6 +463,10 @@ else:
                 ranking_plot_home = executivas_ranking_plot_churn(
                     _churn_por_exec_home,
                 )
+            elif is_ciclo_home:
+                ranking_plot_home = ranking_home[
+                    ranking_home[metric_col_home].notna()
+                ].sort_values(metric_col_home, ascending=True).copy()
             else:
                 ranking_plot_home = (
                     ranking_home[ranking_home[metric_col_home].fillna(0) > 0]
@@ -454,7 +478,10 @@ else:
             else:
                 fig_top_h = bar_ranked(
                     ranking_plot_home, "executiva", metric_col_home,
-                    top_n=12, height=320, money=is_money_home,
+                    top_n=12, height=320,
+                    money=is_money_home,
+                    days_format=is_ciclo_home,
+                    lower_is_better=is_ciclo_home,
                 )
                 chart_state_home = st.plotly_chart(
                     fig_top_h,
