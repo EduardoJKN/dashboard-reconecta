@@ -35,6 +35,15 @@ PERIOD_RANGE_KEY = "global_period_range"
 PERIOD_PRESET_KEY = "global_period_preset"
 _PERIOD_INITIALIZED = "_global_period_initialized"
 
+# Shadow keys (NÃO atreladas a widget). Streamlit pode limpar a key de um
+# widget que não foi renderizado num rerun (o popover é lazy + a troca de
+# página via st.navigation pode disparar esse cleanup), e isso fazia o
+# período voltar pro default ao navegar entre páginas. Persistimos o valor
+# real nessas keys-sombra e hidratamos a key do widget a partir delas
+# antes de cada render.
+_PERSIST_PRESET_KEY = "_dashboard_period_preset_persist"
+_PERSIST_RANGE_KEY = "_dashboard_period_range_persist"
+
 # IMPORTANTE: a primeira opção é o fallback que `st.selectbox` exibe quando
 # session_state[key] não está disponível NO MOMENTO em que o widget renderiza.
 # Como o selectbox vive dentro de `st.popover` (container lazy), há uma
@@ -90,101 +99,119 @@ def resolve_preset(label: str, today: date | None = None) -> tuple[date, date] |
 
 
 def _ensure_period_state() -> tuple[date, date]:
-    """One-shot init do estado de período + auto-heal de keys ausentes.
+    """Estado global do período — persistente entre páginas.
 
-    Regras:
-      - 1ª chamada (flag `_PERIOD_INITIALIZED` ausente):
-          - PRESET = "Mês atual"
-          - RANGE  = (1º dia do mês, último dia do mês)
-          - flag   = True
-      - Chamadas subsequentes: NÃO sobrescreve valores existentes do
-        usuário. Apenas restaura keys que tenham sido **removidas** pelo
-        Streamlit (containers lazy como `st.popover` podem limpar
-        `session_state[key]` de widgets ao desmontar entre reruns —
-        causa do KeyError reportado).
+    O valor real fica em `_PERSIST_PRESET_KEY` / `_PERSIST_RANGE_KEY`
+    (chaves SEM widget, nunca limpas pelo Streamlit). A cada rerun, antes
+    do widget renderizar, hidratamos `PERIOD_PRESET_KEY` /
+    `PERIOD_RANGE_KEY` a partir do persist — assim o popover sempre
+    aparece com o último valor escolhido, mesmo após navegar de página.
+
+    Mudanças do usuário entram via callbacks (`_on_period_preset_change`,
+    `_on_period_range_change`) que escrevem em AMBOS (widget + persist).
 
     Aceita tupla de 1 elemento (`(d,)`) como `(d, d)` — Streamlit emite
     1-tupla durante seleção parcial no `st.date_input` em modo range.
-    Antes essa situação resetava pro preset (bug "volta sozinho pro mês
-    inteiro").
-
-    Mudanças intencionais de PRESET/RANGE vêm dos callbacks
-    `_on_period_preset_change` e `_on_period_range_change`.
     """
     today = date.today()
 
-    # 1) Seed inicial UMA VEZ por sessão.
+    # 1) Seed inicial UMA VEZ por sessão. Honra valores pré-existentes
+    #    no widget key (test scripts via AppTest setam `PERIOD_*_KEY`
+    #    antes do primeiro rerun).
     if not st.session_state.get(_PERIOD_INITIALIZED):
-        st.session_state[PERIOD_PRESET_KEY] = _DEFAULT_PRESET
-        rng = (resolve_preset(_DEFAULT_PRESET, today)
-               or (today - timedelta(days=30), today))
-        st.session_state[PERIOD_RANGE_KEY] = rng
+        existing_preset = st.session_state.get(PERIOD_PRESET_KEY)
+        existing_range = st.session_state.get(PERIOD_RANGE_KEY)
+
+        preset = existing_preset if existing_preset in PRESETS_PT else _DEFAULT_PRESET
+        if isinstance(existing_range, tuple) and len(existing_range) == 2:
+            rng = existing_range
+        else:
+            rng = (resolve_preset(preset, today)
+                   or (today - timedelta(days=30), today))
+
+        st.session_state[_PERSIST_PRESET_KEY] = preset
+        st.session_state[_PERSIST_RANGE_KEY] = rng
         st.session_state[_PERIOD_INITIALIZED] = True
 
-    # 2) Auto-heal: se algum dos valores foi removido pelo Streamlit
-    #    (widget cleanup em popover), restaura *só o ausente* — sem tocar
-    #    em valor existente do usuário. Não confunde com o bug antigo
-    #    (que sobrescrevia mesmo quando o user já tinha mexido).
-    if PERIOD_PRESET_KEY not in st.session_state:
-        st.session_state[PERIOD_PRESET_KEY] = _DEFAULT_PRESET
-    elif st.session_state[PERIOD_PRESET_KEY] not in PRESETS_PT:
-        # Valor inválido (algum widget legado escreveu lixo): corrige.
-        st.session_state[PERIOD_PRESET_KEY] = _DEFAULT_PRESET
-
-    if PERIOD_RANGE_KEY not in st.session_state:
-        st.session_state[PERIOD_RANGE_KEY] = (
-            resolve_preset(
-                st.session_state[PERIOD_PRESET_KEY], today
-            ) or (today - timedelta(days=30), today)
+    # 2) Migração: cobre o caso em que algo (ex.: test script) atualizou
+    #    apenas a key do widget após o init. Se persist está ausente mas
+    #    o widget tem valor válido, copia para o persist.
+    if _PERSIST_PRESET_KEY not in st.session_state:
+        ep = st.session_state.get(PERIOD_PRESET_KEY)
+        st.session_state[_PERSIST_PRESET_KEY] = (
+            ep if ep in PRESETS_PT else _DEFAULT_PRESET
         )
+    if _PERSIST_RANGE_KEY not in st.session_state:
+        er = st.session_state.get(PERIOD_RANGE_KEY)
+        if isinstance(er, tuple) and len(er) == 2:
+            st.session_state[_PERSIST_RANGE_KEY] = er
+        elif isinstance(er, tuple) and len(er) == 1:
+            st.session_state[_PERSIST_RANGE_KEY] = (er[0], er[0])
+        else:
+            st.session_state[_PERSIST_RANGE_KEY] = (
+                resolve_preset(st.session_state[_PERSIST_PRESET_KEY], today)
+                or (today - timedelta(days=30), today)
+            )
 
-    # 3) Devolve a tupla normalizada SEM reescrever valores válidos.
-    rng = st.session_state[PERIOD_RANGE_KEY]
-    if isinstance(rng, tuple):
-        if len(rng) == 2:
-            return rng
-        if len(rng) == 1:
-            # User no meio de uma seleção (data_ini escolhida, data_fim
-            # ainda não). Trata como (d, d) — não reseta o range.
-            return rng[0], rng[0]
-    # Último fallback (corner case: tipo errado em session_state).
-    fallback = (resolve_preset(_DEFAULT_PRESET, today)
-                or (today - timedelta(days=30), today))
-    st.session_state[PERIOD_RANGE_KEY] = fallback
-    return fallback
+    # 3) Sanidade do persist.
+    if st.session_state[_PERSIST_PRESET_KEY] not in PRESETS_PT:
+        st.session_state[_PERSIST_PRESET_KEY] = _DEFAULT_PRESET
+
+    persisted_rng = st.session_state[_PERSIST_RANGE_KEY]
+    if isinstance(persisted_rng, tuple) and len(persisted_rng) == 1:
+        persisted_rng = (persisted_rng[0], persisted_rng[0])
+        st.session_state[_PERSIST_RANGE_KEY] = persisted_rng
+    elif not (isinstance(persisted_rng, tuple) and len(persisted_rng) == 2):
+        persisted_rng = (resolve_preset(st.session_state[_PERSIST_PRESET_KEY], today)
+                         or (today - timedelta(days=30), today))
+        st.session_state[_PERSIST_RANGE_KEY] = persisted_rng
+
+    # 4) Hidrata as keys dos widgets ANTES de renderizarem — é isto que
+    #    impede o reset ao trocar de página (Streamlit limpa silenciosamente
+    #    a key de widget cuja instância não foi renderizada no rerun
+    #    anterior; o persist sobrevive porque não está vinculado a widget).
+    st.session_state[PERIOD_PRESET_KEY] = st.session_state[_PERSIST_PRESET_KEY]
+    st.session_state[PERIOD_RANGE_KEY] = persisted_rng
+
+    return persisted_rng
 
 
 def _on_period_preset_change() -> None:
     """Callback do selectbox de preset. Roda DENTRO do mesmo ciclo do
     Streamlit, antes de qualquer leitura subsequente do session_state.
-    Re-resolve o RANGE para casar com o preset escolhido."""
+    Re-resolve o RANGE para casar com o preset escolhido e copia para o
+    persist (shadow) — é o que garante a sobrevivência entre páginas."""
     today = date.today()
     new_preset = st.session_state.get(PERIOD_PRESET_KEY)
     if new_preset not in PRESETS_PT:
         st.session_state[PERIOD_PRESET_KEY] = _DEFAULT_PRESET
         new_preset = _DEFAULT_PRESET
+    st.session_state[_PERSIST_PRESET_KEY] = new_preset
     if new_preset != "Personalizado":
         new_range = resolve_preset(new_preset, today)
         if new_range:
             st.session_state[PERIOD_RANGE_KEY] = new_range
+            st.session_state[_PERSIST_RANGE_KEY] = new_range
 
 
 def _on_period_range_change() -> None:
     """Callback do date_input. Quando o user altera o range manualmente,
     troca o preset para "Personalizado" se o range escolhido não casar
     com nenhum preset conhecido. Mantém o label do botão coerente com a
-    janela exibida."""
+    janela exibida e propaga para o persist."""
     today = date.today()
     rng = st.session_state.get(PERIOD_RANGE_KEY)
     if not (isinstance(rng, tuple) and len(rng) == 2):
         # Tupla parcial (1 elemento) durante seleção: ainda não decide.
         return
+    st.session_state[_PERSIST_RANGE_KEY] = rng
     current_preset = st.session_state.get(PERIOD_PRESET_KEY)
     # Se o preset atual já bate com o range escolhido, mantém como está.
     if current_preset and current_preset != "Personalizado":
         if resolve_preset(current_preset, today) == rng:
             return
     st.session_state[PERIOD_PRESET_KEY] = "Personalizado"
+    st.session_state[_PERSIST_PRESET_KEY] = "Personalizado"
 
 
 # =============================================================================
@@ -344,11 +371,13 @@ def _render_period_popover(container) -> tuple[date, date]:
         if st.query_params.get("debug_period") == "1":
             with st.expander("🔧 debug_period", expanded=False):
                 st.write({
-                    "PERIOD_PRESET_KEY (label)": st.session_state.get(PERIOD_PRESET_KEY),
-                    "PERIOD_RANGE_KEY (range)":  st.session_state.get(PERIOD_RANGE_KEY),
-                    "_PERIOD_INITIALIZED":       st.session_state.get(_PERIOD_INITIALIZED),
-                    "PRESETS_PT[0] (fallback)":  PRESETS_PT[0],
-                    "_DEFAULT_PRESET":           _DEFAULT_PRESET,
+                    "PERIOD_PRESET_KEY (label)":   st.session_state.get(PERIOD_PRESET_KEY),
+                    "PERIOD_RANGE_KEY (range)":    st.session_state.get(PERIOD_RANGE_KEY),
+                    "_PERSIST_PRESET_KEY":         st.session_state.get(_PERSIST_PRESET_KEY),
+                    "_PERSIST_RANGE_KEY":          st.session_state.get(_PERSIST_RANGE_KEY),
+                    "_PERIOD_INITIALIZED":         st.session_state.get(_PERIOD_INITIALIZED),
+                    "PRESETS_PT[0] (fallback)":    PRESETS_PT[0],
+                    "_DEFAULT_PRESET":             _DEFAULT_PRESET,
                 })
 
     # Mesma proteção da leitura no topo da função: `.get` com fallback.
@@ -480,7 +509,10 @@ def start_page(
     if include_period:
         data_ini, data_fim = _render_period_popover(cols[-1])
     else:
-        rng = st.session_state.get(PERIOD_RANGE_KEY) or (date.today(), date.today())
+        # Lê do persist (sobrevive entre páginas), com fallback ao widget.
+        rng = (st.session_state.get(_PERSIST_RANGE_KEY)
+               or st.session_state.get(PERIOD_RANGE_KEY)
+               or (date.today(), date.today()))
         data_ini, data_fim = rng if isinstance(rng, tuple) and len(rng) == 2 else (date.today(), date.today())
 
     return PageContext(
