@@ -1283,26 +1283,22 @@ def _tabela_sdr_closer(df_sc: pd.DataFrame) -> pd.DataFrame:
     out = df_sc[use_cols].copy()
     # Mesma derivada do prevendas: % comparecimento, conversão, vendas,
     # recebimento. Fórmulas iguais a `executivas_ranking` pra coerência.
+    # Vetorizado — equivalência com `apply(lambda r: _safe_div(...) * 100)`
+    # validada em scripts/validate_apply_vectorization_equivalence.py.
+    def _safe_div_vec(num_s: pd.Series, den_s: pd.Series) -> pd.Series:
+        num = pd.to_numeric(num_s, errors="coerce")
+        den = pd.to_numeric(den_s, errors="coerce")
+        ratio = num / den
+        return ratio.where(den != 0, 0.0)
+
     if {"agendamentos", "comparecimentos"}.issubset(out.columns):
-        out["pct_comparecimento"] = out.apply(
-            lambda r: _safe_div(r["comparecimentos"], r["agendamentos"]) * 100,
-            axis=1,
-        )
+        out["pct_comparecimento"] = _safe_div_vec(out["comparecimentos"], out["agendamentos"]) * 100
     if {"agendamentos", "vendas"}.issubset(out.columns):
-        out["pct_conversao"] = out.apply(
-            lambda r: _safe_div(r["vendas"], r["agendamentos"]) * 100,
-            axis=1,
-        )
+        out["pct_conversao"] = _safe_div_vec(out["vendas"], out["agendamentos"]) * 100
     if {"comparecimentos", "vendas"}.issubset(out.columns):
-        out["pct_vendas"] = out.apply(
-            lambda r: _safe_div(r["vendas"], r["comparecimentos"]) * 100,
-            axis=1,
-        )
+        out["pct_vendas"] = _safe_div_vec(out["vendas"], out["comparecimentos"]) * 100
     if {"montante", "receita"}.issubset(out.columns):
-        out["pct_recebimento"] = out.apply(
-            lambda r: _safe_div(r["receita"], r["montante"]) * 100,
-            axis=1,
-        )
+        out["pct_recebimento"] = _safe_div_vec(out["receita"], out["montante"]) * 100
     # Mantém só pares com atividade
     if {"agendamentos", "vendas"}.issubset(out.columns):
         out = out[(out["agendamentos"] > 0) | (out["vendas"] > 0)]

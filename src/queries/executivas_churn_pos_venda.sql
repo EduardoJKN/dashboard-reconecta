@@ -30,6 +30,12 @@ WITH churn_deals AS (
         d.executiva_contas::text AS executiva_contas_id,
         d.executiva_vendas::text AS closer_id,
         NULLIF(btrim(d.motivo_perda), '') AS motivo_perda,
+        -- Fontes para a cascata canônica de classificação (mesma regra
+        -- aplicada em `executivas_comparecimento_ajustado.sql`,
+        -- `one_page_prevendas_por_fonte.sql` e `compatibilidade_sdr_closer.sql`).
+        NULLIF(btrim(d.lead_classification), '') AS lead_classification,
+        NULLIF(btrim(d.qualificacao), '')        AS qualificacao,
+        NULLIF(btrim(d.classificado_cal), '')    AS classificado_cal,
         -- Data do churn — ver cabeçalho do arquivo.
         COALESCE(
             d.stage_modified_time,
@@ -66,6 +72,46 @@ WITH churn_deals AS (
         END AS receita
     FROM zoho_deals d
     WHERE d.stage = 'Churn'
+),
+-- Dedup ext_reconecta.leads por zoho_id (latest by timestamp/id) — padrão
+-- canônico copiado de `one_page_prevendas_por_fonte.sql` /
+-- `compatibilidade_sdr_closer.sql` / `executivas_comparecimento_ajustado.sql`.
+-- Alimenta a 4ª prioridade da cascata de classificação (`ext_classif`).
+ext_leads_dedup AS (
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS ext_classif
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
+),
+-- Classificação final do deal: lead_classification → qualificacao →
+-- classificado_cal → ext.classificado → "Sem classificação".
+-- Buckets mutuamente exclusivos (mesma regra do batch anterior).
+deal_classif AS (
+    SELECT
+        cd.deal_id,
+        CASE
+            WHEN cd.lead_classification IN ('Atua +12','Atua -12','Não atua')
+                THEN cd.lead_classification
+            WHEN cd.qualificacao IN ('Atua +12','Atua -12','Não atua')
+                THEN cd.qualificacao
+            WHEN cd.classificado_cal IN ('Atua +12','Atua -12','Não atua')
+                THEN cd.classificado_cal
+            WHEN NULLIF(btrim(ed.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(ed.ext_classif), '')
+            ELSE 'Sem classificação'
+        END AS classif_final
+    FROM churn_deals cd
+    LEFT JOIN ext_leads_dedup ed ON ed.deal_id = cd.deal_id
 ),
 closer_resolved AS (
     -- Nome + time_vendas: mesma regra CASE de prevendas_leads_detalhe_diario /
@@ -157,10 +203,12 @@ SELECT
     ap.acomp_pos_nome,
     cd.montante,
     cd.receita,
-    cd.motivo_perda
+    cd.motivo_perda,
+    dc.classif_final
 FROM churn_deals cd
 LEFT JOIN closer_resolved cr ON cr.deal_id = cd.deal_id
 LEFT JOIN pos_user pu ON pu.deal_id = cd.deal_id
 LEFT JOIN pos_activities pa ON pa.deal_id = cd.deal_id
 LEFT JOIN acompanhamento_pick ap ON ap.deal_id = cd.deal_id
+LEFT JOIN deal_classif dc ON dc.deal_id = cd.deal_id
 ORDER BY cd.data_churn DESC NULLS LAST, cd.deal_id;

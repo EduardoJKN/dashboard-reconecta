@@ -97,6 +97,86 @@ _SUFIXOS = {
     "Sem classificação":  "sem_classificacao",
 }
 
+# Mapa do `classif_sel` (radio) → valor armazenado em `classif_final` no SQL
+# `executivas_comparecimento_ajustado.sql` (cascata canônica
+# lead_classification → qualificacao → classificado_cal → ext.classificado).
+# "Todas" não tem entrada porque significa "sem filtro".
+_CLASSIF_SEL_TO_FINAL = {
+    "+12":               "Atua +12",
+    "-12":               "Atua -12",
+    "Não atua":          "Não atua",
+    "Sem classificação": "Sem classificação",
+}
+
+
+def _filtrar_comp_aj_por_classif(df_comp_aj: pd.DataFrame,
+                                 classif_sel: str) -> pd.DataFrame:
+    """Filtra `_df_comp_aj` pelo bucket de `classif_sel` (sem aplicar filtro
+    de flag/categoria). Reaproveitado pelos cards f3 (Reunião Concluída)
+    e f4 (Reunião Cancelada) — garante mesma cascata e tratamento de NaN
+    em todos os pontos.
+
+    Comportamento:
+      - `classif_sel == "Todas"`: devolve `df_comp_aj` (cópia).
+      - `classif_sel != "Todas"` e `classif_final` ausente do df: devolve
+        vazio (defensivo — evita divergência silenciosa entre card e
+        tabela quando SQL legado não trouxe a coluna).
+      - Caso normal: filtra `classif_final == target` (NaN → "Sem
+        classificação" antes da comparação).
+    """
+    if df_comp_aj is None or df_comp_aj.empty:
+        return pd.DataFrame()
+    if classif_sel == "Todas":
+        return df_comp_aj.copy()
+    if "classif_final" not in df_comp_aj.columns:
+        return df_comp_aj.iloc[0:0]
+    target = _CLASSIF_SEL_TO_FINAL.get(classif_sel)
+    if target is None:
+        return df_comp_aj.copy()
+    return df_comp_aj[
+        df_comp_aj["classif_final"].fillna("Sem classificação").eq(target)
+    ].copy()
+
+
+def _comp_zoho_por_classif(df_comp_aj: pd.DataFrame,
+                           classif_sel: str) -> pd.DataFrame:
+    """Base do card "Reunião Concluída no Zoho" filtrada por classificação.
+
+    Devolve só as activities com `flag_comparecimento_zoho == True` E cuja
+    `classif_final` casa com o bucket selecionado. Mesma base é usada para
+    o número principal do card e para a tabela de detalhe — garantindo
+    contagem == #linhas.
+    """
+    base = _filtrar_comp_aj_por_classif(df_comp_aj, classif_sel)
+    if base.empty:
+        return base
+    return base[base["flag_comparecimento_zoho"].fillna(False)].copy()
+
+
+def _churn_por_classif(df_churn_recorte: pd.DataFrame,
+                       classif_sel: str) -> pd.DataFrame:
+    """Filtra `_df_churn_recorte` pelo bucket de `classif_sel` usando a
+    coluna `classif_final` que passou a vir do SQL `executivas_churn_pos_venda.sql`
+    (mesma cascata canônica dos demais cards).
+
+    Mesmas regras defensivas de `_filtrar_comp_aj_por_classif`:
+    - `Todas` → devolve o recorte inteiro.
+    - `classif_final` ausente (SQL antigo em cache) → devolve vazio, exceto
+      em `Todas`, pra evitar divergência silenciosa.
+    """
+    if df_churn_recorte is None or df_churn_recorte.empty:
+        return pd.DataFrame()
+    if classif_sel == "Todas":
+        return df_churn_recorte.copy()
+    if "classif_final" not in df_churn_recorte.columns:
+        return df_churn_recorte.iloc[0:0]
+    target = _CLASSIF_SEL_TO_FINAL.get(classif_sel)
+    if target is None:
+        return df_churn_recorte.copy()
+    return df_churn_recorte[
+        df_churn_recorte["classif_final"].fillna("Sem classificação").eq(target)
+    ].copy()
+
 
 def _classif_cols(classif: str) -> dict[str, str | None]:
     """Mapa do nome 'canônico' da métrica → coluna real do df, conforme o
@@ -130,6 +210,40 @@ def _safe_pct(num, den) -> float:
         return (float(num or 0) / d) * 100 if d else 0.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def _safe_pct_vec(num_s: pd.Series, den_s: pd.Series) -> pd.Series:
+    """Versão vetorizada de `_safe_pct` para colunas numéricas.
+
+    Equivalência validada em scripts/validate_apply_vectorization_equivalence.py contra
+    a versão escalar (DataFrame.apply lambda) com casos extremos: NaN, 0,
+    grandes magnitudes e negativos. Em colunas numéricas (saída de
+    `groupby.sum`) o resultado é byte-a-byte idêntico ao apply original.
+    """
+    num = pd.to_numeric(num_s, errors="coerce")
+    den = pd.to_numeric(den_s, errors="coerce")
+    ratio = (num / den) * 100.0
+    return ratio.where(den != 0, 0.0)
+
+
+def _ticket_medio_vec(montante_s: pd.Series, vendas_s: pd.Series) -> pd.Series:
+    """`montante/vendas` quando `vendas > 0`; 0.0 caso contrário.
+
+    Mesma semântica do lambda original (incluindo tratamento de NaN/0/neg
+    em vendas → 0.0). Validado em scripts/validate_apply_vectorization_equivalence.py.
+    """
+    montante = pd.to_numeric(montante_s, errors="coerce")
+    vendas = pd.to_numeric(vendas_s, errors="coerce")
+    ratio = montante / vendas
+    return ratio.where(vendas > 0, 0.0)
+
+
+def _col_or_zero(df: pd.DataFrame, col: str) -> pd.Series:
+    """Equivalente vetorizado de `row.get(col, 0)`: devolve a coluna ou
+    uma Series de zeros do mesmo índice se a coluna não existir."""
+    if col in df.columns:
+        return df[col]
+    return pd.Series(0.0, index=df.index)
 
 
 def _apply_classif(df, cmap):
@@ -286,11 +400,18 @@ pct_receb = _safe_pct(rec_v, mont_v) if tem_fin else None
 # (zoho_activities + stage do deal; não usa deals criados no período).
 _times_sel_funil_card = list(ctx.selections.get("times") or [])
 try:
-    _df_funil_ag_card = get_executivas_funil_agendamentos(ctx.data_ini, ctx.data_fim)
-except Exception:
-    _df_funil_ag_card = pd.DataFrame()
+    # `_df_funil_ag_raw` é reaproveitado no `tab_lead_triagem` (ver linha
+    # ~2005) — evita repetir o lookup no `@st.cache_data` no mesmo rerun.
+    # `_df_funil_ag_error` propaga a exceção para o ponto downstream que
+    # antes refazia a query e exibia `st.error(...)` (preserva o feedback
+    # visual original sem refazer a chamada).
+    _df_funil_ag_raw = get_executivas_funil_agendamentos(ctx.data_ini, ctx.data_fim)
+    _df_funil_ag_error = None
+except Exception as _exc:
+    _df_funil_ag_raw = pd.DataFrame()
+    _df_funil_ag_error = _exc
 _df_funil_ag_card = cancelamentos_pos_filtrar_times(
-    _df_funil_ag_card, _times_sel_funil_card,
+    _df_funil_ag_raw, _times_sel_funil_card,
 )
 _kpi_funil_ag_card = funil_agendamentos_kpis(_df_funil_ag_card)
 _funil_qual_split = None
@@ -377,11 +498,20 @@ with f2:
         qual_split=_funil_qual_split,
     )
 with f3:
+    # Base do card "Reunião Concluída" — filtrada pela classificação ativa.
+    # Mesma base alimenta o expander de detalhes (linha ~480), garantindo
+    # `valor do card == #linhas da tabela`.
+    _df_card_reuniao_zoho = _comp_zoho_por_classif(_df_comp_aj, classif_sel)
+    _qtd_card_reuniao_zoho = len(_df_card_reuniao_zoho)
+
     _comp_bd: list[tuple[str, str]] = [
-        ("Concluídas no Zoho", int_br(_kpi_comp_aj["comparecimento_zoho"])),
+        # "Agendadas c/ horário encerrado" e "Em andamento"/"Futuras" são
+        # totais GLOBAIS do período (não filtram por classif), informativos —
+        # NÃO somam no número principal. O "+" anterior foi removido pra
+        # não sugerir adição.
         (
             "Agendadas c/ horário encerrado",
-            f"+{int_br(_kpi_comp_aj['agendadas_horario_encerrado'])}",
+            f"{int_br(_kpi_comp_aj['agendadas_horario_encerrado'])} fora do total",
         ),
         (
             "Em andamento",
@@ -392,31 +522,119 @@ with f3:
             f"{int_br(_kpi_comp_aj['agendadas_futuras'])} fora do total",
         ),
     ]
+    _hint_card = (
+        "classificação 'Concluída no Zoho'"
+        if is_todas
+        else f"'Concluída no Zoho' · classif {classif_sel}"
+    )
     metric_card_v2(
         "Reunião Concluída",
-        int_br(_kpi_comp_aj["comparecimento_ajustado"]),
-        hint=f"Regra view (Zoho): {int_br(comp_v)} · teste operacional",
+        int_br(_qtd_card_reuniao_zoho),
+        hint=_hint_card,
         help=COMPARECIMENTO_AJUSTADO_HELP,
         breakdown=_comp_bd,
         accent=True,
     )
 with f4:
+    # Mesma base do f3 (Reunião Concluída): _df_comp_aj filtrado por classif
+    # (período + times já aplicados upstream em `_df_comp_aj_raw`). Conta as
+    # flags `noshow` e `cancelada` no recorte, em vez de usar
+    # `_kpi_comp_aj[...]` (que ignora classif por design).
+    _df_cancel_por_classif = _filtrar_comp_aj_por_classif(_df_comp_aj, classif_sel)
+    if _df_cancel_por_classif.empty:
+        _n_noshow = 0
+        _n_canceladas = 0
+    else:
+        _n_noshow = int(
+            _df_cancel_por_classif["flag_noshow"].fillna(False).sum()
+        )
+        _n_canceladas = int(
+            _df_cancel_por_classif["flag_cancelada"].fillna(False).sum()
+        )
+    _n_cancel_total = _n_noshow + _n_canceladas
     _cancel_bd: list[tuple[str, str]] = [
-        ("No-show", int_br(_kpi_comp_aj["noshow"])),
-        ("Canceladas", int_br(_kpi_comp_aj["canceladas"])),
+        ("No-show", int_br(_n_noshow)),
+        ("Canceladas", int_br(_n_canceladas)),
     ]
+    _hint_cancel = (
+        f"Regra view: {int_br(k['cancelados'])}"
+        if is_todas
+        else f"classif {classif_sel} · view total geral: {int_br(k['cancelados'])}"
+    )
     metric_card_v2(
         "Reunião Cancelada",
-        int_br(_kpi_comp_aj["reuniao_cancelada_total"]),
-        hint=f"Regra view: {int_br(k['cancelados'])}",
+        int_br(_n_cancel_total),
+        hint=_hint_cancel,
         breakdown=_cancel_bd,
     )
-with f5: metric_card_v2("Clientes Cancelados", int_br(_churn_funil_total))
+with f5:
+    # Filtra o mesmo recorte de churn (período + times) pela classif.
+    # `classif_final` vem do SQL (cascata canônica). Em "Todas" o valor é
+    # idêntico ao anterior (`_churn_funil_total`).
+    _df_churn_por_classif = _churn_por_classif(_df_churn_recorte, classif_sel)
+    _churn_qtd_classif = executivas_churn_total(_df_churn_por_classif)
+    _hint_churn = (
+        None
+        if is_todas
+        else f"classif {classif_sel} · total geral: {int_br(_churn_funil_total)}"
+    )
+    metric_card_v2("Clientes Cancelados", int_br(_churn_qtd_classif),
+                   hint=_hint_churn)
 with f6: metric_card_v2("Ganhos", int_br(vend_v))
 with f7: metric_card_v2(
     "Perdidos", int_br(k["perdidos"]),
     hint=None if is_todas else "total geral · sem quebra por classif.",
 )
+
+# ---------------------------------------------------------------------------
+# Detalhe — linhas que compõem o card "Reunião Concluída". Usa EXATAMENTE
+# a mesma base do número principal (`_df_card_reuniao_zoho`), então
+# `len(tabela) == valor do card` para todos os filtros (período, times,
+# classificação).
+# ---------------------------------------------------------------------------
+with st.expander(
+    f"Ver detalhes — Reuniões concluídas no Zoho "
+    f"({int_br(_qtd_card_reuniao_zoho)})",
+    expanded=False,
+):
+    if _df_card_reuniao_zoho.empty:
+        st.caption(
+            "Sem reuniões concluídas no Zoho no recorte atual "
+            "(período / times / classificação)."
+        )
+    else:
+        _COLUNAS_DETALHE_CARD = [
+            ("start_datetime",  "Data/Hora"),
+            ("executiva",       "Closer"),
+            ("time_vendas",     "Time"),
+            ("nome_lead",       "Nome do cliente"),
+            ("email",           "E-mail"),
+            ("classif_final",   "Classificação"),
+            ("status_reuniao",  "Status"),
+        ]
+        _cols_disp = [c for c, _ in _COLUNAS_DETALHE_CARD
+                      if c in _df_card_reuniao_zoho.columns]
+        _rename = {c: lbl for c, lbl in _COLUNAS_DETALHE_CARD if c in _cols_disp}
+        _tabela_detalhe = (
+            _df_card_reuniao_zoho[_cols_disp]
+            .sort_values("start_datetime", ascending=False, na_position="last")
+            .rename(columns=_rename)
+            .reset_index(drop=True)
+        )
+        st.dataframe(
+            _tabela_detalhe,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Data/Hora": st.column_config.DatetimeColumn(
+                    "Data/Hora", format="DD/MM/YYYY HH:mm",
+                ),
+            },
+        )
+        st.caption(
+            f"{int_br(len(_tabela_detalhe))} linha(s) · "
+            f"mesmos filtros do card (período, times, classificação)."
+        )
 
 with st.expander(
     "Debug comparecimento ajustado (teste)",
@@ -728,18 +946,23 @@ with tab_rank:
         if "churn" in ranking_raw.columns:
             ranking["churn"] = ranking_raw["churn"]
         # Recompõe pcts e ticket pra refletir o bucket selecionado.
-        ranking["pct_conversao"] = ranking.apply(
-            lambda r: _safe_pct(r.get("vendas", 0), r.get("agendamentos", 0)), axis=1)
-        ranking["pct_comparecimento"] = ranking.apply(
-            lambda r: _safe_pct(r.get("comparecimentos", 0), r.get("agendamentos", 0)), axis=1)
-        ranking["pct_vendas"] = ranking.apply(
-            lambda r: _safe_pct(r.get("vendas", 0), r.get("comparecimentos", 0)), axis=1)
+        # Vetorizado — equivalência com o `apply` lambda anterior validada
+        # em scripts/validate_apply_vectorization_equivalence.py.
+        _vendas         = _col_or_zero(ranking, "vendas")
+        _agendamentos   = _col_or_zero(ranking, "agendamentos")
+        _comparecimentos = _col_or_zero(ranking, "comparecimentos")
+        ranking["pct_conversao"]      = _safe_pct_vec(_vendas, _agendamentos)
+        ranking["pct_comparecimento"] = _safe_pct_vec(_comparecimentos, _agendamentos)
+        ranking["pct_vendas"]         = _safe_pct_vec(_vendas, _comparecimentos)
         if tem_fin:
-            ranking["pct_recebimento"] = ranking.apply(
-                lambda r: _safe_pct(r.get("receita", 0), r.get("montante", 0)), axis=1)
-            ranking["ticket_medio"] = ranking.apply(
-                lambda r: (float(r["montante"]) / float(r["vendas"]))
-                          if float(r.get("vendas", 0) or 0) > 0 else 0.0, axis=1)
+            ranking["pct_recebimento"] = _safe_pct_vec(
+                _col_or_zero(ranking, "receita"),
+                _col_or_zero(ranking, "montante"),
+            )
+            ranking["ticket_medio"]    = _ticket_medio_vec(
+                _col_or_zero(ranking, "montante"),
+                _vendas,
+            )
         else:
             ranking["pct_recebimento"] = 0.0
             ranking["ticket_medio"]    = 0.0
@@ -1474,17 +1697,16 @@ with tab_time:
     else:
         por_time = _apply_classif(por_time_raw, cmap)
         # Recalcula pcts/ticket no bucket selecionado (mesmo padrão do ranking).
-        por_time["pct_conversao"] = por_time.apply(
-            lambda r: _safe_pct(r.get("vendas", 0), r.get("agendamentos", 0)), axis=1
-        )
-        por_time["pct_vendas"] = por_time.apply(
-            lambda r: _safe_pct(r.get("vendas", 0), r.get("comparecimentos", 0)), axis=1
-        )
+        # Vetorizado — equivalência validada em validate_apply_vectorization_equivalence.py.
+        _pt_vendas         = _col_or_zero(por_time, "vendas")
+        _pt_agendamentos   = _col_or_zero(por_time, "agendamentos")
+        _pt_comparecimentos = _col_or_zero(por_time, "comparecimentos")
+        por_time["pct_conversao"] = _safe_pct_vec(_pt_vendas, _pt_agendamentos)
+        por_time["pct_vendas"]    = _safe_pct_vec(_pt_vendas, _pt_comparecimentos)
         if tem_fin:
-            por_time["ticket_medio"] = por_time.apply(
-                lambda r: (float(r["montante"]) / float(r["vendas"]))
-                          if float(r.get("vendas", 0) or 0) > 0 else 0.0,
-                axis=1,
+            por_time["ticket_medio"] = _ticket_medio_vec(
+                _col_or_zero(por_time, "montante"),
+                _pt_vendas,
             )
         else:
             por_time["ticket_medio"] = 0.0
@@ -1985,13 +2207,21 @@ with tab_lead_triagem:
     _times_sel_triagem = list(ctx.selections.get("times") or [])
 
     # Comparativo: oportunidades com closer (Ativos) — base diferente, só o total.
+    # `_df_triagem_raw` é reaproveitado pelo expander "Visão complementar"
+    # (linha ~2190) — evita 2ª chamada de `get_executivas_lead_in_triagem`
+    # no mesmo rerun (tabs e expanders do Streamlit renderizam o corpo
+    # mesmo quando inativos/colapsados, então as duas chamadas co-fire).
+    # `_df_triagem_error` propaga a exceção para o expander downstream que
+    # antes refazia a query e exibia `st.error(...)`.
     try:
-        _df_opp_cmp_raw = get_executivas_lead_in_triagem(ctx.data_ini, ctx.data_fim)
-    except Exception:
-        _df_opp_cmp_raw = pd.DataFrame()
+        _df_triagem_raw = get_executivas_lead_in_triagem(ctx.data_ini, ctx.data_fim)
+        _df_triagem_error = None
+    except Exception as _exc:
+        _df_triagem_raw = pd.DataFrame()
+        _df_triagem_error = _exc
     _df_opp_cmp = triagem_aplicar_exibicao(
         cancelamentos_pos_filtrar_times(
-            triagem_preparar_deals(_df_opp_cmp_raw), _times_sel_triagem,
+            triagem_preparar_deals(_df_triagem_raw), _times_sel_triagem,
         ),
         RANKING_EXIBICAO_ATIVOS,
         _df_oficiais,
@@ -2001,11 +2231,14 @@ with tab_lead_triagem:
 
     _agen_funil_total = float(k.get("agendamentos", 0) or 0)
     _agen_funil_card = float(k.get(cmap["agendamentos"], 0) or 0)
-    try:
-        df_funil_ag_raw = get_executivas_funil_agendamentos(ctx.data_ini, ctx.data_fim)
-    except Exception as e:
-        st.error(f"Falha ao carregar agendamentos do funil: {e}")
-        df_funil_ag_raw = pd.DataFrame()
+    # Reaproveita o raw carregado no card "Reunião Agendada" (linha ~289).
+    # Mesmo período e cache — o conteúdo é idêntico ao que viria de uma
+    # segunda chamada de `get_executivas_funil_agendamentos`. Se a primeira
+    # chamada falhou, propaga o mesmo `st.error(...)` que o bloco anterior
+    # exibia — preserva feedback visual sem refazer a query.
+    if _df_funil_ag_error is not None:
+        st.error(f"Falha ao carregar agendamentos do funil: {_df_funil_ag_error}")
+    df_funil_ag_raw = _df_funil_ag_raw
 
     df_funil_ag = cancelamentos_pos_filtrar_times(
         df_funil_ag_raw, _times_sel_triagem,
@@ -2186,11 +2419,12 @@ with tab_lead_triagem:
             else RANKING_EXIBICAO_ATIVOS
         )
 
-        try:
-            df_triagem_raw = get_executivas_lead_in_triagem(ctx.data_ini, ctx.data_fim)
-        except Exception as e:
-            st.error(f"Falha ao carregar deals: {e}")
-            df_triagem_raw = pd.DataFrame()
+        # Reaproveita o raw carregado no início da tab (linha ~1989). Se a
+        # primeira chamada falhou, propaga o mesmo `st.error(...)` que o
+        # bloco anterior exibia — preserva feedback visual sem refazer a query.
+        if _df_triagem_error is not None:
+            st.error(f"Falha ao carregar deals: {_df_triagem_error}")
+        df_triagem_raw = _df_triagem_raw
 
         try:
             df_leads_triagem = get_leads_visao_geral(ctx.data_ini, ctx.data_fim)

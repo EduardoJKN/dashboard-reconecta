@@ -41,8 +41,30 @@ deals AS (
         NULLIF(btrim(d.email), '')                                    AS email,
         d.executiva_vendas::text                                      AS deal_closer_id,
         d.stage                                                       AS deal_stage,
-        NULLIF(btrim(d.triagem), '')                                  AS triagem
+        NULLIF(btrim(d.triagem), '')                                  AS triagem,
+        NULLIF(btrim(d.lead_classification), '')                      AS lead_classification,
+        NULLIF(btrim(d.qualificacao), '')                             AS qualificacao,
+        NULLIF(btrim(d.classificado_cal), '')                         AS classificado_cal
     FROM zoho_deals d
+),
+-- Dedup ext_reconecta.leads por zoho_id (latest by timestamp/id) — padrão
+-- canônico copiado de `one_page_prevendas_por_fonte.sql` e
+-- `compatibilidade_sdr_closer.sql` para alimentar a 4ª prioridade da
+-- cascata de classificação (`ext_classif`).
+ext_leads_dedup AS (
+    SELECT DISTINCT ON (l.zoho_id::text)
+        l.zoho_id::text  AS deal_id,
+        l.classificado   AS ext_classif
+    FROM ext_reconecta.leads l
+    WHERE l.zoho_id IS NOT NULL
+      AND btrim(l.zoho_id::text) <> ''
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(l.email) NOT LIKE '%@teste%'
+      AND lower(l.email) NOT LIKE 'teste@%'
+      AND lower(l.email) NOT LIKE '%smarts%'
+      AND lower(l.email) NOT LIKE '%reconecta%'
+    ORDER BY l.zoho_id::text, l."timestamp" DESC NULLS LAST, l.id DESC
 ),
 base AS (
     SELECT
@@ -58,6 +80,22 @@ base AS (
         d.email,
         d.deal_stage,
         d.triagem,
+        -- Cascata canônica de classificação (memória do projeto / validada
+        -- em 7 SQLs de Pré-vendas): lead_classification → qualificacao →
+        -- classificado_cal → ext.classificado → "Sem classificação".
+        -- Buckets mutuamente exclusivos.
+        CASE
+            WHEN d.lead_classification IN ('Atua +12','Atua -12','Não atua')
+                THEN d.lead_classification
+            WHEN d.qualificacao IN ('Atua +12','Atua -12','Não atua')
+                THEN d.qualificacao
+            WHEN d.classificado_cal IN ('Atua +12','Atua -12','Não atua')
+                THEN d.classificado_cal
+            WHEN NULLIF(btrim(ed.ext_classif), '')
+                 IN ('Atua +12','Atua -12','Não atua')
+                THEN NULLIF(btrim(ed.ext_classif), '')
+            ELSE 'Sem classificação'
+        END                                                           AS classif_final,
         NULLIF(TRIM(uo.first_name || ' ' || uo.last_name), '')        AS owner_activity,
         NULLIF(TRIM(uc.first_name || ' ' || uc.last_name), '')        AS closer_deal,
         CASE
@@ -80,6 +118,7 @@ base AS (
         END                                                           AS time_vendas
     FROM acts a
     LEFT JOIN deals d ON d.deal_id = NULLIF(a.deal_id, '')
+    LEFT JOIN ext_leads_dedup ed ON ed.deal_id = d.deal_id
     LEFT JOIN zoho_users uo ON uo.id::text = a.activity_owner_id
     LEFT JOIN zoho_users uc ON uc.id::text = d.deal_closer_id
 )
@@ -96,6 +135,7 @@ SELECT
     email,
     deal_stage,
     triagem,
+    classif_final,
     status_reuniao,
     time_vendas,
     deal_id

@@ -5,6 +5,7 @@ SDR primário = `zoho_activities.prevendas` (NULL → 'Sem SDR').
 Vendas atribuídas via `what_id` da activity → deal Ganho/Fechado Ganho
 + tipo_venda='Novo cliente' (mesma regra Visão Geral)."""
 from datetime import date
+from typing import Optional
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -1348,21 +1349,23 @@ if carregar_indicadores_oport:
                 #    % Ag. Não atua = Agend Não atua / Oport Não atua
                 #    % Conversão    = Vendas / Agendamentos       (padrão Looker)
                 #    % Conv. +12    = Vendas +12 / Agend +12
-                def _ratio(num, den):
-                    return (num / den * 100.0) if den else None
+                # Vetorizado — equivalência com o `apply` lambda anterior
+                # validada em scripts/validate_apply_vectorization_equivalence.py.
+                # Mantém a semântica de retorno None quando denominador=0
+                # (pandas converte None em NaN ao atribuir em coluna numérica;
+                # mesmo comportamento do lambda original).
+                def _ratio_vec(num_s: pd.Series, den_s: pd.Series) -> pd.Series:
+                    num = pd.to_numeric(num_s, errors="coerce")
+                    den = pd.to_numeric(den_s, errors="coerce")
+                    ratio = (num / den) * 100.0
+                    return ratio.where(den != 0, other=float("nan"))
 
-                tabela["pct_agend"]          = tabela.apply(
-                    lambda r: _ratio(r["agend_total"],   r["oport_total"]),    axis=1)
-                tabela["pct_agend_+12"]      = tabela.apply(
-                    lambda r: _ratio(r["agend_+12"],     r["oport_+12"]),      axis=1)
-                tabela["pct_agend_-12"]      = tabela.apply(
-                    lambda r: _ratio(r["agend_-12"],     r["oport_-12"]),      axis=1)
-                tabela["pct_agend_nao_atua"] = tabela.apply(
-                    lambda r: _ratio(r["agend_nao_atua"], r["oport_nao_atua"]), axis=1)
-                tabela["pct_conversao"]      = tabela.apply(
-                    lambda r: _ratio(r["vendas_total"],  r["agend_total"]),    axis=1)
-                tabela["pct_conv_+12"]       = tabela.apply(
-                    lambda r: _ratio(r["vendas_+12"],    r["agend_+12"]),      axis=1)
+                tabela["pct_agend"]          = _ratio_vec(tabela["agend_total"],     tabela["oport_total"])
+                tabela["pct_agend_+12"]      = _ratio_vec(tabela["agend_+12"],       tabela["oport_+12"])
+                tabela["pct_agend_-12"]      = _ratio_vec(tabela["agend_-12"],       tabela["oport_-12"])
+                tabela["pct_agend_nao_atua"] = _ratio_vec(tabela["agend_nao_atua"],  tabela["oport_nao_atua"])
+                tabela["pct_conversao"]      = _ratio_vec(tabela["vendas_total"],    tabela["agend_total"])
+                tabela["pct_conv_+12"]       = _ratio_vec(tabela["vendas_+12"],      tabela["agend_+12"])
 
                 tabela = tabela.sort_values(
                     "oport_total", ascending=False,
@@ -1790,59 +1793,51 @@ with st.expander("Ver leads/agendamentos detalhados"):
                 return tabela_det[col_name]
             return pd.Series([default] * len(tabela_det), index=tabela_det.index)
 
-        tabela_det["tipo_registro_base_filtro"] = (
-            _series_or_default("tipo_registro_base", "Atividade")
-            .fillna("Atividade")
-            .astype(str)
-            .str.strip()
-            .replace("", "Atividade")
+        def _norm_str_col(series: pd.Series, default: str,
+                          fallback: Optional[str] = None) -> pd.Series:
+            """Pipeline canônico de normalização das colunas-filtro:
+            `fillna(default) → astype(str) → str.strip() → replace("", fallback)`.
+
+            Mantém EXATAMENTE a mesma semântica do encadeamento anterior; só
+            consolida o padrão repetido. `fallback=None` omite o replace
+            final (caso de classificacao_crm/nome_cliente).
+            """
+            out = series.fillna(default).astype(str).str.strip()
+            if fallback is not None:
+                out = out.replace("", fallback)
+            return out
+
+        tabela_det["tipo_registro_base_filtro"] = _norm_str_col(
+            _series_or_default("tipo_registro_base", "Atividade"),
+            default="Atividade", fallback="Atividade",
         )
-        tabela_det["classificacao_filtro"] = (
-            _series_or_default("classificacao", "")
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .replace("", "Sem classificação")
+        tabela_det["classificacao_filtro"] = _norm_str_col(
+            _series_or_default("classificacao", ""),
+            default="", fallback="Sem classificação",
         )
-        tabela_det["classificacao_crm_filtro"] = (
-            _series_or_default("classificacao_crm", "")
-            .fillna("")
-            .astype(str)
-            .str.strip()
+        tabela_det["classificacao_crm_filtro"] = _norm_str_col(
+            _series_or_default("classificacao_crm", ""),
+            default="",
         )
-        tabela_det["sdr_filtro"] = (
-            _series_or_default("sdr", "")
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .replace("", "Sem SDR")
+        tabela_det["sdr_filtro"] = _norm_str_col(
+            _series_or_default("sdr", ""),
+            default="", fallback="Sem SDR",
         )
-        tabela_det["closer_filtro"] = (
-            _series_or_default("closer", "")
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .replace("", "Sem Closer")
+        tabela_det["closer_filtro"] = _norm_str_col(
+            _series_or_default("closer", ""),
+            default="", fallback="Sem Closer",
         )
-        tabela_det["status_filtro"] = (
-            _series_or_default("status_reuniao", "")
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .replace("", "Sem status")
+        tabela_det["status_filtro"] = _norm_str_col(
+            _series_or_default("status_reuniao", ""),
+            default="", fallback="Sem status",
         )
-        tabela_det["funil_origem_filtro"] = (
-            _series_or_default("funil_origem", "Sem origem")
-            .fillna("Sem origem")
-            .astype(str)
-            .str.strip()
-            .replace("", "Sem origem")
+        tabela_det["funil_origem_filtro"] = _norm_str_col(
+            _series_or_default("funil_origem", "Sem origem"),
+            default="Sem origem", fallback="Sem origem",
         )
-        tabela_det["nome_cliente_view"] = (
-            _series_or_default("nome_cliente", "")
-            .fillna("")
-            .astype(str)
-            .str.strip()
+        tabela_det["nome_cliente_view"] = _norm_str_col(
+            _series_or_default("nome_cliente", ""),
+            default="",
         )
         if "nome_deal" in tabela_det.columns:
             sem_nome = tabela_det["nome_cliente_view"] == ""
