@@ -171,7 +171,22 @@ def _ensure_period_state() -> tuple[date, date]:
     #    a key de widget cuja instância não foi renderizada no rerun
     #    anterior; o persist sobrevive porque não está vinculado a widget).
     st.session_state[PERIOD_PRESET_KEY] = st.session_state[_PERSIST_PRESET_KEY]
-    st.session_state[PERIOD_RANGE_KEY] = persisted_rng
+
+    # Exceção: se o widget está no meio de uma seleção manual de range
+    # (usuário já clicou na data inicial, ainda não escolheu a final),
+    # o `st.date_input` mantém a key como uma 1-tupla. Reidratar com o
+    # `persisted_rng` (2-tupla) aqui APAGA a seleção parcial e o calendário
+    # volta ao range anterior, impedindo o segundo clique de fechar o range.
+    # Preservamos a 1-tupla para que o próximo clique seja interpretado como
+    # data final. O `_render_period_popover` continua devolvendo o range
+    # aplicado (persist) enquanto a seleção não estiver completa, evitando
+    # que as queries rodem com uma janela parcial.
+    current_widget_rng = st.session_state.get(PERIOD_RANGE_KEY)
+    is_partial_selection = (
+        isinstance(current_widget_rng, tuple) and len(current_widget_rng) == 1
+    )
+    if not is_partial_selection:
+        st.session_state[PERIOD_RANGE_KEY] = persisted_rng
 
     return persisted_rng
 
@@ -385,7 +400,11 @@ def _render_period_popover(container) -> tuple[date, date]:
     if isinstance(rng, tuple) and len(rng) == 2:
         return rng
     if isinstance(rng, tuple) and len(rng) == 1:
-        return rng[0], rng[0]
+        # Seleção parcial em andamento — o usuário clicou só na data inicial.
+        # Devolvemos o range aplicado (persist) para que o dashboard NÃO
+        # reconsulte com uma janela de 1 dia enquanto o range não fecha.
+        # Assim: calendário guarda o primeiro clique, dados seguem estáveis.
+        return safe_rng
     return today, today
 
 
