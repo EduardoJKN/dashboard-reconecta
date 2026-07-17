@@ -158,6 +158,126 @@ deals_canal_agg AS (
 ),
 
 -- -----------------------------------------------------------------------------
+-- 3.5) Aplicações (Typeform) POR CANAL — mesma regra de mkt_visao_geral_periodo.sql,
+-- mas com o canal herdado do lead correspondente via bi_mkt.vw_visao_geral_canal_base
+-- (a MESMA view/relação usada acima para leads e deals — não é uma classificação
+-- nova). A view garante no máximo 1 linha por (data_ref, email_normalizado)
+-- — rn_dia_email = 1 na própria definição — então o LEFT JOIN abaixo não
+-- multiplica aplicações.
+--
+-- Granularidade PRESERVADA em (email_norm, data_ref): o mesmo e-mail em dois
+-- dias diferentes do período conta como duas aplicações, cada uma com seu
+-- próprio canal (podem divergir se o lead mudou de canal entre os dias).
+-- -----------------------------------------------------------------------------
+aplicacoes_dedup AS (
+    SELECT email_norm, data_ref, classificado_norm
+    FROM (
+        SELECT
+            lower(btrim(ta.email))        AS email_norm,
+            ta.created_at::date           AS data_ref,
+            lower(btrim(ta.classificado)) AS classificado_norm,
+            ROW_NUMBER() OVER (
+                PARTITION BY lower(btrim(ta.email)), ta.created_at::date
+                ORDER BY ta.created_at DESC
+            ) AS rn
+        FROM fdw_reconecta.typeform_aplicacoes ta
+        WHERE ta.created_at::date BETWEEN :data_ini AND :data_fim
+          AND ta.dados_completos IS TRUE
+          AND ta.email IS NOT NULL
+          AND btrim(ta.email) <> ''
+          AND lower(btrim(ta.email)) NOT LIKE '%teste%'
+          AND lower(btrim(ta.email)) NOT LIKE '%smarts%'
+          AND lower(btrim(ta.email)) NOT LIKE '%smartscale%'
+          AND lower(btrim(ta.email)) NOT LIKE '%reconecta%'
+    ) sub
+    WHERE rn = 1
+),
+-- MATERIALIZED: sem essa dica o planner empurra o LEFT JOIN abaixo (por
+-- email_norm + data_ref) pra dentro do foreign scan de ext_reconecta.leads
+-- e reexecuta a agregação via nested loop — 1 round-trip FDW por linha de
+-- aplicação (~700 loops, ~15s). Com MATERIALIZED cai pra ~0,3s (validado
+-- abr/2026, EXPLAIN ANALYZE).
+leads_dia_aplicacoes AS MATERIALIZED (
+    SELECT
+        lower(btrim(l.email)) AS email_norm,
+        l.created_at::date    AS data_ref,
+        BOOL_OR(NULLIF(btrim(l.utm_campaign), '') IS NOT NULL) AS tem_campanha,
+        BOOL_OR(
+            lower(btrim(l.utm_campaign)) LIKE '%diagnóstico | teste | cbo | purchase%'
+            OR lower(btrim(l.utm_campaign)) LIKE '%diagnostico | teste | cbo | purchase%'
+        ) AS tem_campanha_diagnostico,
+        BOOL_OR(upper(btrim(l.funil_origem)) = 'QUIZ') AS tem_quiz
+    FROM ext_reconecta.leads l
+    WHERE l.created_at::date BETWEEN :data_ini AND :data_fim
+      AND l.email IS NOT NULL
+      AND btrim(l.email) <> ''
+      AND lower(btrim(l.email)) NOT LIKE '%teste%'
+      AND lower(btrim(l.email)) NOT LIKE '%smarts%'
+      AND lower(btrim(l.email)) NOT LIKE '%smartscale%'
+      AND lower(btrim(l.email)) NOT LIKE '%reconecta%'
+    GROUP BY 1, 2
+),
+-- MATERIALIZED pelo mesmo motivo — evita re-scan da FDW por linha de
+-- aplicação no NOT EXISTS mais abaixo.
+emails_evento_confirmados AS MATERIALIZED (
+    SELECT DISTINCT lower(btrim(c.email)) AS email_norm
+    FROM fdw_reconecta.evento_agosto_26_cadastro c
+    WHERE c.email IS NOT NULL
+      AND btrim(c.email) <> ''
+      AND EXISTS (
+          SELECT 1
+          FROM ext_reconecta.leads l
+          WHERE lower(btrim(l.email)) = lower(btrim(c.email))
+            AND l.email IS NOT NULL
+            AND btrim(l.email) <> ''
+            AND lower(btrim(l.email)) NOT LIKE '%teste%'
+            AND lower(btrim(l.email)) NOT LIKE '%smarts%'
+            AND lower(btrim(l.email)) NOT LIKE '%smartscale%'
+            AND lower(btrim(l.email)) NOT LIKE '%reconecta%'
+      )
+),
+-- Canal herdado via `base_leads` (já materializada acima pelo mesmo motivo
+-- da nota em leads_dia_aplicacoes) — reaproveita a MESMA leitura de
+-- bi_mkt.vw_visao_geral_canal_base usada por leads/deals nesta query, em
+-- vez de escanear a view de novo.
+aplicacoes_finais AS (
+    SELECT
+        ad.email_norm,
+        ad.data_ref,
+        ad.classificado_norm,
+        COALESCE(ld.tem_campanha, FALSE) AS tem_campanha,
+        COALESCE(bl.canal, 'Sem canal') AS canal
+    FROM aplicacoes_dedup ad
+    LEFT JOIN leads_dia_aplicacoes ld
+           ON ld.email_norm = ad.email_norm
+          AND ld.data_ref   = ad.data_ref
+    LEFT JOIN base_leads bl
+           ON bl.email_normalizado = ad.email_norm
+          AND bl.data_ref          = ad.data_ref
+    WHERE NOT EXISTS (
+        SELECT 1 FROM emails_evento_confirmados eec
+        WHERE eec.email_norm = ad.email_norm
+    )
+    AND COALESCE(ld.tem_campanha_diagnostico, FALSE) = FALSE
+    AND COALESCE(ld.tem_quiz, FALSE) = FALSE
+),
+aplicacoes_canal_agg AS (
+    SELECT
+        canal,
+        COUNT(*)::bigint                                                  AS aplicacoes_totais,
+        COUNT(*) FILTER (
+            WHERE classificado_norm IN ('atua +12', 'atua+12', '+12')
+        )::bigint                                                         AS aplicacoes_mais_12,
+        COUNT(*) FILTER (
+            WHERE classificado_norm IN ('atua -12', 'atua-12', '-12')
+        )::bigint                                                         AS aplicacoes_menos_12,
+        COUNT(*) FILTER (WHERE NOT tem_campanha)::bigint                  AS aplicacoes_organicas,
+        COUNT(*) FILTER (WHERE tem_campanha)::bigint                      AS aplicacoes_trafego
+    FROM aplicacoes_finais
+    GROUP BY canal
+),
+
+-- -----------------------------------------------------------------------------
 -- 4) Universo de canais — UNION das fontes (qualquer canal com ≥1 fonte).
 -- -----------------------------------------------------------------------------
 canais AS (
@@ -165,6 +285,7 @@ canais AS (
     UNION SELECT canal FROM leads_canal
     UNION SELECT canal FROM classif_canal
     UNION SELECT canal FROM deals_canal_agg
+    UNION SELECT canal FROM aplicacoes_canal_agg
 )
 
 SELECT
@@ -201,10 +322,16 @@ SELECT
     END AS taxa_qualificacao_mais_12,
     CASE WHEN COALESCE(dca.vendas_total_geral, 0) = 0 THEN 0::numeric
          ELSE COALESCE(dca.montante_total_geral, 0) / dca.vendas_total_geral
-    END AS ticket_medio
+    END AS ticket_medio,
+    COALESCE(apc.aplicacoes_totais, 0)::bigint           AS aplicacoes_totais,
+    COALESCE(apc.aplicacoes_mais_12, 0)::bigint          AS aplicacoes_mais_12,
+    COALESCE(apc.aplicacoes_menos_12, 0)::bigint         AS aplicacoes_menos_12,
+    COALESCE(apc.aplicacoes_organicas, 0)::bigint        AS aplicacoes_organicas,
+    COALESCE(apc.aplicacoes_trafego, 0)::bigint          AS aplicacoes_trafego
 FROM canais c
-LEFT JOIN invest_canal     ic  USING (canal)
-LEFT JOIN leads_canal      lc  USING (canal)
-LEFT JOIN classif_canal    cc  USING (canal)
-LEFT JOIN deals_canal_agg  dca USING (canal)
+LEFT JOIN invest_canal        ic  USING (canal)
+LEFT JOIN leads_canal         lc  USING (canal)
+LEFT JOIN classif_canal       cc  USING (canal)
+LEFT JOIN deals_canal_agg     dca USING (canal)
+LEFT JOIN aplicacoes_canal_agg apc USING (canal)
 ORDER BY investimento_total_geral DESC, leads_totais DESC NULLS LAST;

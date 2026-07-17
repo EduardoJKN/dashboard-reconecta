@@ -254,6 +254,58 @@ def _render_visao_executiva(
     )
 
 
+def _render_aplicacoes(
+    k: dict,
+    kp: dict,
+    canal_ativo: bool,
+    canais_sel: list[str],
+) -> None:
+    hint_canal = (
+        f"canal: {', '.join(canais_sel)}" if canal_ativo
+        else "todos os canais"
+    )
+    section_title(
+        "Aplicações",
+        f"fdw_reconecta.typeform_aplicacoes · dedupe e-mail/dia · {hint_canal}",
+    )
+    a1, a2, a3, a4, a5 = st.columns(5, gap="small")
+    with a1:
+        metric_card_v2(
+            "Aplicações",
+            int_br(k["aplicacoes_totais"]),
+            delta_pct=delta_pct(k["aplicacoes_totais"], kp["aplicacoes_totais"]),
+            hint="e-mail+dia único no período",
+        )
+    with a2:
+        metric_card_v2(
+            "Aplicações +12",
+            int_br(k["aplicacoes_mais_12"]),
+            delta_pct=delta_pct(k["aplicacoes_mais_12"], kp["aplicacoes_mais_12"]),
+            hint="classificado 'Atua +12'",
+        )
+    with a3:
+        metric_card_v2(
+            "Aplicações -12",
+            int_br(k["aplicacoes_menos_12"]),
+            delta_pct=delta_pct(k["aplicacoes_menos_12"], kp["aplicacoes_menos_12"]),
+            hint="classificado 'Atua -12'",
+        )
+    with a4:
+        metric_card_v2(
+            "Aplicações Orgânicas",
+            int_br(k["aplicacoes_organicas"]),
+            delta_pct=delta_pct(k["aplicacoes_organicas"], kp["aplicacoes_organicas"]),
+            hint="lead do dia sem utm_campaign",
+        )
+    with a5:
+        metric_card_v2(
+            "Aplicações Tráfego",
+            int_br(k["aplicacoes_trafego"]),
+            delta_pct=delta_pct(k["aplicacoes_trafego"], kp["aplicacoes_trafego"]),
+            hint="lead do dia com utm_campaign",
+        )
+
+
 def _render_geracao_leads(
     k: dict,
     kp: dict,
@@ -629,6 +681,7 @@ def main() -> None:
     perf_mark_kpi_rendered(PAGE_OVERVIEW)
 
     _render_visao_executiva(ctx, k, kp, dias)
+    _render_aplicacoes(k, kp, canal_ativo, canais_sel)
     _render_geracao_leads(k, kp, canal_ativo, canais_sel)
     _render_eficiencia(k, kp)
 

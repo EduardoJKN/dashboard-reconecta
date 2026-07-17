@@ -342,6 +342,11 @@ _VISAO_GERAL_ZEROS = {
     "vendas_novas_total_geral": 0,
     "montante_total_geral": 0.0,
     "receita_total_geral": 0.0,
+    "aplicacoes_totais": 0,
+    "aplicacoes_mais_12": 0,
+    "aplicacoes_menos_12": 0,
+    "aplicacoes_organicas": 0,
+    "aplicacoes_trafego": 0,
     # Derivados (recalculados sobre SUMs)
     "roas_total_geral": 0.0,
     "cpl": 0.0,
@@ -356,6 +361,8 @@ _VISAO_GERAL_SUM_COLS = (
     "leads_nao_atua",
     "vendas_total_geral", "vendas_novas_total_geral",
     "montante_total_geral", "receita_total_geral",
+    "aplicacoes_totais", "aplicacoes_mais_12", "aplicacoes_menos_12",
+    "aplicacoes_organicas", "aplicacoes_trafego",
 )
 
 
@@ -474,6 +481,8 @@ def visao_geral_kpis_canal(df: pd.DataFrame,
         "leads_mais_12", "leads_menos_12", "leads_nao_atua",
         "vendas_total_geral", "vendas_novas_total_geral",
         "montante_total_geral", "receita_total_geral",
+        "aplicacoes_totais", "aplicacoes_mais_12", "aplicacoes_menos_12",
+        "aplicacoes_organicas", "aplicacoes_trafego",
     )
     for c in abs_cols:
         if c in sub.columns:
@@ -482,7 +491,9 @@ def visao_geral_kpis_canal(df: pd.DataFrame,
     # Cast inteiros pra display
     for c in ("leads_totais", "leads_qualificados", "leads_mais_12",
               "leads_menos_12", "leads_nao_atua",
-              "vendas_total_geral", "vendas_novas_total_geral"):
+              "vendas_total_geral", "vendas_novas_total_geral",
+              "aplicacoes_totais", "aplicacoes_mais_12", "aplicacoes_menos_12",
+              "aplicacoes_organicas", "aplicacoes_trafego"):
         out[c] = int(out[c])
 
     invest = out["investimento_total_geral"]
