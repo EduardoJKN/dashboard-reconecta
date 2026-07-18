@@ -203,23 +203,6 @@ def auth_cookie_expiry_days() -> float:
     return _expiry_days()
 
 
-def _script_run_id() -> object | None:
-    """Identificador único por execução do script (muda a cada rerun).
-
-    `ScriptRunContext` não expõe `script_run_id` no Streamlit 1.56; usamos o
-    id do set `widget_ids_this_run`, recriado em `ctx.reset()` a cada run.
-    """
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-        ctx = get_script_run_ctx()
-        if ctx is None:
-            return None
-        return id(ctx.widget_ids_this_run)
-    except Exception:
-        return None
-
-
 def _auth_cookie_manager() -> stx.CookieManager:
     """Uma instância do CookieManager por sessão (widget não pode ir em cache)."""
     if _AUTH_CM_INSTANCE_KEY not in st.session_state:
@@ -230,25 +213,35 @@ def _auth_cookie_manager() -> stx.CookieManager:
 
 
 def bootstrap_auth_cookies() -> None:
-    """Inicializa o CookieManager e aguarda a leitura dos cookies do navegador."""
-    _ensure_cookies_loaded()
+    """Força a leitura fresca dos cookies do navegador.
+
+    Deve ser a PRIMEIRA coisa chamada em cada execução do script (ver
+    `app.py`), antes de `require_auth()` / `sync_metas_editor_session()` —
+    são elas que reaproveitam esse cache em vez de ler os cookies de novo."""
+    _ensure_cookies_loaded(force_refresh=True)
 
 
-def _ensure_cookies_loaded() -> dict:
-    """Lê cookies do navegador (uma chamada `get_all()` por execução do script).
+def _ensure_cookies_loaded(*, force_refresh: bool = False) -> dict:
+    """Lê cookies do navegador — no máximo uma chamada real a `cm.get_all()`
+    por execução do script.
+
+    `bootstrap_auth_cookies()` força essa leitura uma única vez, no topo do
+    app; toda chamada seguinte na mesma execução (via `require_auth()`,
+    `get_cookie()`, `sync_metas_editor_session()`, ...) reaproveita o valor
+    já cacheado em `st.session_state`. Isso importa porque o CookieManager
+    levanta `StreamlitDuplicateElementKey` se `get_all(key=...)` for chamado
+    mais de uma vez com a mesma key na mesma execução — e detectar "essa
+    chamada é da mesma execução?" via atributos internos do
+    `ScriptRunContext` é frágil entre versões do Streamlit (foi o que
+    quebrou no deploy). Por isso o cache aqui depende só da ordem fixa de
+    chamadas em `app.py`, não de heurística de identidade de run.
 
     O componente do CookieManager costuma devolver `{}` no primeiro paint após
     F5 ou nova aba; nesse caso paramos uma vez para o iframe sincronizar.
     """
-    run_id = _script_run_id()
-    if (
-        run_id is not None
-        and _AUTH_COOKIES_LOADED_KEY in st.session_state
-        and st.session_state[_AUTH_COOKIES_LOADED_KEY] == run_id
-        and _AUTH_COOKIES_KEY in st.session_state
-    ):
+    if not force_refresh and st.session_state.get(_AUTH_COOKIES_LOADED_KEY):
         _dbg("cookies_load", "cache_hit")
-        return st.session_state[_AUTH_COOKIES_KEY]
+        return st.session_state.get(_AUTH_COOKIES_KEY, {})
 
     cm = _auth_cookie_manager()
     _dbg("cookies_load", "get_all_called")
@@ -260,7 +253,7 @@ def _ensure_cookies_loaded() -> dict:
             st.stop()
 
     st.session_state[_AUTH_COOKIES_KEY] = cookies
-    st.session_state[_AUTH_COOKIES_LOADED_KEY] = run_id
+    st.session_state[_AUTH_COOKIES_LOADED_KEY] = True
     return cookies
 
 
