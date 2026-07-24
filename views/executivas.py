@@ -73,12 +73,20 @@ from src.transforms import (
     STAGE_HINT_QUALIFICADOS,
     STAGE_LABEL_NAO_QUALIFICADOS,
     STAGE_LABEL_QUALIFICADOS,
+    VENDAS_MIX_COLS,
     vendas_detalhe_mask_por_metrica,
     vendas_forma_venda_breakdown,
     vendas_forma_venda_breakdown_rows,
     vendas_normalizar_detalhe,
 )
-from src.ui.charts import bar_etapa_distribuicao, bar_ranked, bar_simple, line, scatter_ciclo_venda
+from src.ui.charts import (
+    bar_etapa_distribuicao,
+    bar_ranked,
+    bar_ranked_vendas_mix,
+    bar_simple,
+    line,
+    scatter_ciclo_venda,
+)
 from src.ui.components import metric_card_v2, ranking_column_config, section_title
 from src.ui.page import start_page
 from src.ui.theme import brl, int_br, pct
@@ -1044,7 +1052,8 @@ with tab_rank:
     )
     st.caption(
         "**Oportunidades** = deals criados no período · **Agendamentos** = reuniões "
-        "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída. "
+        "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída · "
+        "**Vendas** = novos + ascensões + renovações + indicações. "
         "Agendamentos e comparecimentos seguem o *owner* da activity no CRM; "
         "oportunidades e vendas seguem o closer do deal."
     )
@@ -1094,13 +1103,26 @@ with tab_rank:
                 if ranking_plot.empty:
                     st.info(f"Sem **{metric_label.lower()}** no período.")
                 else:
-                    fig_top = bar_ranked(
-                        ranking_plot, "executiva", metric_col,
-                        top_n=12, height=320,
-                        money=is_money,
-                        days_format=is_ciclo,
-                        lower_is_better=is_ciclo,
+                    _usa_mix = (
+                        metric_col == "vendas"
+                        and all(c in ranking_plot.columns for c in VENDAS_MIX_COLS)
                     )
+                    if _usa_mix:
+                        fig_top = bar_ranked_vendas_mix(
+                            ranking_plot,
+                            category="executiva",
+                            mix_cols=VENDAS_MIX_COLS,
+                            top_n=12,
+                            height=320,
+                        )
+                    else:
+                        fig_top = bar_ranked(
+                            ranking_plot, "executiva", metric_col,
+                            top_n=12, height=320,
+                            money=is_money,
+                            days_format=is_ciclo,
+                            lower_is_better=is_ciclo,
+                        )
                     chart_state = st.plotly_chart(
                         fig_top,
                         use_container_width=True,
@@ -1347,7 +1369,7 @@ with tab_rank:
                     with mc1:
                         metric_card_v2(
                             "Vendas", int_br(_sum_col("vendas")),
-                            hint="deals ganhos · Novo cliente",
+                            hint="novos + ascensões + renovações + indicações",
                             accent=True,
                             breakdown=_forma_vendas_breakdown,
                         )
@@ -1467,10 +1489,12 @@ with tab_rank:
                                 ("#",                    "#"),
                                 ("nome_cliente_view",    "Nome do cliente/lead"),
                                 ("email_final_filtro",   "E-mail"),
+                                ("tipo_venda",           "Tipo de venda"),
                                 ("classificacao_final_filtro", "Classificação"),
                                 ("status_filtro",        "Status reunião"),
                                 ("origem_fonte",         "Origem/fonte"),
                                 ("data_agendamento",     "Data agendamento"),
+                                ("data_venda",           "Data venda"),
                                 ("sdr_filtro",           "SDR"),
                             ]
                         cols_resumo = [c for c, _ in cols_map_resumo
@@ -1483,6 +1507,10 @@ with tab_rank:
                         if "Data agendamento" in tabela_resumo.columns:
                             cfg_resumo["Data agendamento"] = st.column_config.DateColumn(
                                 "Data agendamento", format="DD/MM/YYYY"
+                            )
+                        if "Data venda" in tabela_resumo.columns:
+                            cfg_resumo["Data venda"] = st.column_config.DateColumn(
+                                "Data venda", format="DD/MM/YYYY"
                             )
                         if "Data churn" in tabela_resumo.columns:
                             cfg_resumo["Data churn"] = st.column_config.DateColumn(

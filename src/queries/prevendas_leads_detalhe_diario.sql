@@ -129,6 +129,7 @@ closer_resolved AS (
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Camile Silveira%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Henrique Gonçalves%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Henrique Goncalves%'
+              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Dayana Moura%'
                 THEN 'Time do Marcelo'
             ELSE 'Sem time definido'
         END                                                         AS time_vendas
@@ -160,7 +161,8 @@ activity_rows AS (
         a.activity_id,
         NULL::numeric AS montante,
         NULL::numeric AS receita,
-        NULL::text AS forma_venda
+        NULL::text AS forma_venda,
+        NULL::text AS tipo_venda
     FROM acts a
     JOIN base_dados b
       ON a.act_deal_id = b.deal_id
@@ -192,6 +194,7 @@ sales_base AS (
         b.montante,
         b.receita,
         b.forma_venda,
+        b.tipo_venda,
         b.lead_created_at
     FROM base_dados b
     LEFT JOIN zoho_users u
@@ -201,7 +204,15 @@ sales_base AS (
     LEFT JOIN leads_funil lf
            ON lf.lead_zoho_id = b.deal_id
     WHERE b.stage = 'Ganho'
-      AND b.tipo_venda = 'Novo cliente'
+      -- Mix de vendas do Top Closers: novos + ascensões + renovações +
+      -- indicações (alinhado a `VENDAS_MIX_COLS` / ranking).
+      AND b.tipo_venda IN (
+          'Novo cliente',
+          'Ascensão',
+          'Renovação',
+          'Renovação antecipada',
+          'Indicação'
+      )
       AND b.data_venda BETWEEN :data_ini AND :data_fim
     ORDER BY b.deal_id, b.lead_created_at DESC NULLS LAST, b.nome_cliente
 ),
@@ -227,7 +238,8 @@ sales_rows AS (
         NULL::text AS activity_id,
         sb.montante,
         sb.receita,
-        sb.forma_venda
+        sb.forma_venda,
+        sb.tipo_venda
     FROM sales_base sb
 ),
 final_rows AS (
@@ -252,7 +264,8 @@ final_rows AS (
         activity_id,
         montante,
         receita,
-        forma_venda
+        forma_venda,
+        tipo_venda
     FROM activity_rows a
 
     UNION ALL
@@ -278,7 +291,8 @@ final_rows AS (
         activity_id,
         montante,
         receita,
-        forma_venda
+        forma_venda,
+        tipo_venda
     FROM sales_rows
 )
 -- `time_vendas` é coluna nova adicionada para o Top Closers de Vendas
@@ -288,6 +302,8 @@ final_rows AS (
 -- `funil_origem` (25/05/2026): origem do lead em ext_reconecta.leads
 -- (VSL/SE/AG/…). Vazio/null → 'Sem origem'. Alimenta o filtro de Funil
 -- de Origem na Visão Geral Pré-vendas.
+-- `tipo_venda` (jul/2026): exposto no detalhe de Vendas para cobrir o
+-- mix novos/ascensões/renovações/indicações no Top Closers.
 SELECT
     tipo_registro_base,
     data_agendamento,
@@ -309,6 +325,7 @@ SELECT
     activity_id,
     montante,
     receita,
-    forma_venda
+    forma_venda,
+    tipo_venda
 FROM final_rows
 ORDER BY COALESCE(data_agendamento, data_criacao, data_venda), deal_id, activity_id NULLS LAST;

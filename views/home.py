@@ -18,6 +18,7 @@ from src.transforms import (
     EXECUTIVAS_RANKING_METRICAS_CICLO,
     EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
     EXECUTIVAS_RANKING_METRIC_OPTIONS,
+    VENDAS_MIX_COLS,
     ciclo_venda_agregar_por_closer,
     ciclo_venda_filtrar,
     ciclo_venda_merge_ranking,
@@ -43,7 +44,7 @@ from src.transforms import (
     vendas_normalizar_detalhe,
     visao_geral_kpis,
 )
-from src.ui.charts import bar_ranked, receita_vs_meta_mensal
+from src.ui.charts import bar_ranked, bar_ranked_vendas_mix, receita_vs_meta_mensal
 from src.ui.components import (
     hero_revenue_card,
     metric_card_v2,
@@ -433,7 +434,8 @@ section_title(
 )
 st.caption(
     "**Oportunidades** = deals criados no período · **Agendamentos** = reuniões "
-    "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída. "
+    "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída · "
+    "**Vendas** = novos + ascensões + renovações + indicações. "
     "Agendamentos e comparecimentos seguem o *owner* da activity no CRM."
 )
 
@@ -476,13 +478,26 @@ else:
             if ranking_plot_home.empty:
                 st.info(f"Sem **{metric_label_home.lower()}** no período.")
             else:
-                fig_top_h = bar_ranked(
-                    ranking_plot_home, "executiva", metric_col_home,
-                    top_n=12, height=320,
-                    money=is_money_home,
-                    days_format=is_ciclo_home,
-                    lower_is_better=is_ciclo_home,
+                _usa_mix_h = (
+                    metric_col_home == "vendas"
+                    and all(c in ranking_plot_home.columns for c in VENDAS_MIX_COLS)
                 )
+                if _usa_mix_h:
+                    fig_top_h = bar_ranked_vendas_mix(
+                        ranking_plot_home,
+                        category="executiva",
+                        mix_cols=VENDAS_MIX_COLS,
+                        top_n=12,
+                        height=320,
+                    )
+                else:
+                    fig_top_h = bar_ranked(
+                        ranking_plot_home, "executiva", metric_col_home,
+                        top_n=12, height=320,
+                        money=is_money_home,
+                        days_format=is_ciclo_home,
+                        lower_is_better=is_ciclo_home,
+                    )
                 chart_state_home = st.plotly_chart(
                     fig_top_h,
                     use_container_width=True,
@@ -675,7 +690,7 @@ else:
                 with mc1:
                     metric_card_v2(
                         "Vendas", int_br(_sum_col_h("vendas")),
-                        hint="deals ganhos · Novo cliente",
+                        hint="novos + ascensões + renovações + indicações",
                         accent=True,
                         breakdown=_forma_vendas_breakdown_h,
                     )
@@ -770,10 +785,12 @@ else:
                             ("#",                    "#"),
                             ("nome_cliente_view",    "Nome do cliente/lead"),
                             ("email_final_filtro",   "E-mail"),
+                            ("tipo_venda",           "Tipo de venda"),
                             ("classificacao_final_filtro", "Classificação"),
                             ("status_filtro",        "Status reunião"),
                             ("origem_fonte",         "Origem/fonte"),
                             ("data_agendamento",     "Data agendamento"),
+                            ("data_venda",           "Data venda"),
                             ("sdr_filtro",           "SDR"),
                         ]
                     cols_resumo_h = [c for c, _ in cols_map_resumo_h
@@ -786,6 +803,10 @@ else:
                     if "Data agendamento" in tabela_resumo_h.columns:
                         cfg_resumo_h["Data agendamento"] = st.column_config.DateColumn(
                             "Data agendamento", format="DD/MM/YYYY"
+                        )
+                    if "Data venda" in tabela_resumo_h.columns:
+                        cfg_resumo_h["Data venda"] = st.column_config.DateColumn(
+                            "Data venda", format="DD/MM/YYYY"
                         )
                     if "Data churn" in tabela_resumo_h.columns:
                         cfg_resumo_h["Data churn"] = st.column_config.DateColumn(

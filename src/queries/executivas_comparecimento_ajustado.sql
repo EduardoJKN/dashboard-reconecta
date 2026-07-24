@@ -113,6 +113,7 @@ base AS (
               OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Camile Silveira%'
               OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Henrique Gonçalves%'
               OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Henrique Goncalves%'
+              OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Dayana Moura%'
                 THEN 'Time do Marcelo'
             ELSE 'Sem time definido'
         END                                                           AS time_vendas

@@ -160,7 +160,6 @@ EXECUTIVAS_RANKING_METRIC_OPTIONS: dict[str, str] = {
     "Vendas":           "vendas",
     "Agendamentos":     "agendamentos",
     "Comparecimentos":  "comparecimentos",
-    "Comparecimentos (ajustado teste)": "comparecimentos_ajustado",
     "Ganhos +12":       "ganhos_mais_12",
     "Ganhos -12":       "ganhos_menos_12",
     "Ganhos Não atua":  "ganhos_nao_atua",
@@ -181,8 +180,17 @@ EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS = frozenset({
 })
 EXECUTIVAS_RANKING_METRICAS_NEUTRAS = frozenset({
     "receita", "montante", "vendas", "agendamentos", "comparecimentos",
-    "comparecimentos_ajustado",
 })
+
+# Mix canônico de vendas no ranking Top Closers / Ver ranking completo.
+# `vendas` passa a ser a soma destas colunas (não só "Novo cliente").
+VENDAS_MIX_COLS: tuple[str, ...] = ("novos", "ascensoes", "renovacoes", "indicacoes")
+VENDAS_MIX_LABELS: dict[str, tuple[str, str]] = {
+    "novos":       ("nova", "novas"),
+    "ascensoes":   ("ascensão", "ascensões"),
+    "renovacoes":  ("renovação", "renovações"),
+    "indicacoes":  ("indicação", "indicações"),
+}
 
 RANKING_EXIBICAO_ATIVOS = "Somente ativos"
 RANKING_EXIBICAO_HISTORICO = "Histórico geral"
@@ -193,13 +201,94 @@ _RANKING_DERIVED_COLS = ("pct_agendamento", "pct_comparecimento",
 RANKING_FULL_SCHEMA = ("executiva",) + _RANKING_BASE_COLS + _RANKING_DERIVED_COLS
 
 
+def executivas_recalcular_vendas_mix(df: pd.DataFrame) -> pd.DataFrame:
+    """Sobrescreve `vendas` com a soma novos + ascensões + renovações + indicações.
+
+    Usado no ranking de closers (Top Closers / Ver ranking completo). Se
+    nenhuma coluna do mix existir, devolve o df intacto.
+    """
+    if df is None or df.empty:
+        return df
+    mix = [c for c in VENDAS_MIX_COLS if c in df.columns]
+    if not mix:
+        return df
+    out = df.copy()
+    total = None
+    for c in mix:
+        serie = pd.to_numeric(out[c], errors="coerce").fillna(0)
+        total = serie if total is None else total + serie
+    out["vendas"] = total
+    return out
+
+
+def format_vendas_mix_label(
+    novos: float = 0,
+    ascensoes: float = 0,
+    renovacoes: float = 0,
+    indicacoes: float = 0,
+) -> str:
+    """Rótulo curto do mix, ex.: `4 novas · 1 renovação`."""
+    valores = {
+        "novos": novos,
+        "ascensoes": ascensoes,
+        "renovacoes": renovacoes,
+        "indicacoes": indicacoes,
+    }
+    parts: list[str] = []
+    for col, (sing, plur) in VENDAS_MIX_LABELS.items():
+        n = int(float(valores.get(col, 0) or 0))
+        if n <= 0:
+            continue
+        parts.append(f"{n} {sing if n == 1 else plur}")
+    return " · ".join(parts)
+
+
+def format_vendas_mix_bar_label(
+    novos: float = 0,
+    ascensoes: float = 0,
+    renovacoes: float = 0,
+    indicacoes: float = 0,
+) -> str:
+    """Rótulo do Top Closers (métrica Vendas).
+
+    - 1 categoria só → `8 novas` (sem repetir o total)
+    - 2+ categorias → `5 vendas · 4 novas · 1 renovação`
+    - sem mix → total com `venda(s)` ou string vazia se zero
+    """
+    valores = {
+        "novos": int(float(novos or 0)),
+        "ascensoes": int(float(ascensoes or 0)),
+        "renovacoes": int(float(renovacoes or 0)),
+        "indicacoes": int(float(indicacoes or 0)),
+    }
+    parts: list[str] = []
+    for col, (sing, plur) in VENDAS_MIX_LABELS.items():
+        n = valores[col]
+        if n <= 0:
+            continue
+        parts.append(f"{n} {sing if n == 1 else plur}")
+
+    total = sum(valores.values())
+    if not parts:
+        if total <= 0:
+            return ""
+        return f"{total} {'venda' if total == 1 else 'vendas'}"
+    if len(parts) == 1:
+        return parts[0]
+    return f"{total} {'venda' if total == 1 else 'vendas'} · " + " · ".join(parts)
+
+
 def executivas_ranking(df: pd.DataFrame) -> pd.DataFrame:
     """Ranking por executiva: absolutos + taxas recalculadas.
 
     Sempre devolve um DataFrame com `RANKING_FULL_SCHEMA` (mesmo vazio).
     Colunas absolutas ausentes na view são preenchidas com 0 antes do cálculo
     das taxas, evitando KeyError em produção quando a view tiver schema
-    levemente diferente do esperado em dev."""
+    levemente diferente do esperado em dev.
+
+    `vendas` = novos + ascensoes + renovacoes + indicacoes (quando o mix
+    estiver disponível na view).
+    """
     if df.empty or "executiva" not in df.columns:
         return pd.DataFrame(columns=list(RANKING_FULL_SCHEMA))
 
@@ -210,6 +299,8 @@ def executivas_ranking(df: pd.DataFrame) -> pd.DataFrame:
     for c in _RANKING_BASE_COLS:
         if c not in agg.columns:
             agg[c] = 0
+
+    agg = executivas_recalcular_vendas_mix(agg)
 
     agg["pct_agendamento"]    = agg.apply(lambda r: _safe_div(r["agendamentos"], r["oportunidades"]) * 100, axis=1)
     agg["pct_comparecimento"] = agg.apply(lambda r: _safe_div(r["comparecimentos"], r["agendamentos"]) * 100, axis=1)
@@ -479,6 +570,7 @@ def _match_oficial_por_tokens(nome_ranking: str,
 # cadastro ainda não reflete o time correto (ex.: Stefany Campinas).
 _EXECUTIVA_TIME_OVERRIDES: list[tuple[frozenset[str], str]] = [
     (frozenset({"stefany", "campinas"}), "Time da Leidianne"),
+    (frozenset({"dayana", "moura"}), "Time do Marcelo"),
 ]
 
 

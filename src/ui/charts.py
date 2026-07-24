@@ -1162,6 +1162,111 @@ def bar_ranked(df: pd.DataFrame, category: str, value: str,
     return fig
 
 
+# ---------------------------------------------------------------------------
+# Top Closers · Vendas: visual idêntico ao bar_ranked (barra única vinho→ouro),
+# com rótulo de mix à direita (ex.: `5 · 4 novas · 1 renovação`).
+# ---------------------------------------------------------------------------
+
+
+def bar_ranked_vendas_mix(
+    df: pd.DataFrame,
+    category: str = "executiva",
+    mix_cols: tuple[str, ...] = ("novos", "ascensoes", "renovacoes", "indicacoes"),
+    top_n: int = 12,
+    height: int | None = None,
+    label_max_len: int = 26,
+) -> go.Figure:
+    """Barras ranqueadas no visual clássico + rótulo do mix de vendas.
+
+    Mesma aparência do `bar_ranked` (barra sólida com escala vinho→ouro).
+    Rótulo: 1 categoria → `8 novas`; 2+ → `5 vendas · 4 novas · 1 renovação`.
+    `customdata[0]` = nome completo da executiva para o clique → detalhe.
+    """
+    from src.transforms import format_vendas_mix_bar_label
+
+    h_default = height or 260
+    if df is None or df.empty or category not in df.columns:
+        fig = go.Figure()
+        fig.update_layout(**_base_layout(height=h_default))
+        _style_axes(fig)
+        return fig
+
+    data = df.copy()
+    present = [c for c in mix_cols if c in data.columns]
+    if not present:
+        fig = go.Figure()
+        fig.update_layout(**_base_layout(height=h_default))
+        _style_axes(fig)
+        return fig
+
+    for c in present:
+        data[c] = pd.to_numeric(data[c], errors="coerce").fillna(0)
+    data["_vendas_mix"] = data[present].sum(axis=1)
+    data = data[data["_vendas_mix"] > 0].nlargest(top_n, "_vendas_mix")
+    data = data.sort_values("_vendas_mix", ascending=True)
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(**_base_layout(height=h_default))
+        _style_axes(fig)
+        return fig
+
+    h = height or max(260, 26 * len(data) + 60)
+    full_labels = data[category].astype(str)
+    y_labels = full_labels.apply(lambda s: _truncate(s, label_max_len))
+    vals = data["_vendas_mix"].astype(float).tolist()
+    vmax = max(vals) if vals else 0.0
+
+    text_vals = [
+        format_vendas_mix_bar_label(
+            novos=row["novos"] if "novos" in data.columns else 0,
+            ascensoes=row["ascensoes"] if "ascensoes" in data.columns else 0,
+            renovacoes=row["renovacoes"] if "renovacoes" in data.columns else 0,
+            indicacoes=row["indicacoes"] if "indicacoes" in data.columns else 0,
+        )
+        for _, row in data.iterrows()
+    ]
+
+    # Rótulos do mix → sempre fora da barra (visual limpo).
+    text_positions = ["outside"] * len(vals)
+
+    customdata = list(zip(full_labels.tolist(), text_vals))
+    hovertemplate = (
+        "<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>"
+    )
+
+    fig = go.Figure(go.Bar(
+        y=y_labels,
+        x=data["_vendas_mix"],
+        orientation="h",
+        marker=dict(
+            color=data["_vendas_mix"],
+            colorscale=[
+                [0, PALETTE["wine_soft"]],
+                [0.5, PALETTE["wine"]],
+                [1, PALETTE["gold"]],
+            ],
+            line=dict(color=PALETTE["border_strong"], width=0.5),
+        ),
+        text=text_vals,
+        textposition=text_positions,
+        outsidetextfont=dict(color=PALETTE["text"], size=10, family="Inter"),
+        cliponaxis=False,
+        customdata=customdata,
+        hovertemplate=hovertemplate,
+    ))
+    # Margem direita maior para caber "5 vendas · 4 novas · 1 renovação".
+    x_pad = vmax * 1.45 if vmax > 0 else 1.0
+    fig.update_layout(**_base_layout(height=h))
+    fig.update_layout(
+        showlegend=False,
+        margin=dict(l=12, r=170, t=28, b=12),
+        bargap=0.32,
+        xaxis=dict(range=[0, x_pad]),
+    )
+    _style_axes(fig)
+    return fig
+
+
 def bar_etapa_distribuicao(
     df: pd.DataFrame,
     etapa_col: str,
