@@ -74,6 +74,8 @@ from src.transforms import (
     STAGE_LABEL_NAO_QUALIFICADOS,
     STAGE_LABEL_QUALIFICADOS,
     VENDAS_MIX_COLS,
+    format_vendas_mix_hint,
+    vendas_mix_total,
     vendas_detalhe_mask_por_metrica,
     vendas_forma_venda_breakdown,
     vendas_forma_venda_breakdown_rows,
@@ -588,7 +590,23 @@ with f5:
     )
     metric_card_v2("Clientes Cancelados", int_br(_churn_qtd_classif),
                    hint=_hint_churn)
-with f6: metric_card_v2("Ganhos", int_br(vend_v))
+with f6:
+    # Em "Todas", Ganhos = mix canônico (novas + ascensões + renovações +
+    # indicações), alinhado à Visão Geral e ao ranking Top Closers.
+    # Buckets de classif continuam em `ganhos_*` (sem quebra por tipo_venda).
+    if is_todas:
+        _ganhos_card = vendas_mix_total(
+            k.get("novos", 0), k.get("ascensoes", 0),
+            k.get("renovacoes", 0), k.get("indicacoes", 0),
+        )
+        _hint_ganhos = format_vendas_mix_hint(
+            k.get("novos", 0), k.get("ascensoes", 0),
+            k.get("renovacoes", 0), k.get("indicacoes", 0),
+        )
+    else:
+        _ganhos_card = vend_v
+        _hint_ganhos = None
+    metric_card_v2("Ganhos", int_br(_ganhos_card), hint=_hint_ganhos)
 with f7: metric_card_v2(
     "Perdidos", int_br(k["perdidos"]),
     hint=None if is_todas else "total geral · sem quebra por classif.",

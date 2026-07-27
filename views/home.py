@@ -19,6 +19,8 @@ from src.transforms import (
     EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
     EXECUTIVAS_RANKING_METRIC_OPTIONS,
     VENDAS_MIX_COLS,
+    format_vendas_mix_hint,
+    vendas_mix_total,
     ciclo_venda_agregar_por_closer,
     ciclo_venda_filtrar,
     ciclo_venda_merge_ranking,
@@ -103,7 +105,7 @@ df_exec_bruto = ctx.apply_filters(df_exec_all, col_map)
 #                         Período). Inclui closers que saíram do time no
 #                         meio do período — as vendas deles continuam
 #                         sendo vendas reais do mês e devem aparecer nos
-#                         KPIs gerais (Receita, Montante, Vendas Novas,
+#                         KPIs gerais (Receita, Montante, Ganhos,
 #                         Ticket, Conversão Global) e na Receita mensal.
 #                         Casa com o número do Looker / One Page.
 #
@@ -251,12 +253,21 @@ with s1:
         metric_card_v2("Leads Totais", "—",
                        hint="fonte de leads indisponível")
 with s2:
+    # Total de ganhos = novas + ascensões + renovações + indicações
+    # (mesmo mix do ranking Top Closers). A legenda distingue a natureza.
+    ganhos_tot = vendas_mix_total(
+        k["novos"], k["ascensoes"], k["renovacoes"], k["indicacoes"],
+    )
+    ganhos_prev = vendas_mix_total(
+        kp["novos"], kp["ascensoes"], kp["renovacoes"], kp["indicacoes"],
+    )
     metric_card_v2(
-        "Vendas Novas",
-        int_br(k["novos"]),
-        delta_pct=delta_pct(k["novos"], kp["novos"]),
-        hint=f"Asc. {int_br(k['ascensoes'])} · Ren. {int_br(k['renovacoes'])} · "
-             f"Ind. {int_br(k['indicacoes'])}",
+        "Ganhos",
+        int_br(ganhos_tot),
+        delta_pct=delta_pct(ganhos_tot, ganhos_prev),
+        hint=format_vendas_mix_hint(
+            k["novos"], k["ascensoes"], k["renovacoes"], k["indicacoes"],
+        ),
     )
     if media_movel_val is not None:
         ritmo_fmt = f"{media_movel_val:.1f}".replace(".", ",")

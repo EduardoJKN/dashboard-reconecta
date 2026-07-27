@@ -221,6 +221,36 @@ def executivas_recalcular_vendas_mix(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def vendas_mix_total(
+    novos: float = 0,
+    ascensoes: float = 0,
+    renovacoes: float = 0,
+    indicacoes: float = 0,
+) -> float:
+    """Soma canônica do mix: novas + ascensões + renovações + indicações."""
+    return (
+        float(novos or 0)
+        + float(ascensoes or 0)
+        + float(renovacoes or 0)
+        + float(indicacoes or 0)
+    )
+
+
+def format_vendas_mix_hint(
+    novos: float = 0,
+    ascensoes: float = 0,
+    renovacoes: float = 0,
+    indicacoes: float = 0,
+) -> str:
+    """Legenda curta do card de ganhos, ex.: `Nov. 8 · Asc. 0 · Ren. 1 · Ind. 0`."""
+    return (
+        f"Nov. {int(float(novos or 0))} · "
+        f"Asc. {int(float(ascensoes or 0))} · "
+        f"Ren. {int(float(renovacoes or 0))} · "
+        f"Ind. {int(float(indicacoes or 0))}"
+    )
+
+
 def format_vendas_mix_label(
     novos: float = 0,
     ascensoes: float = 0,
