@@ -16,6 +16,9 @@ from src.prevendas_transforms import (
     QUALIF_LEGENDA_ABA,
     QUALIF_LEGENDA_LEONARDO,
     prevendas_anotar_sdr,
+    prevendas_anotar_tipo_sdr_detalhe,
+    prevendas_diario_filtrado_por_sdr,
+    prevendas_normalizar_detalhe,
     prevendas_qualif_anotar_leonardo,
     prevendas_qualif_aplicar_filtro_leonardo,
     prevendas_detalhe_sdr_por_fonte,
@@ -94,26 +97,46 @@ df_qualif_sem_lr = prevendas_qualif_aplicar_filtro_leonardo(
     df_qualif_anotado,
     excluir=excluir_lr_global,
 )
-df_qualif_filt = ctx.apply_filters(
+df_qualif_filt = ctx.refilter(
     df_qualif_sem_lr,
     {"sdr": "sdr", "tipo_sdr": "tipo_sdr"},
 )
-df_qualif_filt_audit = ctx.apply_filters(
+df_qualif_filt_audit = ctx.refilter(
     df_qualif_anotado,
     {"sdr": "sdr", "tipo_sdr": "tipo_sdr"},
 )
 
-k = prevendas_overview_kpis(df_diario)
+# `df_diario` é agregado sem grão de SDR. Com SDR/Tipo no header,
+# recompomos a série a partir do detalhe (mesma regra da Visão Geral).
+# Leads continuam cross-SDR (não atribuíveis ao lead cru).
+df_det_norm = prevendas_anotar_tipo_sdr_detalhe(
+    prevendas_normalizar_detalhe(df_detalhe)
+)
+sdr_sel = list(ctx.selections.get("sdr") or [])
+tipo_sdr_sel = list(ctx.selections.get("tipo_sdr") or [])
+filtros_header_ativos = bool(sdr_sel or tipo_sdr_sel)
+
+if filtros_header_ativos and df_det_norm is not None and not df_det_norm.empty:
+    df_diario_view = prevendas_diario_filtrado_por_sdr(
+        df_det_norm, df_diario,
+        sdr_sel, tipo_sdr_sel,
+        ctx.data_ini, ctx.data_fim,
+    )
+else:
+    df_diario_view = df_diario
+
+k = prevendas_overview_kpis(df_diario_view)
+# Splits Com Pré / Não Qualif. e override operacional do Leonardo
+# usam o recorte já filtrado por SDR/Tipo (e Leonardo, se ativo).
+df_qualif_resumo = df_qualif_filt if excluir_lr_global else df_qualif_filt_audit
 if excluir_lr_global:
-    kq_resumo_lr = prevendas_qualif_comparecimento_kpis(df_qualif_sem_lr)
+    kq_resumo_lr = prevendas_qualif_comparecimento_kpis(df_qualif_resumo)
     k = {
         **k,
         "agendamentos": kq_resumo_lr["total_agendamentos"],
         "comparecimentos": kq_resumo_lr["total_comparecimentos"],
     }
-    _splits_resumo = prevendas_qualif_resumo_splits(df_qualif_sem_lr)
-else:
-    _splits_resumo = prevendas_qualif_resumo_splits(df_qualif_anotado)
+_splits_resumo = prevendas_qualif_resumo_splits(df_qualif_resumo)
 
 agendamentos_exibidos = int(
     k.get(
@@ -123,14 +146,18 @@ agendamentos_exibidos = int(
 )
 
 # ---------------------------------------------------------------------------
-# Resumo do período (totais, sem filtro fino — referência cross-SDR)
+# Resumo do período (respeita SDR / Tipo SDR do header)
 # ---------------------------------------------------------------------------
 section_title("Resumo do período")
 
 c1, c2, c3, c4, c5, c6, c7 = st.columns(7, gap="small")
 with c1:
-    metric_card_v2("Leads", int_br(k["leads"]), accent=True,
-                   hint="cross-SDR · referência")
+    metric_card_v2(
+        "Leads",
+        int_br(k["leads"]),
+        accent=True,
+        hint="cross-SDR · referência (leads não atribuíveis a SDR)",
+    )
 with c2:
     metric_card_v2(
         "Agendamentos",
@@ -147,8 +174,11 @@ with c4:
     metric_card_v2("Vendas novas", int_br(k["vendas_novas"]),
                    hint="tipo_venda = 'Novo cliente'")
 with c5:
-    metric_card_v2("Conversão", pct(k["taxa_lead_venda_nova"]),
-                   hint="vendas novas ÷ leads")
+    metric_card_v2(
+        "Conversão",
+        pct(k["taxa_lead_venda_nova"]),
+        hint="vendas novas ÷ leads (leads cross-SDR)",
+    )
 with c6:
     metric_card_v2("Ticket médio",
                    brl(k["ticket_medio"]) if k["ticket_medio"] else "—",
@@ -314,12 +344,12 @@ with tab_tipo:
 
 with tab_temp:
     section_title("Evolução diária", "agendamentos × comparecimentos × vendas novas")
-    if df_diario.empty:
+    if df_diario_view.empty:
         st.info("Sem série diária no período.")
     else:
         from src.ui.charts import line
         st.plotly_chart(
-            line(df_diario, x="data_ref",
+            line(df_diario_view, x="data_ref",
                  y=["agendamentos", "comparecimentos", "vendas_novas"],
                  height=320),
             use_container_width=True,
@@ -747,6 +777,7 @@ with tab_qualif:
 st.caption(
     "Classificação de SDR (`Pré-vendas` / `Social Seller` / `SDR não "
     "classificado`) reusa `src/team_classification.py`. Ranking ordenado "
-    "por agendamentos. Filtros do header aplicam sobre `sdr` e `tipo_sdr` "
-    "na aba Qualificação & Comparecimento."
+    "por agendamentos. Filtros do header (SDR / Tipo SDR) aplicam ao "
+    "Resumo, Evolução, Ranking, Por tipo e Qualificação & Comparecimento. "
+    "Leads do Resumo permanecem cross-SDR (não atribuíveis ao lead cru)."
 )

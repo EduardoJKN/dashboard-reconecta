@@ -204,9 +204,17 @@ st.caption(
 if df_leads.empty:
     st.info("Sem leads no período selecionado.")
 else:
-    total_leads = len(df_leads)
-    com_sdr     = int(df_leads["tem_sdr_identificado"].fillna(False).sum())
-    com_deal    = int(df_leads["tem_deal_crm"].fillna(False).sum())
+    # Cards do topo seguem o mesmo recorte do header (SDR / Tipo SDR).
+    total_leads_periodo = len(df_leads)
+    total_leads = len(df_leads_filt)
+    com_sdr     = (
+        int(df_leads_filt["tem_sdr_identificado"].fillna(False).sum())
+        if not df_leads_filt.empty else 0
+    )
+    com_deal    = (
+        int(df_leads_filt["tem_deal_crm"].fillna(False).sum())
+        if not df_leads_filt.empty else 0
+    )
     sem_sdr     = total_leads - com_sdr
     pct_sdr     = (com_sdr / total_leads * 100) if total_leads else 0.0
     pct_deal    = (com_deal / total_leads * 100) if total_leads else 0.0
@@ -228,10 +236,11 @@ else:
         metric_card_v2("Sem SDR identificado", int_br(sem_sdr),
                        hint="nem atividade nem deal trouxeram SDR")
 
-    st.caption(
-        f"{int_br(len(df_leads_filt))} de {int_br(total_leads)} leads "
-        f"no recorte filtrado (SDR / Tipo SDR no header)."
-    )
+    if total_leads != total_leads_periodo:
+        st.caption(
+            f"{int_br(total_leads)} de {int_br(total_leads_periodo)} leads "
+            f"do período (filtro SDR / Tipo SDR no header)."
+        )
 
     if df_leads_filt.empty:
         st.info("Sem leads no recorte filtrado.")

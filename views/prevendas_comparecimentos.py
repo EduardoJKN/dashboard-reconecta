@@ -7,7 +7,10 @@ import streamlit as st
 
 from src.prevendas_transforms import (
     prevendas_anotar_sdr,
+    prevendas_anotar_tipo_sdr_detalhe,
     prevendas_classif_kpis,
+    prevendas_diario_filtrado_por_sdr,
+    prevendas_normalizar_detalhe,
     prevendas_overview_kpis,
 )
 from src.repositories import (
@@ -42,8 +45,31 @@ except Exception as e:
 df_sdr = prevendas_anotar_sdr(df_sdr)
 df_sdr_filt = ctx.apply_filters(df_sdr, {"sdr": "sdr", "tipo_sdr": "tipo_sdr"})
 
-ko = prevendas_overview_kpis(df_diario)
-kc = prevendas_classif_kpis(df_classif)
+df_classif_anotado = prevendas_anotar_sdr(df_classif)
+df_classif_filt = ctx.refilter(
+    df_classif_anotado if df_classif_anotado is not None else df_classif,
+    {"sdr": "sdr", "tipo_sdr": "tipo_sdr"},
+)
+
+# `df_diario` é agregado sem grão de SDR — recompõe quando há filtro.
+df_det_norm = prevendas_anotar_tipo_sdr_detalhe(
+    prevendas_normalizar_detalhe(df_detalhe)
+)
+sdr_sel = list(ctx.selections.get("sdr") or [])
+tipo_sdr_sel = list(ctx.selections.get("tipo_sdr") or [])
+filtros_header_ativos = bool(sdr_sel or tipo_sdr_sel)
+
+if filtros_header_ativos and df_det_norm is not None and not df_det_norm.empty:
+    df_diario_view = prevendas_diario_filtrado_por_sdr(
+        df_det_norm, df_diario,
+        sdr_sel, tipo_sdr_sel,
+        ctx.data_ini, ctx.data_fim,
+    )
+else:
+    df_diario_view = df_diario
+
+ko = prevendas_overview_kpis(df_diario_view)
+kc = prevendas_classif_kpis(df_classif_filt)
 
 # ---------------------------------------------------------------------------
 # Resumo do período
@@ -62,8 +88,11 @@ with c3:
                    pct(ko["taxa_comparecimento"]) if ko["taxa_comparecimento"] else "—",
                    hint="comparec ÷ agend")
 with c4:
-    # Cancelamentos: somar `cancelamentos` do df_sdr (já agregado)
-    cancel = int(df_sdr["cancelamentos"].sum()) if not df_sdr.empty else 0
+    cancel = (
+        int(df_sdr_filt["cancelamentos"].sum())
+        if not df_sdr_filt.empty and "cancelamentos" in df_sdr_filt.columns
+        else 0
+    )
     metric_card_v2("Cancelamentos", int_br(cancel),
                    hint="status_reuniao = 'Cancelada'")
 with c5:
@@ -115,11 +144,11 @@ with q4:
 
 # Tabela detalhada por (sdr, bucket)
 with st.expander("Tabela detalhada — SDR × bucket de classificação"):
-    if df_classif is None or df_classif.empty:
+    if df_classif_filt is None or df_classif_filt.empty:
         st.caption("Sem leads classificados no período.")
     else:
         st.dataframe(
-            df_classif, use_container_width=True, hide_index=True,
+            df_classif_filt, use_container_width=True, hide_index=True,
             column_config={
                 "sdr": "SDR",
                 "classif_final": "Classif. crua",
@@ -166,5 +195,7 @@ st.caption(
     "filtro tipo_venda='Novo cliente'. **No-show** mantido como `—` "
     "porque o status `Vencida` aparece apenas em meses correntes (em "
     "abril/2026 fechado: 0 Vencidas) — o CRM provavelmente converte pra "
-    "Cancelada/Concluída depois. Definição precisa do time."
+    "Cancelada/Concluída depois. Definição precisa do time. "
+    "Filtros do header (SDR / Tipo SDR) aplicam ao Resumo, Funil, "
+    "Quebra por classificação e Ranking."
 )
