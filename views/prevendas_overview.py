@@ -16,6 +16,7 @@ from src.prevendas_transforms import (
     prevendas_agregar_por_granularidade,
     prevendas_anotar_sdr,
     prevendas_anotar_tipo_sdr_detalhe,
+    prevendas_aplicar_leads_atribuidos_por_sdr,
     prevendas_auditoria_agendamentos_bruto_dia,
     prevendas_detalhe_mask_por_metrica,
     prevendas_diario_filtrado_por_sdr,
@@ -34,6 +35,7 @@ from src.repositories import (
     get_prevendas_leads_por_origem,
     get_prevendas_oportunidades_sdr,
     get_prevendas_overview_diario,
+    get_prevendas_overview_diario_por_sdr,
     get_prevendas_por_sdr,
     get_prevendas_sdrs_oficiais,
 )
@@ -149,8 +151,8 @@ df_sdr_filt = ctx.apply_filters(
 # -- Filtros globais aplicados ao restante da página -----------------------
 # `df_diario` é agregado sem grão de SDR, então não responde a filtros
 # globais. Quando o usuário seleciona SDR/Tipo SDR no header, recompomos
-# o df_diario a partir do df_detalhe (que tem SDR atribuído por activity
-# e por venda), preservando os totais de Leads (não atribuíveis a SDR).
+# o df_diario a partir do df_detalhe (métricas operacionais) e overlay
+# de leads atribuídos via `prevendas_overview_diario_por_sdr`.
 # Normalização única — reutilizada em ranking, tabela e auditoria local.
 df_det_norm_base = prevendas_normalizar_detalhe(df_detalhe)
 df_det_norm_global = prevendas_anotar_tipo_sdr_detalhe(df_det_norm_base)
@@ -164,6 +166,16 @@ if filtros_globais_ativos and df_det_norm_global is not None and not df_det_norm
         sdr_sel_global, tipo_sdr_sel_global,
         ctx.data_ini, ctx.data_fim,
     )
+    try:
+        df_diario_por_sdr = get_prevendas_overview_diario_por_sdr(
+            ctx.data_ini, ctx.data_fim,
+        )
+        df_diario_view, _ = prevendas_aplicar_leads_atribuidos_por_sdr(
+            df_diario_view, df_diario_por_sdr,
+            sdr_sel_global, tipo_sdr_sel_global,
+        )
+    except Exception:
+        pass
 
     # df_detalhe pré-filtrado pelos globais para o Detalhamento Top SDR
     # e o expander "Ver leads/agendamentos detalhados". O expander
@@ -202,10 +214,11 @@ agendamentos_exibidos = int(k.get("agendamentos_exibidos",
 #   - Conversão usa leads como denominador (origens sem leads ⇒ skip,
 #     evita divisão por zero e linhas inúteis).
 #
-# Quando o usuário aplica SDR/Tipo SDR no header, o breakdown de leads
-# segue mostrando o total geral (leads não são atribuíveis a SDR — mesma
-# regra do hint atual do card); o breakdown de agendamentos respeita o
-# filtro de SDR aplicando mask sobre o detalhe normalizado.
+# Quando o usuário aplica SDR/Tipo SDR no header, o card Leads e a
+# série diária usam leads atribuídos via overview_diario_por_sdr; o
+# breakdown por origem (chips do card) fica oculto nesse recorte porque
+# a query de origem é cross-SDR. Agendamentos respeitam o filtro via
+# mask sobre o detalhe normalizado.
 # ---------------------------------------------------------------------------
 leads_origem_map: dict[str, int] = {}
 leads_mais12_origem_map: dict[str, int] = {}
@@ -406,13 +419,15 @@ if filtros_globais_ativos:
         "🔎 Filtros globais aplicados — "
         + " · ".join(_partes_filtro)
         + ". Cards, Funil, Tendência diária, Top SDRs e Detalhamento "
-        "refletem essa seleção. Leads continua mostrando o total geral "
-        "(lead não é atribuível a SDR no momento do form)."
+        "refletem essa seleção. Leads = atribuídos à(s) SDR(s) filtrada(s) "
+        "(activity.prevendas > deal.sdr_ss)."
     )
 
 c0, c1, c2, c3, c4, c5 = st.columns(6, gap="small")
 with c0:
-    if leads_mais_12_card is not None:
+    if filtros_globais_ativos:
+        leads_hint = "leads atribuídos à SDR (activity.prevendas > deal.sdr_ss)"
+    elif leads_mais_12_card is not None:
         leads_hint = (
             f"+12: {int_br(leads_mais_12_card)} · "
             f"-12: {int_br(leads_menos_12_card)} · "
@@ -420,14 +435,12 @@ with c0:
         )
     else:
         leads_hint = "Recortes indisponíveis (Marketing)"
-    if filtros_globais_ativos:
-        leads_hint += " · total geral (sem filtro de SDR)"
     metric_card_v2(
         "Leads totais",
         int_br(k["leads"]),
         hint=leads_hint,
         breakdown=[("Custo / Lead", _custo_por_etapa(k["leads"]))],
-        origens=origens_block_leads,
+        origens=origens_block_leads if not filtros_globais_ativos else None,
         variant="resumo",
     )
 with c1:
@@ -1688,13 +1701,23 @@ with st.expander("Ver dados do período (diário, semanal ou mensal)"):
                 ctx.data_fim,
                 funis_origem_filtro=origens_sel_local,
             )
+            if sdrs_sel_local or tipos_sel_local:
+                try:
+                    _df_por_sdr_exp = get_prevendas_overview_diario_por_sdr(
+                        ctx.data_ini, ctx.data_fim,
+                    )
+                    df_diario_expander, _ = prevendas_aplicar_leads_atribuidos_por_sdr(
+                        df_diario_expander, _df_por_sdr_exp,
+                        sdrs_sel_local, tipos_sel_local,
+                    )
+                except Exception:
+                    pass
             st.caption(
-                "⚙ Filtro local ativo (desacopla dos filtros globais do header) · "
-                "**Leads / Leads +12 / Leads -12 não são afetados** pelos filtros "
-                "de SDR/Tipo SDR/Funil de Origem (no momento do form ainda não há "
-                "SDR nem origem atribuída ao lead). As demais métricas — "
-                "Agendamentos, Comparecimentos, Vendas, Montante, Receita, Vencidas — "
-                "refletem apenas o(s) SDR/Tipo SDR/Funil de Origem selecionado(s) aqui."
+                "⚙ Filtro local ativo (desacopla dos filtros globais do header). "
+                "Leads (quando há SDR/Tipo) = atribuídos via "
+                "activity.prevendas > deal.sdr_ss. Demais métricas — "
+                "Agendamentos, Comparecimentos, Vendas, Montante, Receita, "
+                "Vencidas — refletem o(s) SDR/Tipo SDR/Funil selecionado(s)."
             )
         else:
             # Sem filtro local → respeita os filtros globais do header.

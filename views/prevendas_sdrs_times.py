@@ -17,6 +17,7 @@ from src.prevendas_transforms import (
     QUALIF_LEGENDA_LEONARDO,
     prevendas_anotar_sdr,
     prevendas_anotar_tipo_sdr_detalhe,
+    prevendas_aplicar_leads_atribuidos_por_sdr,
     prevendas_diario_filtrado_por_sdr,
     prevendas_normalizar_detalhe,
     prevendas_qualif_anotar_leonardo,
@@ -40,6 +41,7 @@ from src.repositories import (
     get_investimento_diario,
     get_prevendas_leads_detalhe_diario,
     get_prevendas_overview_diario,
+    get_prevendas_overview_diario_por_sdr,
     get_prevendas_por_sdr,
     get_prevendas_qualif_comparecimento,
     get_prevendas_sdrs_oficiais,
@@ -122,6 +124,16 @@ if filtros_header_ativos and df_det_norm is not None and not df_det_norm.empty:
         sdr_sel, tipo_sdr_sel,
         ctx.data_ini, ctx.data_fim,
     )
+    # Leads atribuídos à SDR (não o total cross-SDR do overview).
+    try:
+        df_diario_por_sdr = get_prevendas_overview_diario_por_sdr(
+            ctx.data_ini, ctx.data_fim,
+        )
+        df_diario_view, _ = prevendas_aplicar_leads_atribuidos_por_sdr(
+            df_diario_view, df_diario_por_sdr, sdr_sel, tipo_sdr_sel,
+        )
+    except Exception:
+        pass
 else:
     df_diario_view = df_diario
 
@@ -156,7 +168,11 @@ with c1:
         "Leads",
         int_br(k["leads"]),
         accent=True,
-        hint="cross-SDR · referência (leads não atribuíveis a SDR)",
+        hint=(
+            "leads atribuídos à SDR (activity.prevendas > deal.sdr_ss)"
+            if filtros_header_ativos
+            else "daily-distinct (data, email) no período"
+        ),
     )
 with c2:
     metric_card_v2(
@@ -177,7 +193,7 @@ with c5:
     metric_card_v2(
         "Conversão",
         pct(k["taxa_lead_venda_nova"]),
-        hint="vendas novas ÷ leads (leads cross-SDR)",
+        hint="vendas novas ÷ leads",
     )
 with c6:
     metric_card_v2("Ticket médio",
@@ -348,12 +364,21 @@ with tab_temp:
         st.info("Sem série diária no período.")
     else:
         from src.ui.charts import line
-        st.plotly_chart(
-            line(df_diario_view, x="data_ref",
-                 y=["agendamentos", "comparecimentos", "vendas_novas"],
-                 height=320),
-            use_container_width=True,
-        )
+        # Com filtro de SDR, df_diario_view vem de prevendas_diario_filtrado_por_sdr
+        # (garante vendas_novas). Fallback defensivo se a coluna faltar.
+        y_evolucao = [
+            c for c in ("agendamentos", "comparecimentos", "vendas_novas")
+            if c in df_diario_view.columns
+        ]
+        if "vendas_novas" not in y_evolucao and "vendas" in df_diario_view.columns:
+            y_evolucao.append("vendas")
+        if not y_evolucao or "data_ref" not in df_diario_view.columns:
+            st.info("Sem colunas de série diária no recorte.")
+        else:
+            st.plotly_chart(
+                line(df_diario_view, x="data_ref", y=y_evolucao, height=320),
+                use_container_width=True,
+            )
 
 with tab_qualif:
     section_title(
@@ -778,6 +803,6 @@ st.caption(
     "Classificação de SDR (`Pré-vendas` / `Social Seller` / `SDR não "
     "classificado`) reusa `src/team_classification.py`. Ranking ordenado "
     "por agendamentos. Filtros do header (SDR / Tipo SDR) aplicam ao "
-    "Resumo, Evolução, Ranking, Por tipo e Qualificação & Comparecimento. "
-    "Leads do Resumo permanecem cross-SDR (não atribuíveis ao lead cru)."
+    "Resumo (inclui Leads atribuídos à SDR), Evolução, Ranking, Por tipo "
+    "e Qualificação & Comparecimento."
 )

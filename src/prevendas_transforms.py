@@ -714,13 +714,16 @@ def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
     O resto da página segue com `df_diario` original.
 
     Regra:
-      - Leads / Leads +12 / Leads -12 → preservados do df_diario (sem
-        filtro de SDR ou funil). SDR/funil não são atribuíveis ao lead
-        cru (a atribuição entra depois, na activity ou no deal).
+      - Leads / Leads +12 / Leads -12 → preservados do df_diario neste
+        helper (série agregada sem grão de SDR). Para filtrar leads por
+        SDR use `prevendas_aplicar_leads_atribuidos_por_sdr` com
+        `get_prevendas_overview_diario_por_sdr`.
       - Demais métricas → recalculadas do df_detalhe filtrado, com:
             * dedup por activity_id (agendamentos / comparecimentos /
               vencidas e seus recortes +12);
-            * dedup por deal_id (vendas / vendas +12 / montante / receita).
+            * dedup por deal_id (vendas / vendas_novas / vendas +12 /
+              montante / receita). `vendas_novas` é alias de `vendas`
+              (mesma regra de prevendas_overview_diario.sql).
       - Datas fora do período (ctx) ignoradas; datas extras introduzidas
         pelo detalhe filtrado (ex.: activity num dia que não teve lead)
         são acrescentadas no shape final.
@@ -808,6 +811,7 @@ def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
 
     rows = []
     for dt in todas_datas:
+        n_vendas = int(map_vendas.get(dt, 0))
         rows.append({
             "data_ref":                pd.Timestamp(dt),
             "leads":                   leads_map.get(dt, 0),
@@ -819,12 +823,71 @@ def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
             "comparecimentos":         int(map_compar.get(dt, 0)),
             "comparecimentos_mais_12": int(map_compar12.get(dt, 0)),
             "vencidas":                int(map_venc.get(dt, 0)),
-            "vendas":                  int(map_vendas.get(dt, 0)),
+            "vendas":                  n_vendas,
+            # Alias de `vendas` — mesma regra de prevendas_overview_diario.sql.
+            # Sem esta coluna, px.line(..., y=["vendas_novas"]) quebra no
+            # recorte filtrado por SDR (Evolução em SDRs & Times).
+            "vendas_novas":            n_vendas,
             "vendas_mais_12":          int(map_vendas12.get(dt, 0)),
             "montante":                float(map_montante.get(dt, 0.0)),
             "receita":                 float(map_receita.get(dt, 0.0)),
         })
     return pd.DataFrame(rows)
+
+
+def prevendas_aplicar_leads_atribuidos_por_sdr(
+    df_diario_view: pd.DataFrame,
+    df_diario_por_sdr: pd.DataFrame,
+    sdrs_filtro: list[str] | None = None,
+    tipos_sdr_filtro: list[str] | None = None,
+) -> tuple[pd.DataFrame, int]:
+    """Substitui leads do `df_diario_view` pelos leads atribuídos ao SDR.
+
+    Fonte: `prevendas_overview_diario_por_sdr.sql` — 1 lead daily-distinct
+    (data_ref, email) creditado a 1 SDR via cascata
+    `activity.prevendas > deal.sdr_ss > Sem SDR`.
+
+    Usado quando o header filtra SDR/Tipo SDR, para o card Leads refletir
+    "todos os leads que a SDR recebeu" (e não o total cross-SDR).
+
+    Retorna `(df_diario_view atualizado, total_leads no recorte)`.
+    """
+    if df_diario_view is None or df_diario_view.empty:
+        return df_diario_view, 0
+    if df_diario_por_sdr is None or df_diario_por_sdr.empty:
+        out = df_diario_view.copy()
+        if "leads" in out.columns:
+            out["leads"] = 0
+        return out, 0
+
+    df = prevendas_anotar_sdr(df_diario_por_sdr)
+    mask = pd.Series(True, index=df.index)
+    if sdrs_filtro:
+        mask &= df["sdr"].astype(str).isin(sdrs_filtro)
+    if tipos_sdr_filtro and "tipo_sdr" in df.columns:
+        mask &= df["tipo_sdr"].astype(str).isin(tipos_sdr_filtro)
+    sub = df.loc[mask]
+    if sub.empty or "leads" not in sub.columns:
+        out = df_diario_view.copy()
+        if "leads" in out.columns:
+            out["leads"] = 0
+        return out, 0
+
+    leads_by_day = (
+        sub.assign(_day=pd.to_datetime(sub["data_ref"]).dt.date)
+        .groupby("_day", sort=False)["leads"]
+        .sum()
+    )
+    total = int(leads_by_day.sum())
+    out = df_diario_view.copy()
+    if "leads" in out.columns:
+        days = pd.to_datetime(out["data_ref"]).dt.date
+        out["leads"] = days.map(lambda d: int(leads_by_day.get(d, 0))).astype(int)
+    # +12/-12 do overview cross-SDR não se aplicam ao recorte filtrado.
+    for col in ("leads_mais_12", "leads_menos_12"):
+        if col in out.columns:
+            out[col] = 0
+    return out, total
 
 
 def prevendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
