@@ -162,7 +162,7 @@ agendamentos_exibidos = int(
 # ---------------------------------------------------------------------------
 section_title("Resumo do período")
 
-c1, c2, c3, c4, c5, c6, c7 = st.columns(7, gap="small")
+c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8, gap="small")
 with c1:
     metric_card_v2(
         "Leads",
@@ -176,30 +176,36 @@ with c1:
     )
 with c2:
     metric_card_v2(
+        "Agendamentos criados",
+        int_br(k.get("agendamentos_criados", 0)),
+        hint="created_time · status_reuniao preenchido",
+    )
+with c3:
+    metric_card_v2(
         "Agendamentos",
         int_br(k["agendamentos"]),
         qual_split=_splits_resumo["agend"],
     )
-with c3:
+with c4:
     metric_card_v2(
         "Comparecimentos",
         int_br(k["comparecimentos"]),
         qual_split=_splits_resumo["comparec"],
     )
-with c4:
+with c5:
     metric_card_v2("Vendas novas", int_br(k["vendas_novas"]),
                    hint="tipo_venda = 'Novo cliente'")
-with c5:
+with c6:
     metric_card_v2(
         "Conversão",
         pct(k["taxa_lead_venda_nova"]),
         hint="vendas novas ÷ leads",
     )
-with c6:
+with c7:
     metric_card_v2("Ticket médio",
                    brl(k["ticket_medio"]) if k["ticket_medio"] else "—",
                    hint="montante ÷ vendas novas")
-with c7:
+with c8:
     metric_card_v2("Montante",
                    brl(k["montante"]) if k["montante"] else "—",
                    hint="SUM(amount) das vendas atribuídas")
@@ -222,6 +228,7 @@ with tab_rank:
         df_sdrs_oficiais=df_sdrs_oficiais,
         df_detalhe=df_detalhe,
         metric_options={
+            "Agendamentos criados": "agendamentos_criados",
             "Agendamentos":         "agendamentos",
             "Agendamentos +12":     "agendamentos_mais_12",
             "Agendamentos -12":     "agendamentos_menos_12",
