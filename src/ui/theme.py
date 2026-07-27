@@ -729,7 +729,7 @@ header[data-testid="stHeader"] {{ background: transparent; }}
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: 10px;
-  padding: 12px 16px;
+  padding: 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -741,32 +741,25 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 .mcard:hover {{ border-color: var(--color-border-strong); }}
 .mcard-head {{
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
 }}
 .mcard-label {{
   color: var(--color-muted);
   font-size: 0.66rem;
   font-weight: 600;
-  letter-spacing: 1.2px;
+  letter-spacing: 1.8px;
   text-transform: uppercase;
   flex: 1;
   min-width: 0;
-  line-height: 1.25;
+  line-height: 1.3;
   white-space: normal;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  text-overflow: ellipsis;
-}}
-@container (max-width: 130px) {{
-  .mcard-label {{
-    font-size: 0.58rem;
-    letter-spacing: 0.8px;
-  }}
 }}
 .mcard-value {{
   color: var(--color-text);
