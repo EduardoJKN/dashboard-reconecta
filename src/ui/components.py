@@ -634,6 +634,80 @@ def metric_card_v2(
     )
 
 
+def render_kanban_board(
+    colunas: list[tuple[str, pd.DataFrame]],
+    *,
+    max_cards: int = 40,
+    name_col: str = "nome_cliente",
+    email_col: str = "email",
+    meta_cols: tuple[tuple[str, str], ...] = (
+        ("executiva", "Closer"),
+        ("pos_vendas", "Pós"),
+    ),
+) -> None:
+    """Board Kanban/Scrum: uma coluna Streamlit por etapa com cards HTML.
+
+    `colunas` = lista ordenada `(titulo_etapa, dataframe_da_coluna)`.
+    Cards além de `max_cards` viram um rodapé "+N restantes".
+    """
+    if not colunas:
+        st.info("Sem etapas para exibir no board.")
+        return
+
+    n = len(colunas)
+    cols = st.columns(n, gap="small")
+    for col_ui, (titulo, df_col) in zip(cols, colunas):
+        with col_ui:
+            total = 0 if df_col is None else len(df_col)
+            head = (
+                f'<div class="kanban-col">'
+                f'<div class="kanban-col-head">'
+                f'<span class="kanban-col-title">{html.escape(str(titulo))}</span>'
+                f'<span class="kanban-col-count">{total}</span>'
+                f"</div>"
+            )
+            body_parts: list[str] = [head]
+            if df_col is None or df_col.empty:
+                body_parts.append(
+                    '<div class="kanban-empty">Nenhum lead</div></div>'
+                )
+                st.markdown("".join(body_parts), unsafe_allow_html=True)
+                continue
+
+            shown = df_col.head(max_cards)
+            for _, row in shown.iterrows():
+                nome = html.escape(str(row.get(name_col, "") or "Sem nome"))
+                email_raw = str(row.get(email_col, "") or "").strip()
+                email = html.escape(email_raw) if email_raw else "—"
+                meta_bits: list[str] = []
+                for key, label in meta_cols:
+                    val = str(row.get(key, "") or "").strip()
+                    if not val or val.lower().startswith("sem "):
+                        continue
+                    meta_bits.append(
+                        f"<span>{html.escape(label)}: {html.escape(val)}</span>"
+                    )
+                meta_html = (
+                    f'<div class="kanban-card-meta">{"".join(meta_bits)}</div>'
+                    if meta_bits
+                    else ""
+                )
+                body_parts.append(
+                    f'<div class="kanban-card">'
+                    f'<div class="kanban-card-name">{nome}</div>'
+                    f'<div class="kanban-card-email">{email}</div>'
+                    f"{meta_html}"
+                    f"</div>"
+                )
+            restantes = total - len(shown)
+            if restantes > 0:
+                body_parts.append(
+                    f'<div class="kanban-empty">+{restantes} na tabela abaixo</div>'
+                )
+            body_parts.append("</div>")
+            st.markdown("".join(body_parts), unsafe_allow_html=True)
+
+
 def hero_revenue_card(
     receita_fmt: str,
     meta_fmt: str,

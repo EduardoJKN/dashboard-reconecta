@@ -591,14 +591,25 @@ def get_executivas_oficiais() -> pd.DataFrame:
     """Time ativo de Vendas (`fdw_reconecta.executivas_vendas WHERE ativo='y'`).
 
     Fonte oficial usada para filtrar o ranking de closers das páginas Visão
-    Geral e Executivas & Times. Detalhes em `executivas_oficiais.sql`."""
-    return run_sql_file("executivas_oficiais.sql")
+    Geral e Executivas & Times. Inclui exceções de
+    `EXECUTIVAS_OFICIAIS_EXTRAS` (ex.: Karine Pacífico) mesmo sem cadastro
+    ativo no assistencial. Detalhes em `executivas_oficiais.sql`."""
+    from .transforms import executivas_oficiais_com_extras
+
+    return executivas_oficiais_com_extras(run_sql_file("executivas_oficiais.sql"))
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro completo de Vendas…")
 def get_executivas_oficiais_todas() -> pd.DataFrame:
-    """Cadastro ativo + histórico (`executivas_oficiais_todas.sql`)."""
-    return run_sql_file("executivas_oficiais_todas.sql")
+    """Cadastro ativo + histórico (`executivas_oficiais_todas.sql`).
+
+    Também injeta `EXECUTIVAS_OFICIAIS_EXTRAS` para o modo Histórico.
+    """
+    from .transforms import executivas_oficiais_com_extras
+
+    return executivas_oficiais_com_extras(
+        run_sql_file("executivas_oficiais_todas.sql")
+    )
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pós-venda…")
@@ -628,6 +639,22 @@ def get_executivas_lead_in_triagem(data_ini: date, data_fim: date) -> pd.DataFra
     )
     if not df.empty and "data_criacao" in df.columns:
         df["data_criacao"] = pd.to_datetime(df["data_criacao"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=_TTL, show_spinner="Lendo indicações…")
+def get_executivas_indicacoes(data_ini: date, data_fim: date) -> pd.DataFrame:
+    """1 linha por deal com `fonte_de_lead = 'Indicação'` criado no período."""
+    df = run_sql_file(
+        "executivas_indicacoes_leads.sql", _date_params(data_ini, data_fim)
+    )
+    if not df.empty:
+        for col in ("data_criacao", "data_compra"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+        for col in ("montante", "receita"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     return df
 
 

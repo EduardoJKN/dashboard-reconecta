@@ -346,6 +346,7 @@ def _build_executivas_oficiais_tokens(
     df_oficiais: pd.DataFrame,
 ) -> list[tuple[str, set[str]]]:
     oficiais_tokens: list[tuple[str, set[str]]] = []
+    df_oficiais = executivas_oficiais_com_extras(df_oficiais)
     if df_oficiais is None or df_oficiais.empty or "nome" not in df_oficiais.columns:
         return oficiais_tokens
     for nome in df_oficiais["nome"].dropna().tolist():
@@ -601,7 +602,55 @@ def _match_oficial_por_tokens(nome_ranking: str,
 _EXECUTIVA_TIME_OVERRIDES: list[tuple[frozenset[str], str]] = [
     (frozenset({"stefany", "campinas"}), "Time da Leidianne"),
     (frozenset({"dayana", "moura"}), "Time do Marcelo"),
+    (frozenset({"karine", "pacifico"}), "Time do Marcelo"),
 ]
+
+# Closers que entram no filtro "Ativos" / cards mesmo sem estarem com
+# `ativo='y'` em `assistencial.executivas_vendas` (FDW). Remover daqui
+# quando o cadastro oficial for atualizado.
+EXECUTIVAS_OFICIAIS_EXTRAS: tuple[str, ...] = (
+    "Karine Pacífico",
+)
+
+
+def executivas_oficiais_com_extras(
+    df_oficiais: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Injeta `EXECUTIVAS_OFICIAIS_EXTRAS` no cadastro oficial (exceção).
+
+    Dedup por nome normalizado (sem acento) — se a pessoa já estiver no
+    assistencial, não duplica. Usado pelos getters e pelo match de tokens
+    dos rankings/cards do Time de Vendas.
+    """
+    cols = ["id", "nome", "email", "id_crm", "ativo"]
+    if df_oficiais is None or getattr(df_oficiais, "empty", True):
+        out = pd.DataFrame(columns=cols)
+    else:
+        out = df_oficiais.copy()
+    if "nome" not in out.columns:
+        out["nome"] = pd.Series(dtype=object)
+
+    existentes = {
+        _normalize_nome_ranking(n)
+        for n in out["nome"].dropna().tolist()
+        if isinstance(n, str) and str(n).strip()
+    }
+    existentes.discard("")
+
+    rows: list[dict] = []
+    for nome in EXECUTIVAS_OFICIAIS_EXTRAS:
+        if _normalize_nome_ranking(nome) in existentes:
+            continue
+        row = {c: (None if c != "nome" else nome) for c in out.columns}
+        row["nome"] = nome
+        if "ativo" in out.columns or "ativo" in cols:
+            row["ativo"] = "y"
+        rows.append(row)
+        existentes.add(_normalize_nome_ranking(nome))
+
+    if not rows:
+        return out
+    return pd.concat([out, pd.DataFrame(rows)], ignore_index=True)
 
 
 def executivas_aplicar_time_vendas_overrides(df: pd.DataFrame) -> pd.DataFrame:
@@ -649,15 +698,10 @@ def executivas_filtrar_time_oficial(
     """
     if df is None or df.empty or "executiva" not in df.columns:
         return df
-    if (df_oficiais is None or df_oficiais.empty
-            or "nome" not in df_oficiais.columns):
+    if df_oficiais is None:
         return df
 
-    oficiais_tokens: list[tuple[str, set[str]]] = []
-    for nome in df_oficiais["nome"].dropna().tolist():
-        toks = set(_tokens_nome_ranking(nome))
-        if toks:
-            oficiais_tokens.append((nome, toks))
+    oficiais_tokens = _build_executivas_oficiais_tokens(df_oficiais)
     if not oficiais_tokens:
         return df
 
@@ -748,16 +792,10 @@ def executivas_ranking_oficiais(
     """
     if df_ranking is None or df_ranking.empty:
         return df_ranking
-    if (df_oficiais is None or df_oficiais.empty
-            or "nome" not in df_oficiais.columns
-            or "executiva" not in df_ranking.columns):
+    if df_oficiais is None or "executiva" not in df_ranking.columns:
         return df_ranking
 
-    oficiais_tokens = []
-    for nome in df_oficiais["nome"].dropna().tolist():
-        toks = set(_tokens_nome_ranking(nome))
-        if toks:
-            oficiais_tokens.append((nome, toks))
+    oficiais_tokens = _build_executivas_oficiais_tokens(df_oficiais)
     if not oficiais_tokens:
         return df_ranking
 
@@ -3531,3 +3569,280 @@ def funil_agendamentos_por_executiva(df: pd.DataFrame) -> pd.DataFrame:
         ["total_agendamentos", "qualificados", "executiva"],
         ascending=[False, False, True],
     ).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Indicações (fonte_de_lead = Indicação) — aba Executivas & Times
+# ---------------------------------------------------------------------------
+
+INDICACOES_CLOSER_PADRAO = "Dayana Moura"
+
+# Ordem do funil / kanban (Scrum board por etapa atual do CRM).
+INDICACOES_STAGE_ORDER: tuple[str, ...] = (
+    _STAGE_LEAD_IN,
+    _STAGE_RECEPCAO,
+    _STAGE_REUNIAO_AGENDADA,
+    _STAGE_REUNIAO_CONCLUIDA,
+    "No-show",
+    "Ganho",
+    "Perdido",
+    "Outras",
+)
+
+_INDICACOES_NO_SHOW_LABEL = "No-show"
+_INDICACOES_GANHO_LABEL = "Ganho"
+_INDICACOES_PERDIDO_LABEL = "Perdido"
+_INDICACOES_OUTRAS_LABEL = "Outras"
+
+
+def indicacoes_preparar(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza stage, datas e coluna de etapa do kanban/funil."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=[
+            "deal_id", "data_criacao", "stage", "nome_cliente", "email",
+            "executiva", "time_vendas", "pos_vendas", "etapa_kanban",
+            "montante", "receita",
+        ])
+    out = df.copy()
+    if "data_criacao" in out.columns:
+        out["data_criacao"] = pd.to_datetime(out["data_criacao"], errors="coerce")
+    if "data_compra" in out.columns:
+        out["data_compra"] = pd.to_datetime(out["data_compra"], errors="coerce")
+    for col in ("montante", "receita"):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+        else:
+            out[col] = 0.0
+    out["stage"] = (
+        out["stage"].astype(str).str.strip()
+        if "stage" in out.columns
+        else ""
+    )
+    out["etapa_kanban"] = out["stage"].map(_indicacoes_etapa_kanban)
+    for col in ("nome_cliente", "email", "executiva", "time_vendas", "pos_vendas"):
+        if col not in out.columns:
+            out[col] = ""
+        else:
+            out[col] = out[col].fillna("").astype(str)
+    return out
+
+
+def _indicacoes_etapa_kanban(stage_raw) -> str:
+    raw = _stage_raw(stage_raw)
+    if not raw:
+        return _INDICACOES_OUTRAS_LABEL
+    if raw == _STAGE_LEAD_IN:
+        return _STAGE_LEAD_IN
+    if raw == _STAGE_RECEPCAO:
+        return _STAGE_RECEPCAO
+    if raw == _STAGE_REUNIAO_AGENDADA:
+        return _STAGE_REUNIAO_AGENDADA
+    if raw == _STAGE_REUNIAO_CONCLUIDA:
+        return _STAGE_REUNIAO_CONCLUIDA
+    if raw in _STAGE_NO_SHOW:
+        return _INDICACOES_NO_SHOW_LABEL
+    if raw in _STAGE_GANHO:
+        return _INDICACOES_GANHO_LABEL
+    if raw in _STAGE_PERDIDO:
+        return _INDICACOES_PERDIDO_LABEL
+    return _INDICACOES_OUTRAS_LABEL
+
+
+def indicacoes_filtrar_closer(
+    df: pd.DataFrame,
+    closer_filtro: str | None,
+) -> pd.DataFrame:
+    """Filtra por closer (ex.: Dayana Moura). None/`Todas` = sem filtro."""
+    if df is None or df.empty or not closer_filtro:
+        return df
+    if closer_filtro.strip().lower() in {"todas", "todos", ""}:
+        return df
+    if "executiva" not in df.columns:
+        return df
+    mask = df["executiva"].astype(str).str.contains(
+        closer_filtro, case=False, na=False, regex=False,
+    )
+    return df.loc[mask].copy()
+
+
+def indicacoes_kpis(df: pd.DataFrame) -> dict:
+    """Cards do topo da aba Indicações."""
+    empty = {
+        "total": 0,
+        "lead_in": 0,
+        "recepcao": 0,
+        "agendadas": 0,
+        "concluidas": 0,
+        "no_show": 0,
+        "ganhos": 0,
+        "perdidos": 0,
+        "outras": 0,
+        "em_andamento": 0,
+        "pct_agendamento": 0.0,
+        "pct_comparecimento": 0.0,
+        "pct_conversao": 0.0,
+        "pct_fechamento": 0.0,
+        "receita_ganhos": 0.0,
+        "montante_ganhos": 0.0,
+        "ticket_medio": 0.0,
+    }
+    if df is None or df.empty:
+        return empty
+
+    etapa = (
+        df["etapa_kanban"]
+        if "etapa_kanban" in df.columns
+        else df["stage"].map(_indicacoes_etapa_kanban)
+    )
+    total = len(df)
+    lead_in = int((etapa == _STAGE_LEAD_IN).sum())
+    recepcao = int((etapa == _STAGE_RECEPCAO).sum())
+    agendadas = int((etapa == _STAGE_REUNIAO_AGENDADA).sum())
+    concluidas = int((etapa == _STAGE_REUNIAO_CONCLUIDA).sum())
+    no_show = int((etapa == _INDICACOES_NO_SHOW_LABEL).sum())
+    ganhos = int((etapa == _INDICACOES_GANHO_LABEL).sum())
+    perdidos = int((etapa == _INDICACOES_PERDIDO_LABEL).sum())
+    outras = int((etapa == _INDICACOES_OUTRAS_LABEL).sum())
+    em_andamento = lead_in + recepcao + agendadas
+
+    # Agendamento = quem já saiu de Lead-in/Recepção para reunião (ou além).
+    passou_agendamento = agendadas + concluidas + no_show + ganhos + perdidos
+    # Comparecimento = concluídas + ganhos + perdidos (passaram pela reunião).
+    passaram_reuniao = concluidas + ganhos + perdidos
+
+    receita = 0.0
+    montante = 0.0
+    if ganhos > 0:
+        mask_g = etapa == _INDICACOES_GANHO_LABEL
+        if "receita" in df.columns:
+            receita = float(df.loc[mask_g, "receita"].sum())
+        if "montante" in df.columns:
+            montante = float(df.loc[mask_g, "montante"].sum())
+
+    return {
+        "total": total,
+        "lead_in": lead_in,
+        "recepcao": recepcao,
+        "agendadas": agendadas,
+        "concluidas": concluidas,
+        "no_show": no_show,
+        "ganhos": ganhos,
+        "perdidos": perdidos,
+        "outras": outras,
+        "em_andamento": em_andamento,
+        "pct_agendamento": _safe_div(passou_agendamento, total) * 100,
+        "pct_comparecimento": _safe_div(passaram_reuniao, passou_agendamento) * 100,
+        "pct_conversao": _safe_div(ganhos, total) * 100,
+        "pct_fechamento": _safe_div(ganhos, passaram_reuniao) * 100,
+        "receita_ganhos": receita,
+        "montante_ganhos": montante,
+        "ticket_medio": _safe_div(receita if receita else montante, ganhos),
+    }
+
+
+def indicacoes_por_etapa(df: pd.DataFrame) -> pd.DataFrame:
+    """Distribuição por etapa (funil / barras) — ordem canônica do board."""
+    cols = ["etapa", "total", "pct"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    etapa = (
+        df["etapa_kanban"]
+        if "etapa_kanban" in df.columns
+        else df["stage"].map(_indicacoes_etapa_kanban)
+    )
+    total = len(df)
+    counts = etapa.value_counts()
+    rows = []
+    for etapa_nome in INDICACOES_STAGE_ORDER:
+        n = int(counts.get(etapa_nome, 0))
+        if n <= 0:
+            continue
+        rows.append({
+            "etapa": etapa_nome,
+            "total": n,
+            "pct": _safe_div(n, total) * 100,
+        })
+    # Etapas inesperadas fora da ordem.
+    for etapa_nome, n in counts.items():
+        if etapa_nome not in INDICACOES_STAGE_ORDER and int(n) > 0:
+            rows.append({
+                "etapa": str(etapa_nome),
+                "total": int(n),
+                "pct": _safe_div(int(n), total) * 100,
+            })
+    return pd.DataFrame(rows, columns=cols)
+
+
+def indicacoes_funil_valores(df: pd.DataFrame) -> tuple[list[str], list[float]]:
+    """Labels/values para `funnel()` — etapas com volume > 0 na ordem do board."""
+    por = indicacoes_por_etapa(df)
+    if por.empty:
+        return [], []
+    labels = por["etapa"].astype(str).tolist()
+    values = [float(v) for v in por["total"].tolist()]
+    return labels, values
+
+
+def indicacoes_tabela(df: pd.DataFrame) -> pd.DataFrame:
+    """Tabela Nome / E-mail / Etapa (+ contexto operacional)."""
+    cols = [
+        "Nome", "E-mail", "Etapa", "Executiva", "Pós-vendas",
+        "Time", "Data criação",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    out = pd.DataFrame({
+        "Nome": df.get("nome_cliente", pd.Series(dtype=str)).astype(str),
+        "E-mail": df.get("email", pd.Series(dtype=str)).fillna("").astype(str),
+        "Etapa": (
+            df["etapa_kanban"]
+            if "etapa_kanban" in df.columns
+            else df.get("stage", pd.Series(dtype=str)).map(_indicacoes_etapa_kanban)
+        ),
+        "Executiva": df.get("executiva", pd.Series(dtype=str)).astype(str),
+        "Pós-vendas": df.get("pos_vendas", pd.Series(dtype=str)).astype(str),
+        "Time": df.get("time_vendas", pd.Series(dtype=str)).astype(str),
+        "Data criação": pd.to_datetime(
+            df.get("data_criacao"), errors="coerce"
+        ).dt.strftime("%d/%m/%Y").fillna("—"),
+    })
+    etapa_ord = {v: i for i, v in enumerate(INDICACOES_STAGE_ORDER)}
+    out["_ord"] = out["Etapa"].map(lambda e: etapa_ord.get(e, 99))
+    return (
+        out.sort_values(["_ord", "Nome"], ascending=[True, True])
+        .drop(columns=["_ord"])
+        .reset_index(drop=True)
+    )
+
+
+def indicacoes_kanban_colunas(df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+    """Lista ordenada `(etapa, df_cards)` para o board Kanban/Scrum."""
+    if df is None or df.empty:
+        return [(etapa, pd.DataFrame()) for etapa in INDICACOES_STAGE_ORDER
+                if etapa not in {_INDICACOES_OUTRAS_LABEL}]
+
+    etapa = (
+        df["etapa_kanban"]
+        if "etapa_kanban" in df.columns
+        else df["stage"].map(_indicacoes_etapa_kanban)
+    )
+    presentes = set(etapa.unique())
+    colunas: list[tuple[str, pd.DataFrame]] = []
+    for etapa_nome in INDICACOES_STAGE_ORDER:
+        if etapa_nome == _INDICACOES_OUTRAS_LABEL and etapa_nome not in presentes:
+            continue
+        # Sempre mostra o pipeline principal; omite No-show/Perdido/Outras vazios.
+        if (
+            etapa_nome in {
+                _INDICACOES_NO_SHOW_LABEL,
+                _INDICACOES_PERDIDO_LABEL,
+                _INDICACOES_OUTRAS_LABEL,
+            }
+            and etapa_nome not in presentes
+        ):
+            continue
+        mask = etapa == etapa_nome
+        colunas.append((etapa_nome, df.loc[mask].copy()))
+    return colunas

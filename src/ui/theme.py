@@ -1466,4 +1466,88 @@ section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"][aria-current="
   color: #ffffff !important;
   border-left-color: var(--color-gold-bright) !important;
 }}
+
+/* --- Kanban / Scrum board (aba Indicações) --- */
+.kanban-col {{
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 10px 10px 12px;
+  min-height: 180px;
+  max-height: 520px;
+  overflow-y: auto;
+}}
+.kanban-col-head {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  background: var(--color-card);
+  z-index: 1;
+}}
+.kanban-col-title {{
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--color-gold);
+  text-transform: uppercase;
+}}
+.kanban-col-count {{
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-subtle);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+}}
+.kanban-card {{
+  background: var(--color-bg-soft, #1a1410);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-wine-light);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}}
+.kanban-card:last-child {{ margin-bottom: 0; }}
+.kanban-card-name {{
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.3;
+  margin-bottom: 2px;
+  word-break: break-word;
+}}
+.kanban-card-email {{
+  font-size: 0.72rem;
+  color: var(--color-text-subtle);
+  line-height: 1.3;
+  word-break: break-all;
+  margin-bottom: 6px;
+}}
+.kanban-card-meta {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 0.68rem;
+  color: var(--color-muted, var(--color-text-subtle));
+}}
+.kanban-card-meta span {{
+  background: rgba(255,255,255,0.03);
+  border-radius: 4px;
+  padding: 1px 5px;
+}}
+.kanban-empty {{
+  font-size: 0.75rem;
+  color: var(--color-text-subtle);
+  opacity: 0.7;
+  padding: 12px 4px;
+  text-align: center;
+}}
 """
