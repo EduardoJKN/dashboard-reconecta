@@ -204,18 +204,45 @@ _RANKING_DERIVED_COLS = ("pct_agendamento", "pct_comparecimento",
 RANKING_FULL_SCHEMA = ("executiva",) + _RANKING_BASE_COLS + _RANKING_DERIVED_COLS
 
 
+def executivas_alinhar_novos_com_vendas(df: pd.DataFrame) -> pd.DataFrame:
+    """Alinha `novos` à coluna `vendas` da view quando esta estiver à frente.
+
+    Na view BI:
+      - `vendas` = zoho_deals Ganho + Novo cliente com
+        COALESCE(data_hora_compra, created_at)
+      - `novos`  = bi.trat_negocios_rw Ganho + Novo cliente com
+        data_compra IS NOT NULL
+
+    Deals Ganho sem `data_hora_compra` entram em `vendas` e ficam de fora
+    de `novos`. O Top Closers / card Ganhos usam o mix baseado em `novos`
+    e subcontavam esses casos (ex.: Debora Cunha / Leandro).
+    """
+    if df is None or df.empty:
+        return df
+    if "novos" not in df.columns or "vendas" not in df.columns:
+        return df
+    out = df.copy()
+    novos = pd.to_numeric(out["novos"], errors="coerce").fillna(0)
+    vendas_view = pd.to_numeric(out["vendas"], errors="coerce").fillna(0)
+    out["novos"] = novos.combine(vendas_view, max)
+    return out
+
+
 def executivas_recalcular_vendas_mix(df: pd.DataFrame) -> pd.DataFrame:
     """Sobrescreve `vendas` com a soma novos + ascensões + renovações + indicações.
 
     Usado no ranking de closers (Top Closers / Ver ranking completo). Se
     nenhuma coluna do mix existir, devolve o df intacto.
+
+    Antes da soma, alinha `novos` à coluna `vendas` da view (Ganho sem
+    data_hora_compra) via `executivas_alinhar_novos_com_vendas`.
     """
     if df is None or df.empty:
         return df
     mix = [c for c in VENDAS_MIX_COLS if c in df.columns]
     if not mix:
         return df
-    out = df.copy()
+    out = executivas_alinhar_novos_com_vendas(df)
     total = None
     for c in mix:
         serie = pd.to_numeric(out[c], errors="coerce").fillna(0)

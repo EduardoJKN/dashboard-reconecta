@@ -24,7 +24,9 @@ WITH base_dados AS (
         COALESCE(NULLIF(btrim(d.deal_name), ''), NULLIF(btrim(d.email), ''), d.id::text) AS deal_ref,
         d.sdr_ss::text AS sdr_ss_id,
         d.executiva_vendas::text AS closer_id,
-        d.data_hora_compra::date AS data_venda,
+        -- Alinhado à view BI (`data_ganho` / coluna `vendas`): conta Ganho
+        -- mesmo quando data_hora_compra está vazia (fallback created_at).
+        COALESCE(d.data_hora_compra::date, d.created_at::date) AS data_venda,
         d.stage,
         d.tipo_venda,
         NULLIF(btrim(d.forma_venda), '') AS forma_venda,

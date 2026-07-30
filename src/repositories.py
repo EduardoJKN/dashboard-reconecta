@@ -58,17 +58,24 @@ def _month_params(data_ini: date, data_fim: date) -> dict:
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo executivas…")
 def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
-    from src.transforms import executivas_aplicar_time_vendas_overrides
+    from src.transforms import (
+        executivas_alinhar_novos_com_vendas,
+        executivas_aplicar_time_vendas_overrides,
+    )
 
     # v2: Time do Marcelo Executivas (Dayana/Karine) — literal p/ invalidar
     # cache quando a regra de time_vendas muda (Streamlit não hasheia imports).
     _time_vendas_rules = "marcelo_executivas_v2"
+    # v1: novos = max(novos, vendas) — Ganho sem data_hora_compra.
+    _novos_align_rules = "novos_max_vendas_v1"
 
     df = run_sql_file("dashboard_executivas.sql", _date_params(data_ini, data_fim))
     if not df.empty:
         df["data_ref"] = pd.to_datetime(df["data_ref"])
         df = executivas_aplicar_time_vendas_overrides(df)
+        df = executivas_alinhar_novos_com_vendas(df)
         df.attrs["time_vendas_rules"] = _time_vendas_rules
+        df.attrs["novos_align_rules"] = _novos_align_rules
     return df
 
 
