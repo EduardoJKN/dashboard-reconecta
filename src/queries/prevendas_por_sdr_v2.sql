@@ -33,6 +33,9 @@ WITH acts_agendamento AS (
     WHERE a.activity_type IN ('Consulta', 'Indicação')
       AND a.status_reuniao IS NOT NULL
       AND a.start_datetime::date BETWEEN :data_ini AND :data_fim
+      -- Separação pedida: agendamentos de Indicação ficam na aba Indicações,
+      -- não no ranking de pré-vendas.
+      AND (d.fonte_de_lead IS NULL OR d.fonte_de_lead NOT ILIKE '%indic%')
 ),
 acts_criacao AS (
     SELECT
@@ -57,6 +60,7 @@ acts_criacao AS (
     WHERE a.activity_type IN ('Consulta', 'Indicação')
       AND a.status_reuniao IS NOT NULL
       AND a.created_time::date BETWEEN :data_ini AND :data_fim
+      AND (d.fonte_de_lead IS NULL OR d.fonte_de_lead NOT ILIKE '%indic%')
 ),
 deals_direct AS (
     SELECT

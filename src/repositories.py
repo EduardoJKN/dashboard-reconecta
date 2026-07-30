@@ -658,6 +658,23 @@ def get_executivas_indicacoes(data_ini: date, data_fim: date) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=_TTL, show_spinner="Lendo agendamentos criados (indicações)…")
+def get_executivas_indicacoes_agend_criados(
+    data_ini: date, data_fim: date,
+) -> pd.DataFrame:
+    """Agendamentos criados (Looker): activity created_time + fonte Indicações.
+
+    1 linha por (data_criacao, deal_id) após anti-retroativo e dedup.
+    """
+    df = run_sql_file(
+        "executivas_indicacoes_agend_criados.sql",
+        _date_params(data_ini, data_fim),
+    )
+    if not df.empty and "data_criacao" in df.columns:
+        df["data_criacao"] = pd.to_datetime(df["data_criacao"], errors="coerce")
+    return df
+
+
 @st.cache_data(ttl=_TTL, show_spinner="Lendo churns (stage Churn)…")
 def get_executivas_churn_pos_venda() -> pd.DataFrame:
     """1 linha por deal `stage = 'Churn'` — card/ranking Churn (não a aba pós-venda)."""

@@ -101,6 +101,7 @@ base_dados AS (
         d.data_hora_compra::date AS data_venda_ref,
         d.stage,
         d.tipo_venda,
+        d.fonte_de_lead,
         CASE
             WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
             ELSE REPLACE(
@@ -151,6 +152,8 @@ acts AS (
        = regexp_replace(bd.deal_id::text, '[^0-9A-Za-z]', '', 'g')
     WHERE a.activity_type IN ('Consulta', 'Indicação')
       AND a.status_reuniao IS NOT NULL
+      -- Indicações ficam na aba Indicações (não misturar com pré).
+      AND (bd.fonte_de_lead IS NULL OR bd.fonte_de_lead NOT ILIKE '%indic%')
       AND (
           a.created_time::date BETWEEN :data_ini AND :data_fim
           OR a.start_datetime::date BETWEEN :data_ini AND :data_fim
