@@ -1643,6 +1643,18 @@ def _op_clear_onepage_caches() -> None:
     load_onepage_marketing_cached.clear()
     load_onepage_prevendas_cached.clear()
     load_onepage_vendas_financeiro_cached.clear()
+    # Caches aninhados dos repositories — sem isso o botão "Atualizar
+    # dados" recarrega a seção mas reutiliza o Indic./Novos antigo.
+    get_one_page_indicacoes_fonte.clear()
+    get_one_page_novos_forma_venda.clear()
+    get_executivas.clear()
+    get_investimento_diario.clear()
+    get_media_movel_vendas.clear()
+    get_one_page_legacy_diario.clear()
+    get_one_page_prevendas_por_fonte.clear()
+    get_prevendas_overview_diario.clear()
+    get_one_page_por_executiva.clear()
+    get_one_page_sdr_closer.clear()
 
 
 def _op_render_perf_panel() -> None:

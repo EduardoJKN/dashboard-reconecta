@@ -200,8 +200,8 @@ def get_one_page_indicacoes_fonte(data_ini: date, data_fim: date) -> int:
     """Card Indic. da One Page — ganhos com `fonte_de_lead = 'Indicação'`.
 
     Substitui a coluna `indicacoes` da view legada apenas neste card.
-    Renovações são excluídas (ficam no card Renov.), mesmo com fonte
-    Indicação. Janela por `data_hora_compra` + filtros de e-mail de teste.
+    Alinhado ao Looker: inclui qualquer `tipo_venda` (também Renovação).
+    Janela por `data_hora_compra` + filtros de e-mail de teste.
     """
     df = run_sql_file(
         "one_page_indicacoes_fonte.sql", _date_params(data_ini, data_fim)
