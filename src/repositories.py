@@ -197,11 +197,11 @@ def get_one_page_novos_forma_venda(data_ini: date, data_fim: date) -> dict:
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo indicações (fonte) da One Page…")
 def get_one_page_indicacoes_fonte(data_ini: date, data_fim: date) -> int:
-    """Card Indic. da One Page — vendas por `fonte_de_lead = 'Indicação'`.
+    """Card Indic. da One Page — ganhos com `fonte_de_lead = 'Indicação'`.
 
-    Substitui a coluna `indicacoes` da view legada (que usava `tipo_venda`)
-    apenas neste card. Alinhado ao Looker: ganhos no período por
-    `data_hora_compra`, com filtros canônicos de e-mail de teste.
+    Substitui a coluna `indicacoes` da view legada apenas neste card.
+    Renovações são excluídas (ficam no card Renov.), mesmo com fonte
+    Indicação. Janela por `data_hora_compra` + filtros de e-mail de teste.
     """
     df = run_sql_file(
         "one_page_indicacoes_fonte.sql", _date_params(data_ini, data_fim)
