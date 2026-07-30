@@ -105,9 +105,10 @@ SELECT
           OR u.first_name ILIKE 'Nathan%'
           OR u.first_name ILIKE 'Camile%'
           OR u.first_name ILIKE 'Henrique%'
-          OR u.first_name ILIKE 'Dayana%'
-          OR u.first_name ILIKE 'Karine%'
             THEN 'Time do Marcelo'
+        WHEN u.first_name ILIKE 'Dayana%'
+          OR u.first_name ILIKE 'Karine%'
+            THEN 'Time do Marcelo Executivas'
         WHEN u.first_name IS NOT NULL
             THEN 'Sem time definido'
         ELSE NULL

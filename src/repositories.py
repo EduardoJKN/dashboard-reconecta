@@ -60,10 +60,15 @@ def _month_params(data_ini: date, data_fim: date) -> dict:
 def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
     from src.transforms import executivas_aplicar_time_vendas_overrides
 
+    # v2: Time do Marcelo Executivas (Dayana/Karine) — literal p/ invalidar
+    # cache quando a regra de time_vendas muda (Streamlit não hasheia imports).
+    _time_vendas_rules = "marcelo_executivas_v2"
+
     df = run_sql_file("dashboard_executivas.sql", _date_params(data_ini, data_fim))
     if not df.empty:
         df["data_ref"] = pd.to_datetime(df["data_ref"])
         df = executivas_aplicar_time_vendas_overrides(df)
+        df.attrs["time_vendas_rules"] = _time_vendas_rules
     return df
 
 

@@ -261,6 +261,14 @@ _FILTER_DEFAULTS: dict[str, str] = {
 _UNKNOWN_TOKENS = ("sem time definido", "não classificado", "nao classificado",
                    "(não informado)", "(nao informado)")
 
+# Sempre exibidos no filtro TIMES (mesmo sem linhas no período) — pedido
+# operacional de divisão do Time do Marcelo.
+_TIMES_VENDAS_CANONICOS: tuple[str, ...] = (
+    "Time da Leidianne",
+    "Time do Marcelo",
+    "Time do Marcelo Executivas",
+)
+
 
 def _is_unknown_label(label) -> bool:
     if not isinstance(label, str):
@@ -443,6 +451,14 @@ class PageContext:
                 opts: list[str] = []
             else:
                 opts = sorted(df[col].dropna().astype(str).unique().tolist())
+            # Times canônicos do Vendas: aparecem mesmo sem volume no período
+            # (ex.: Time do Marcelo Executivas antes de Dayana/Karine terem
+            # linhas no recorte).
+            if key in ("times", "time"):
+                for t in _TIMES_VENDAS_CANONICOS:
+                    if t not in opts:
+                        opts.append(t)
+                opts = sorted(opts)
             widget_key = f"_filter_{key}"
             default_sel = _resolve_default(key, opts)
             with self._filter_cols[key]:

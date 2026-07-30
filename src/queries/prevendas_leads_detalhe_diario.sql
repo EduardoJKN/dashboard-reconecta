@@ -129,10 +129,11 @@ closer_resolved AS (
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Camile Silveira%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Henrique Gonçalves%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Henrique Goncalves%'
-              OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Dayana Moura%'
+                THEN 'Time do Marcelo'
+            WHEN TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Dayana Moura%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Karine Pacífico%'
               OR TRIM(uc.first_name || ' ' || uc.last_name) ILIKE 'Karine Pacifico%'
-                THEN 'Time do Marcelo'
+                THEN 'Time do Marcelo Executivas'
             ELSE 'Sem time definido'
         END                                                         AS time_vendas
     FROM zoho_users uc

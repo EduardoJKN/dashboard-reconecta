@@ -113,10 +113,11 @@ base AS (
               OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Camile Silveira%'
               OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Henrique Gonçalves%'
               OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Henrique Goncalves%'
-              OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Dayana Moura%'
+                THEN 'Time do Marcelo'
+            WHEN TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Dayana Moura%'
               OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Karine Pacífico%'
               OR TRIM(uo.first_name || ' ' || uo.last_name) ILIKE 'Karine Pacifico%'
-                THEN 'Time do Marcelo'
+                THEN 'Time do Marcelo Executivas'
             ELSE 'Sem time definido'
         END                                                           AS time_vendas
     FROM acts a
