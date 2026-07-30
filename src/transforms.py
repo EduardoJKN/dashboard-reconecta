@@ -607,6 +607,9 @@ _EXECUTIVA_TIME_OVERRIDES: list[tuple[frozenset[str], str]] = [
     (frozenset({"stefany", "campinas"}), "Time da Leidianne"),
     (frozenset({"dayana", "moura"}), "Time do Marcelo Executivas"),
     (frozenset({"karine", "pacifico"}), "Time do Marcelo Executivas"),
+    # Fallback por primeiro nome (view às vezes traz só o primeiro).
+    (frozenset({"dayana"}), "Time do Marcelo Executivas"),
+    (frozenset({"karine"}), "Time do Marcelo Executivas"),
 ]
 
 # Closers que entram no filtro "Ativos" / cards mesmo sem estarem com
@@ -670,8 +673,14 @@ def executivas_aplicar_time_vendas_overrides(df: pd.DataFrame) -> pd.DataFrame:
         toks = set(_tokens_nome_ranking(nome))
         if not toks:
             continue
+        primeiro = next(iter(_tokens_nome_ranking(nome)[:1]), "")
         for required, time_nome in _EXECUTIVA_TIME_OVERRIDES:
-            if required.issubset(toks):
+            if len(required) == 1:
+                # Override só por primeiro nome (ex.: dayana / karine).
+                if primeiro in required:
+                    out.at[idx, "time_vendas"] = time_nome
+                    break
+            elif required.issubset(toks):
                 out.at[idx, "time_vendas"] = time_nome
                 break
     return out
