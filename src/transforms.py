@@ -9,8 +9,11 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from .team_classification import (
+    TIME_VENDAS_VISUAL_LABELS,
+    TIME_VENDAS_VISUAL_OUTROS,
     classify_closer,
     classify_sdr,
+    classify_time_visual,
     is_known_closer,
     is_known_sdr,
 )
@@ -3665,8 +3668,16 @@ def indicacoes_filtrar_closer(
     return df.loc[mask].copy()
 
 
-def indicacoes_kpis(df: pd.DataFrame) -> dict:
-    """Cards do topo da aba Indicações."""
+def indicacoes_kpis(
+    df: pd.DataFrame,
+    df_agend_criados: pd.DataFrame | None = None,
+) -> dict:
+    """Cards do topo da aba Indicações.
+
+    `df` = deals Indicação criados no período (stage atual).
+    `df_agend_criados` = activities Looker já filtradas (Times + Closer);
+    o card conta 1 linha por (data_criacao, deal_id).
+    """
     empty = {
         "total": 0,
         "lead_in": 0,
@@ -3677,7 +3688,7 @@ def indicacoes_kpis(df: pd.DataFrame) -> dict:
         "ganhos": 0,
         "perdidos": 0,
         "outras": 0,
-        "em_andamento": 0,
+        "agendamentos_criados": 0,
         "pct_agendamento": 0.0,
         "pct_comparecimento": 0.0,
         "pct_conversao": 0.0,
@@ -3686,7 +3697,12 @@ def indicacoes_kpis(df: pd.DataFrame) -> dict:
         "montante_ganhos": 0.0,
         "ticket_medio": 0.0,
     }
+    agend_criados = (
+        0 if df_agend_criados is None or df_agend_criados.empty
+        else int(len(df_agend_criados))
+    )
     if df is None or df.empty:
+        empty["agendamentos_criados"] = agend_criados
         return empty
 
     etapa = (
@@ -3703,7 +3719,6 @@ def indicacoes_kpis(df: pd.DataFrame) -> dict:
     ganhos = int((etapa == _INDICACOES_GANHO_LABEL).sum())
     perdidos = int((etapa == _INDICACOES_PERDIDO_LABEL).sum())
     outras = int((etapa == _INDICACOES_OUTRAS_LABEL).sum())
-    em_andamento = lead_in + recepcao + agendadas
 
     # Agendamento = quem já saiu de Lead-in/Recepção para reunião (ou além).
     passou_agendamento = agendadas + concluidas + no_show + ganhos + perdidos
@@ -3729,7 +3744,7 @@ def indicacoes_kpis(df: pd.DataFrame) -> dict:
         "ganhos": ganhos,
         "perdidos": perdidos,
         "outras": outras,
-        "em_andamento": em_andamento,
+        "agendamentos_criados": agend_criados,
         "pct_agendamento": _safe_div(passou_agendamento, total) * 100,
         "pct_comparecimento": _safe_div(passaram_reuniao, passou_agendamento) * 100,
         "pct_conversao": _safe_div(ganhos, total) * 100,
@@ -3846,3 +3861,92 @@ def indicacoes_kanban_colunas(df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]
         mask = etapa == etapa_nome
         colunas.append((etapa_nome, df.loc[mask].copy()))
     return colunas
+
+
+def indicacoes_aplicar_time_visual(df: pd.DataFrame) -> pd.DataFrame:
+    """Adiciona `time_visual` a partir da executiva (3 times do Marcelo)."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "executiva" not in out.columns:
+        out["time_visual"] = TIME_VENDAS_VISUAL_OUTROS
+        return out
+    out["time_visual"] = out["executiva"].apply(classify_time_visual)
+    return out
+
+
+def indicacoes_filtrar_time_visual(
+    df: pd.DataFrame,
+    time_visual: str | None,
+) -> pd.DataFrame:
+    """Filtra pelo time visual. None/`Todos` = sem filtro."""
+    if df is None or df.empty or not time_visual:
+        return df
+    if time_visual.strip().lower() in {"todos", "todas", ""}:
+        return df
+    if "time_visual" not in df.columns:
+        df = indicacoes_aplicar_time_visual(df)
+    mask = df["time_visual"].astype(str) == time_visual
+    return df.loc[mask].copy()
+
+
+def indicacoes_ranking_por_pessoa(
+    df: pd.DataFrame,
+    pessoa_col: str,
+    label_pessoa: str,
+) -> pd.DataFrame:
+    """Tabela estilo Pré-vendas: 1 linha por pessoa com total de agend. criados."""
+    cols = [label_pessoa, "Agendamentos criados", "% do total"]
+    if df is None or df.empty or pessoa_col not in df.columns:
+        return pd.DataFrame(columns=cols)
+
+    total = len(df)
+    grp = (
+        df.groupby(pessoa_col, dropna=False)
+        .size()
+        .reset_index(name="Agendamentos criados")
+        .rename(columns={pessoa_col: label_pessoa})
+    )
+    grp[label_pessoa] = grp[label_pessoa].fillna("Sem identificação").astype(str)
+    grp["% do total"] = grp["Agendamentos criados"].apply(
+        lambda n: _safe_div(float(n), float(total)) * 100
+    )
+    return grp.sort_values(
+        ["Agendamentos criados", label_pessoa],
+        ascending=[False, True],
+    ).reset_index(drop=True)
+
+
+def indicacoes_ranking_pos_vendas(df_agend: pd.DataFrame) -> pd.DataFrame:
+    """Agendamentos criados (Indicações) agrupados por pós-vendas."""
+    return indicacoes_ranking_por_pessoa(df_agend, "pos_vendas", "Pós-vendas")
+
+
+def indicacoes_ranking_executivas(df_agend: pd.DataFrame) -> pd.DataFrame:
+    """Agendamentos criados (Indicações) agrupados por executiva de vendas."""
+    return indicacoes_ranking_por_pessoa(df_agend, "executiva", "Executiva")
+
+
+def indicacoes_ranking_por_time_visual(df_agend: pd.DataFrame) -> pd.DataFrame:
+    """Agendamentos criados agregados pelos 3 times visuais."""
+    cols = ["Time", "Agendamentos criados", "% do total"]
+    if df_agend is None or df_agend.empty:
+        return pd.DataFrame(columns=cols)
+    df = indicacoes_aplicar_time_visual(df_agend)
+    out = indicacoes_ranking_por_pessoa(df, "time_visual", "Time")
+    # Ordena pelos 3 times canônicos primeiro.
+    ordem = {t: i for i, t in enumerate(TIME_VENDAS_VISUAL_LABELS)}
+    ordem[TIME_VENDAS_VISUAL_OUTROS] = 99
+    out["_ord"] = out["Time"].map(lambda t: ordem.get(t, 50))
+    return (
+        out.sort_values(["_ord", "Agendamentos criados"], ascending=[True, False])
+        .drop(columns=["_ord"])
+        .reset_index(drop=True)
+    )
+
+
+# Re-export para a UI da aba Indicações.
+INDICACOES_TIME_VISUAL_OPTIONS: list[str] = [
+    "Todos",
+    *TIME_VENDAS_VISUAL_LABELS,
+]

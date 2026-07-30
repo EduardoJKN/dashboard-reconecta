@@ -8,6 +8,7 @@ from src.repositories import (
     get_executivas_comparecimento_ajustado,
     get_executivas_funil_agendamentos,
     get_executivas_indicacoes,
+    get_executivas_indicacoes_agend_criados,
     get_executivas_lead_in_triagem,
     get_executivas_oficiais,
     get_executivas_oficiais_todas,
@@ -68,12 +69,18 @@ from src.transforms import (
     funil_agendamentos_por_executiva,
     funil_agendamentos_por_stage,
     INDICACOES_CLOSER_PADRAO,
+    INDICACOES_TIME_VISUAL_OPTIONS,
+    indicacoes_aplicar_time_visual,
     indicacoes_filtrar_closer,
+    indicacoes_filtrar_time_visual,
     indicacoes_funil_valores,
     indicacoes_kanban_colunas,
     indicacoes_kpis,
     indicacoes_por_etapa,
     indicacoes_preparar,
+    indicacoes_ranking_executivas,
+    indicacoes_ranking_por_time_visual,
+    indicacoes_ranking_pos_vendas,
     indicacoes_tabela,
     STAGE_HINT_CLASSIFICAVEL,
     STAGE_HINT_NAO_QUALIFICADOS,
@@ -2652,36 +2659,50 @@ with tab_lead_triagem:
 with tab_indicacoes:
     # =========================================================================
     # Indicações — leads com fonte_de_lead = 'Indicação' no período.
-    # Cards → funil → kanban (Scrum) → tabela detalhada.
-    # Closer padrão do time: Dayana Moura; pós-vendas agenda (campo CRM).
+    # Separado dos agendamentos de pré-vendas (crédito SDR).
+    # Cards → rankings (pós / executivas / times) → funil → kanban → tabela.
     # =========================================================================
     _times_sel_ind = list(ctx.selections.get("times") or [])
 
     section_title(
         "Indicações",
         f"{ctx.data_ini:%d/%m/%Y} – {ctx.data_fim:%d/%m/%Y} · "
-        "fonte do lead = Indicação",
+        "fonte do lead = Indicação · separado do pré",
     )
     st.caption(
-        "Universo: `zoho_deals` com **`fonte_de_lead = 'Indicação'`** e "
-        "`created_at` no período (chegada da indicação). "
-        "Etapa = **`stage` atual** do CRM. "
-        f"Closer de referência do time: **{INDICACOES_CLOSER_PADRAO}**; "
-        "agendamento operacional via **pós-vendas** (`executiva_contas`). "
-        "Respeita filtro de **Times** do header."
+        "Universo deals: `zoho_deals` com **`fonte_de_lead = 'Indicação'`** e "
+        "`created_at` no período. "
+        "**Agendamentos criados** = activities com fonte Indicações "
+        "(`created_time`, anti-retroativo) — **não** misturam com "
+        "agendamentos de pré-vendas (crédito `activity.prevendas` / SDR). "
+        "Pós-vendas agenda via `executiva_contas`; executiva = "
+        "`executiva_vendas`. "
+        "Times visuais: Leidi · Marcelo · Marcelo Executivas."
     )
 
-    _filtro_closer = st.radio(
-        "Closer",
-        options=["Todas", INDICACOES_CLOSER_PADRAO],
-        index=1,
-        horizontal=True,
-        key="indicacoes_closer_filtro",
-        help=(
-            f"Padrão: {INDICACOES_CLOSER_PADRAO} (vendedor do time de indicações). "
-            "Escolha Todas para ver todas as executivas no recorte."
-        ),
-    )
+    f1, f2 = st.columns(2, gap="medium")
+    with f1:
+        _filtro_time_visual = st.radio(
+            "Time visual",
+            options=INDICACOES_TIME_VISUAL_OPTIONS,
+            index=0,
+            horizontal=True,
+            key="indicacoes_time_visual",
+            help=(
+                "Time da Leidi (Hawinne, Andrezza) · "
+                "Time do Marcelo (Nathan, Leandro, Leonardo) · "
+                "Time do Marcelo Executivas (Karine, Dayana)."
+            ),
+        )
+    with f2:
+        _filtro_closer = st.radio(
+            "Closer",
+            options=["Todas", INDICACOES_CLOSER_PADRAO, "Karine Pacífico"],
+            index=0,
+            horizontal=True,
+            key="indicacoes_closer_filtro",
+            help="Atalho por executiva. Combine com o time visual se quiser.",
+        )
 
     try:
         _df_ind_raw = get_executivas_indicacoes(ctx.data_ini, ctx.data_fim)
@@ -2690,16 +2711,45 @@ with tab_indicacoes:
         _df_ind_raw = pd.DataFrame()
         _df_ind_error = _exc_ind
 
+    try:
+        _df_agend_raw = get_executivas_indicacoes_agend_criados(
+            ctx.data_ini, ctx.data_fim,
+        )
+        _df_agend_error = None
+    except Exception as _exc_agend:
+        _df_agend_raw = pd.DataFrame()
+        _df_agend_error = _exc_agend
+
     if _df_ind_error is not None:
         st.error(f"Falha ao carregar indicações: {_df_ind_error}")
-    else:
+    if _df_agend_error is not None:
+        st.error(
+            f"Falha ao carregar agendamentos criados: {_df_agend_error}"
+        )
+
+    if _df_ind_error is None:
         df_ind = indicacoes_preparar(
             cancelamentos_pos_filtrar_times(_df_ind_raw, _times_sel_ind)
         )
+        df_ind = indicacoes_aplicar_time_visual(df_ind)
+        df_ind = indicacoes_filtrar_time_visual(df_ind, _filtro_time_visual)
         df_ind = indicacoes_filtrar_closer(df_ind, _filtro_closer)
-        kpi_ind = indicacoes_kpis(df_ind)
 
-        if df_ind.empty:
+        df_agend = (
+            pd.DataFrame()
+            if _df_agend_error is not None
+            else cancelamentos_pos_filtrar_times(_df_agend_raw, _times_sel_ind)
+        )
+        if _df_agend_error is None:
+            df_agend = indicacoes_aplicar_time_visual(df_agend)
+            df_agend = indicacoes_filtrar_time_visual(
+                df_agend, _filtro_time_visual,
+            )
+            df_agend = indicacoes_filtrar_closer(df_agend, _filtro_closer)
+
+        kpi_ind = indicacoes_kpis(df_ind, df_agend)
+
+        if df_ind.empty and df_agend.empty:
             st.info("Sem indicações no recorte atual.")
         else:
             c1, c2, c3, c4 = st.columns(4, gap="small")
@@ -2712,9 +2762,12 @@ with tab_indicacoes:
                 )
             with c2:
                 metric_card_v2(
-                    "Em andamento",
-                    int_br(kpi_ind["em_andamento"]),
-                    hint="Lead-in + Recepção + Reunião Agendada",
+                    "Agendamentos criados",
+                    int_br(kpi_ind["agendamentos_criados"]),
+                    hint=(
+                        "created_time · sem lançamento retroativo · "
+                        "fonte Indicações (fora do pré)"
+                    ),
                 )
             with c3:
                 metric_card_v2(
@@ -2756,70 +2809,166 @@ with tab_indicacoes:
                     hint="Receita (ou montante) ÷ ganhos",
                 )
 
-            # Funil por etapa atual
-            labels_funil, values_funil = indicacoes_funil_valores(df_ind)
-            if labels_funil:
+            # Rankings: pós-vendas / executivas / times (pedido Marcelo)
+            if not df_agend.empty:
                 section_title(
-                    "Funil por etapa atual",
-                    "onde estão hoje as indicações do período",
+                    "Agendamentos criados por time",
+                    "controle visual · Leidi · Marcelo · Marcelo Executivas",
                 )
-                st.plotly_chart(
-                    funnel(
-                        labels_funil,
-                        values_funil,
-                        height=max(320, 36 * len(labels_funil) + 80),
-                        show_dropoff=True,
-                    ),
+                tbl_time = indicacoes_ranking_por_time_visual(df_agend)
+                st.dataframe(
+                    tbl_time,
                     use_container_width=True,
-                    key="executivas_indicacoes_funnel",
+                    hide_index=True,
+                    column_config={
+                        "% do total": st.column_config.NumberColumn(
+                            format="%.1f%%",
+                        ),
+                    },
                 )
 
-                por_etapa_ind = indicacoes_por_etapa(df_ind)
-                if not por_etapa_ind.empty:
-                    st.plotly_chart(
-                        bar_etapa_distribuicao(
-                            por_etapa_ind,
-                            "etapa",
-                            "total",
-                            "pct",
-                            height=max(280, 30 * len(por_etapa_ind) + 90),
-                        ),
+                r1, r2 = st.columns(2, gap="medium")
+                with r1:
+                    section_title(
+                        "Por pós-vendas",
+                        "quem agenda (executiva_contas) — espelho do ranking pré",
+                    )
+                    tbl_pos = indicacoes_ranking_pos_vendas(df_agend)
+                    st.dataframe(
+                        tbl_pos,
                         use_container_width=True,
-                        key="executivas_indicacoes_stage_bar",
+                        hide_index=True,
+                        column_config={
+                            "Pós-vendas": st.column_config.Column(pinned=True),
+                            "% do total": st.column_config.NumberColumn(
+                                format="%.1f%%",
+                            ),
+                        },
+                    )
+                with r2:
+                    section_title(
+                        "Por executiva de vendas",
+                        "closer do deal (executiva_vendas)",
+                    )
+                    tbl_exec = indicacoes_ranking_executivas(df_agend)
+                    st.dataframe(
+                        tbl_exec,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Executiva": st.column_config.Column(pinned=True),
+                            "% do total": st.column_config.NumberColumn(
+                                format="%.1f%%",
+                            ),
+                        },
                     )
 
-            # Board Kanban / Scrum
-            section_title(
-                "Board Kanban",
-                "visão Scrum por etapa — facilita acompanhar o fluxo",
-            )
-            render_kanban_board(indicacoes_kanban_colunas(df_ind))
+                with st.expander("Detalhe dos agendamentos criados"):
+                    _det = df_agend.copy()
+                    if "data_criacao" in _det.columns:
+                        _det["data_criacao"] = pd.to_datetime(
+                            _det["data_criacao"], errors="coerce",
+                        ).dt.strftime("%d/%m/%Y")
+                    _det_show = _det.rename(columns={
+                        "data_criacao": "Data criação",
+                        "nome": "Nome",
+                        "email": "E-mail",
+                        "executiva": "Executiva",
+                        "pos_vendas": "Pós-vendas",
+                        "time_visual": "Time visual",
+                        "time_vendas": "Time (legado)",
+                    })
+                    _cols_show = [
+                        c for c in (
+                            "Data criação", "Nome", "E-mail",
+                            "Executiva", "Pós-vendas", "Time visual",
+                        )
+                        if c in _det_show.columns
+                    ]
+                    st.dataframe(
+                        _det_show[_cols_show],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
-            # Tabela detalhada
-            section_title(
-                "Tabela de indicações",
-                "nome · e-mail · etapa (+ closer e pós-vendas)",
-            )
-            tbl_ind = indicacoes_tabela(df_ind)
-            st.dataframe(
-                tbl_ind,
-                use_container_width=True,
-                hide_index=True,
-                column_config=ranking_column_config(tbl_ind, pin_column="Nome"),
-            )
+            if not df_ind.empty:
+                # Funil / kanban / tabela — universo de deals criados no período
+                labels_funil, values_funil = indicacoes_funil_valores(df_ind)
+                if labels_funil:
+                    section_title(
+                        "Funil por etapa atual",
+                        "onde estão hoje as indicações do período",
+                    )
+                    st.plotly_chart(
+                        funnel(
+                            labels_funil,
+                            values_funil,
+                            height=max(320, 36 * len(labels_funil) + 80),
+                            show_dropoff=True,
+                        ),
+                        use_container_width=True,
+                        key="executivas_indicacoes_funnel",
+                    )
+
+                    por_etapa_ind = indicacoes_por_etapa(df_ind)
+                    if not por_etapa_ind.empty:
+                        st.plotly_chart(
+                            bar_etapa_distribuicao(
+                                por_etapa_ind,
+                                "etapa",
+                                "total",
+                                "pct",
+                                height=max(280, 30 * len(por_etapa_ind) + 90),
+                            ),
+                            use_container_width=True,
+                            key="executivas_indicacoes_stage_bar",
+                        )
+
+                section_title(
+                    "Board Kanban",
+                    "visão Scrum por etapa — facilita acompanhar o fluxo",
+                )
+                render_kanban_board(indicacoes_kanban_colunas(df_ind))
+
+                section_title(
+                    "Tabela de indicações",
+                    "nome · e-mail · etapa (+ closer e pós-vendas)",
+                )
+                tbl_ind = indicacoes_tabela(df_ind)
+                st.dataframe(
+                    tbl_ind,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=ranking_column_config(
+                        tbl_ind, pin_column="Nome",
+                    ),
+                )
 
             with st.expander("Como esta aba calcula Indicações"):
                 st.markdown(
-                    "- **Query:** `get_executivas_indicacoes` → "
-                    "`executivas_indicacoes_leads.sql`\n"
-                    "- **Filtro de origem:** `fonte_de_lead = 'Indicação'` "
-                    "(mesma regra do card Indic. da One Page, mas aqui olhamos "
-                    "todos os stages — não só ganhos)\n"
-                    "- **Data:** `created_at::date` (chegada da oportunidade)\n"
-                    "- **Etapa:** `zoho_deals.stage` atual (funil + kanban + tabela)\n"
-                    f"- **Closer padrão:** `{INDICACOES_CLOSER_PADRAO}` "
-                    "(vendedor do time de indicações)\n"
-                    "- **Pós-vendas:** `executiva_contas` → nome em `zoho_users`\n"
-                    "- **Times:** filtro do header (mesma regra das outras abas)\n"
-                    "- **E-mails de teste:** excluídos (regra canônica One Page)"
+                    "- **Deals:** `get_executivas_indicacoes` → "
+                    "`executivas_indicacoes_leads.sql` "
+                    "(`fonte_de_lead = 'Indicação'`, `created_at` no período)\n"
+                    "- **Agendamentos criados:** "
+                    "`get_executivas_indicacoes_agend_criados` → "
+                    "`executivas_indicacoes_agend_criados.sql` — activity "
+                    "`Consulta`/`Indicação` com `created_time` no período, "
+                    "`start_datetime::date >= created_time::date` "
+                    "(anti-retroativo), 1 deal/dia, "
+                    "`fonte_de_lead ILIKE '%indic%'`\n"
+                    "- **Separação do pré:** Pré-vendas exclui deals com "
+                    "fonte Indicação dos totais de agendamento; esta aba "
+                    "mostra só Indicações\n"
+                    "- **Pós-vendas:** `executiva_contas` → ranking "
+                    "\"Por pós-vendas\"\n"
+                    "- **Executivas:** `executiva_vendas` → ranking "
+                    "\"Por executiva de vendas\"\n"
+                    "- **Times visuais:** Time da Leidi (Hawinne, Andrezza) · "
+                    "Time do Marcelo (Nathan, Leandro, Leonardo) · "
+                    "Time do Marcelo Executivas (Karine, Dayana)\n"
+                    "- **Agendadas (card):** `stage` atual = "
+                    "`Reunião Agendada` — **não** é a mesma métrica que "
+                    "Agendamentos criados\n"
+                    f"- **Closer padrão do time de indicações:** "
+                    f"`{INDICACOES_CLOSER_PADRAO}` / Karine Pacífico"
                 )

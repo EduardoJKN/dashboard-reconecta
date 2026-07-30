@@ -56,6 +56,17 @@ TIMES_CLOSER: dict[str, list[str]] = {
                        "Karine Pacífico"],
 }
 
+# Times visuais do pedido operacional (Indicações / controle por time).
+# Não substitui TIMES_CLOSER no ranking global — só a aba Indicações.
+TIMES_VENDAS_VISUAL: dict[str, list[str]] = {
+    "Time da Leidi": ["Hawinne", "Andrezza"],
+    "Time do Marcelo": ["Nathan", "Leandro", "Leonardo Melo Patriota"],
+    "Time do Marcelo Executivas": ["Karine Pacífico", "Dayana Moura"],
+}
+
+TIME_VENDAS_VISUAL_LABELS: list[str] = list(TIMES_VENDAS_VISUAL.keys())
+TIME_VENDAS_VISUAL_OUTROS = "Outros / sem time visual"
+
 TIPOS_SDR: dict[str, list[str]] = {
     "Pré-vendas":    ["Laura Garcia", "Isabela Lopes", "Mayana Silva",
                       "Camilla Lyra", "Ingrid Lorrayne"],
@@ -108,6 +119,13 @@ def classify_closer(name) -> str:
     if isinstance(name, str) and name.strip() == SEM_CLOSER_LABEL:
         return SEM_CLOSER_LABEL
     return _classify(name, TIMES_CLOSER, CLOSER_UNKNOWN_LABEL)
+
+
+def classify_time_visual(name) -> str:
+    """Time visual da aba Indicações (3 times do pedido operacional)."""
+    if isinstance(name, str) and name.strip() in (SEM_CLOSER_LABEL, ""):
+        return TIME_VENDAS_VISUAL_OUTROS
+    return _classify(name, TIMES_VENDAS_VISUAL, TIME_VENDAS_VISUAL_OUTROS)
 
 
 def classify_sdr(name) -> str:
