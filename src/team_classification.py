@@ -52,8 +52,8 @@ CLOSER_UNKNOWN_LABEL = "Closer não classificado"
 TIMES_CLOSER: dict[str, list[str]] = {
     "Time Leidianne": ["Hawinne", "Thaís", "Andrezza", "Nathally"],
     "Time Marcelo":   ["Nathan", "Leonardo Melo Patriota", "Leandro Alves",
-                       "Camile Silveira", "Henrique Gonçalves", "Dayana Moura",
-                       "Karine Pacífico"],
+                       "Camile Silveira", "Henrique Gonçalves"],
+    "Time Marcelo Executivas": ["Dayana Moura", "Karine Pacífico"],
 }
 
 # Times visuais do pedido operacional (Indicações / controle por time).
@@ -113,9 +113,10 @@ def _classify(name, mapping: dict[str, list[str]], unknown_label: str) -> str:
 # API pública
 # ---------------------------------------------------------------------------
 def classify_closer(name) -> str:
-    """Retorna o time do closer (`Time Leidianne` / `Time Marcelo`),
-    `Sem Closer` quando o input é o placeholder do SQL, ou
-    `Closer não classificado` quando o nome não bate em nenhuma lista."""
+    """Retorna o time do closer (`Time Leidianne` / `Time Marcelo` /
+    `Time Marcelo Executivas`), `Sem Closer` quando o input é o
+    placeholder do SQL, ou `Closer não classificado` quando o nome não
+    bate em nenhuma lista."""
     if isinstance(name, str) and name.strip() == SEM_CLOSER_LABEL:
         return SEM_CLOSER_LABEL
     return _classify(name, TIMES_CLOSER, CLOSER_UNKNOWN_LABEL)

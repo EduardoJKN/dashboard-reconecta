@@ -602,10 +602,11 @@ def _match_oficial_por_tokens(nome_ranking: str,
 
 # Overrides de `time_vendas` por closer — espelha o CASE da view quando o
 # cadastro ainda não reflete o time correto (ex.: Stefany Campinas).
+# Dayana/Karine formam o "Time do Marcelo Executivas" (filtro TIMES do topo).
 _EXECUTIVA_TIME_OVERRIDES: list[tuple[frozenset[str], str]] = [
     (frozenset({"stefany", "campinas"}), "Time da Leidianne"),
-    (frozenset({"dayana", "moura"}), "Time do Marcelo"),
-    (frozenset({"karine", "pacifico"}), "Time do Marcelo"),
+    (frozenset({"dayana", "moura"}), "Time do Marcelo Executivas"),
+    (frozenset({"karine", "pacifico"}), "Time do Marcelo Executivas"),
 ]
 
 # Closers que entram no filtro "Ativos" / cards mesmo sem estarem com
