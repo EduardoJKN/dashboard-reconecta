@@ -33,8 +33,8 @@ _RANKING_MOEDA_LABELS: dict[str, str] = {
 
 _RANKING_PCT_LABELS: dict[str, str] = {
     "pct_comparecimento": "% Comparecimento",
-    "pct_conversao":      "% Conversão",
-    "pct_vendas":         "% Vendas",
+    "pct_conversao":      "% Agend. -> Vendas",
+    "pct_vendas":         "% Conv. Vendas",
     "pct_recebimento":    "% Recebimento",
     "pct_agendamento":    "% Agendamento",
 }

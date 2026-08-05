@@ -423,7 +423,7 @@ rec_v  = float(k.get(cmap["receita"], 0) or 0)  if tem_fin else None
 
 # Ganhos = mix canônico (novas + ascensões + renovações + indicações) em
 # "Todas"; nos buckets de classif continua `ganhos_*` via `vend_v`.
-# % Conversão e % Vendas usam esse total — alinhado ao card Ganhos.
+# % Agend. -> Vendas e % Conv. Vendas usam esse total — alinhado ao card Ganhos.
 if is_todas:
     ganhos_v = vendas_mix_total(
         k.get("novos", 0), k.get("ascensoes", 0),
@@ -511,10 +511,10 @@ with r2c2:
     metric_card_v2("% Comparecimento", pct(pct_comp),
                    hint="comparec. ÷ agendamentos")
 with r2c3:
-    metric_card_v2("% Conversão", pct(pct_conv),
+    metric_card_v2("% Agend. -> Vendas", pct(pct_conv),
                    hint="ganhos ÷ agendamentos")
 with r2c4:
-    metric_card_v2("% Vendas", pct(pct_vend),
+    metric_card_v2("% Conv. Vendas", pct(pct_vend),
                    hint="ganhos ÷ comparecimentos")
 
 # ---------------------------------------------------------------------------
@@ -624,7 +624,7 @@ with f5:
     metric_card_v2("Clientes Cancelados", int_br(_churn_qtd_classif),
                    hint=_hint_churn)
 with f6:
-    # Mesmo `ganhos_v` das taxas % Conversão / % Vendas (mix em "Todas",
+    # Mesmo `ganhos_v` das taxas % Agend. -> Vendas / % Conv. Vendas (mix em "Todas",
     # `ganhos_*` nos buckets de classif).
     _hint_ganhos = (
         format_vendas_mix_hint(
