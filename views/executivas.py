@@ -421,11 +421,22 @@ vend_v = float(k.get(cmap["vendas"], 0) or 0)
 mont_v = float(k.get(cmap["montante"], 0) or 0) if tem_fin else None
 rec_v  = float(k.get(cmap["receita"], 0) or 0)  if tem_fin else None
 
+# Ganhos = mix canônico (novas + ascensões + renovações + indicações) em
+# "Todas"; nos buckets de classif continua `ganhos_*` via `vend_v`.
+# % Conversão e % Vendas usam esse total — alinhado ao card Ganhos.
+if is_todas:
+    ganhos_v = vendas_mix_total(
+        k.get("novos", 0), k.get("ascensoes", 0),
+        k.get("renovacoes", 0), k.get("indicacoes", 0),
+    )
+else:
+    ganhos_v = vend_v
+
 pct_agen  = _safe_pct(agen_v, opor_v)
 pct_comp  = _safe_pct(comp_v, agen_v)
-pct_conv  = _safe_pct(vend_v, agen_v)
-pct_vend  = _safe_pct(vend_v, comp_v)
-ticket_v  = (mont_v / vend_v) if (tem_fin and vend_v) else None
+pct_conv  = _safe_pct(ganhos_v, agen_v)
+pct_vend  = _safe_pct(ganhos_v, comp_v)
+ticket_v  = (mont_v / ganhos_v) if (tem_fin and ganhos_v) else None
 pct_receb = _safe_pct(rec_v, mont_v) if tem_fin else None
 
 # Breakdown do card Reunião Agendada — mesma base da aba Lead In & Agendamentos
@@ -468,7 +479,7 @@ with r1c1:
     metric_card_v2(
         "Receita",
         brl(rec_v) if tem_fin else "—",
-        hint=f"{int_br(vend_v)} vendas" + ("" if is_todas else " · Novo cliente"),
+        hint=f"{int_br(ganhos_v)} ganhos" + ("" if is_todas else " · bucket classif"),
         accent=True,
     )
 with r1c2:
@@ -482,7 +493,7 @@ with r1c3:
     metric_card_v2(
         "Ticket Médio",
         brl(ticket_v) if ticket_v is not None else "—",
-        hint="montante ÷ vendas",
+        hint="montante ÷ ganhos",
     )
 with r1c4:
     metric_card_v2(
@@ -501,10 +512,10 @@ with r2c2:
                    hint="comparec. ÷ agendamentos")
 with r2c3:
     metric_card_v2("% Conversão", pct(pct_conv),
-                   hint="vendas ÷ agendamentos")
+                   hint="ganhos ÷ agendamentos")
 with r2c4:
     metric_card_v2("% Vendas", pct(pct_vend),
-                   hint="vendas ÷ comparecimentos")
+                   hint="ganhos ÷ comparecimentos")
 
 # ---------------------------------------------------------------------------
 # Funil 6 cards — cancelados e perdidos NÃO têm bucket na view, então
@@ -613,22 +624,16 @@ with f5:
     metric_card_v2("Clientes Cancelados", int_br(_churn_qtd_classif),
                    hint=_hint_churn)
 with f6:
-    # Em "Todas", Ganhos = mix canônico (novas + ascensões + renovações +
-    # indicações), alinhado à Visão Geral e ao ranking Top Closers.
-    # Buckets de classif continuam em `ganhos_*` (sem quebra por tipo_venda).
-    if is_todas:
-        _ganhos_card = vendas_mix_total(
+    # Mesmo `ganhos_v` das taxas % Conversão / % Vendas (mix em "Todas",
+    # `ganhos_*` nos buckets de classif).
+    _hint_ganhos = (
+        format_vendas_mix_hint(
             k.get("novos", 0), k.get("ascensoes", 0),
             k.get("renovacoes", 0), k.get("indicacoes", 0),
         )
-        _hint_ganhos = format_vendas_mix_hint(
-            k.get("novos", 0), k.get("ascensoes", 0),
-            k.get("renovacoes", 0), k.get("indicacoes", 0),
-        )
-    else:
-        _ganhos_card = vend_v
-        _hint_ganhos = None
-    metric_card_v2("Ganhos", int_br(_ganhos_card), hint=_hint_ganhos)
+        if is_todas else None
+    )
+    metric_card_v2("Ganhos", int_br(ganhos_v), hint=_hint_ganhos)
 with f7: metric_card_v2(
     "Perdidos", int_br(k["perdidos"]),
     hint=None if is_todas else "total geral · sem quebra por classif.",
@@ -1439,10 +1444,10 @@ with tab_rank:
                         if tem_fin and vend_v_local > 0:
                             tk = mont_v_local / vend_v_local
                             metric_card_v2("Ticket médio", brl(tk),
-                                           hint="montante ÷ vendas")
+                                           hint="montante ÷ ganhos")
                         else:
                             metric_card_v2("Ticket médio", "—",
-                                           hint="montante ÷ vendas")
+                                           hint="montante ÷ ganhos")
 
                     # ---------- Avisos de divergência ---------------------
                     if not detalhe_disponivel:

@@ -280,14 +280,14 @@ with s3:
         "Ticket Médio",
         brl(k["ticket_medio"]),
         delta_pct=delta_pct(k["ticket_medio"], kp["ticket_medio"]),
-        hint="montante ÷ vendas",
+        hint="montante ÷ ganhos",
     )
 with s4:
     metric_card_v2(
         "Conversão Global",
         pct(k["conversao_global"]),
         delta_pct=delta_pct(k["conversao_global"], kp["conversao_global"]),
-        hint="vendas ÷ (vendas+perdidos+cancelados)",
+        hint="ganhos ÷ (ganhos+perdidos+cancelados)",
     )
 
 # ---------------------------------------------------------------------------
@@ -728,10 +728,10 @@ else:
                     mont_h = _sum_money_h("montante")
                     if vend_h > 0 and mont_h > 0:
                         metric_card_v2("Ticket médio", brl(mont_h / vend_h),
-                                       hint="montante ÷ vendas")
+                                       hint="montante ÷ ganhos")
                     else:
                         metric_card_v2("Ticket médio", "—",
-                                       hint="montante ÷ vendas")
+                                       hint="montante ÷ ganhos")
 
                 # ---------- Avisos de divergência --------------------------
                 if not detalhe_disp_h:

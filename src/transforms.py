@@ -107,17 +107,26 @@ def executivas_kpis(df: pd.DataFrame) -> dict:
     Fórmulas (validadas com a operação):
       pct_agendamento    = agendamentos / oportunidades
       pct_comparecimento = comparecimentos / agendamentos
-      pct_conversao      = vendas / agendamentos     (NÃO vendas/comparecimentos)
-      pct_vendas         = vendas / comparecimentos  (taxa de fechamento "show-to-close")
-      pct_venda_lead     = vendas / oportunidades    (atalho do funil completo)
-      ticket_medio       = montante / vendas
+      pct_conversao      = ganhos / agendamentos     (NÃO ganhos/comparecimentos)
+      pct_vendas         = ganhos / comparecimentos  (taxa de fechamento "show-to-close")
+      pct_venda_lead     = ganhos / oportunidades    (atalho do funil completo)
+      ticket_medio       = montante / ganhos
       pct_recebimento    = receita / montante
+
+    `ganhos` = novos + ascensões + renovações + indicações (mesmo mix do
+    card Ganhos / Top Closers). A chave `vendas` no retorno espelha
+    `ganhos` — todo cálculo do Time de Vendas que leia `vendas` usa o mix.
+    Os componentes (`novos`, `ascensoes`, …) permanecem nas chaves próprias.
     """
     if df.empty:
         # Default derivado de `_EXEC_SUM` (inclui buckets) + as 7 pcts derivadas.
         # Garante que a UI possa acessar k["oportunidades_mais_12"] etc. sem KeyError
         # quando o filtro de período não retorna linhas.
-        return {**{k: 0 for k in _EXEC_SUM}, **{k: 0 for k in _EXEC_PCT_KEYS}}
+        return {
+            **{k: 0 for k in _EXEC_SUM},
+            **{k: 0 for k in _EXEC_PCT_KEYS},
+            "ganhos": 0,
+        }
 
     totais = {c: float(df[c].sum()) for c in _EXEC_SUM if c in df.columns}
 
@@ -127,15 +136,26 @@ def executivas_kpis(df: pd.DataFrame) -> dict:
     vend = totais.get("vendas", 0)
     montante = totais.get("montante", 0)
     receita = totais.get("receita", 0)
+    if any(c in totais for c in VENDAS_MIX_COLS):
+        ganhos = vendas_mix_total(
+            totais.get("novos", 0),
+            totais.get("ascensoes", 0),
+            totais.get("renovacoes", 0),
+            totais.get("indicacoes", 0),
+        )
+    else:
+        ganhos = vend
 
     return {
         **totais,
+        "vendas":             ganhos,  # canônico = mix (não só Novo cliente)
+        "ganhos":             ganhos,
         "pct_agendamento":    _safe_div(ag, opor) * 100,
         "pct_comparecimento": _safe_div(comp, ag) * 100,
-        "pct_conversao":      _safe_div(vend, ag) * 100,    # vendas / agendamentos
-        "pct_vendas":         _safe_div(vend, comp) * 100,  # vendas / comparecimentos
-        "pct_venda_lead":     _safe_div(vend, opor) * 100,  # vendas / oportunidades (funil completo)
-        "ticket_medio":       _safe_div(montante, vend),
+        "pct_conversao":      _safe_div(ganhos, ag) * 100,    # ganhos / agendamentos
+        "pct_vendas":         _safe_div(ganhos, comp) * 100,  # ganhos / comparecimentos
+        "pct_venda_lead":     _safe_div(ganhos, opor) * 100,  # ganhos / oportunidades
+        "ticket_medio":       _safe_div(montante, ganhos),
         "pct_recebimento":    _safe_div(receita, montante) * 100,
     }
 
@@ -144,7 +164,9 @@ def executivas_por_dia(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     cols = [c for c in _EXEC_SUM if c in df.columns]
-    return df.groupby("data_ref", as_index=False)[cols].sum().sort_values("data_ref")
+    out = df.groupby("data_ref", as_index=False)[cols].sum().sort_values("data_ref")
+    # `vendas` diário = mix (novos+asc+ren+ind), igual ao ranking / KPIs.
+    return executivas_recalcular_vendas_mix(out)
 
 
 _RANKING_BASE_COLS = (
@@ -882,6 +904,8 @@ def executivas_por_time(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     cols = [c for c in _EXEC_SUM if c in df.columns]
     agg = df.groupby("time_vendas", as_index=False)[cols].sum()
+    # Mesmo mix do ranking / card Ganhos: taxas usam ganhos totais.
+    agg = executivas_recalcular_vendas_mix(agg)
     agg["pct_conversao"] = agg.apply(
         lambda r: _safe_div(r["vendas"], r["agendamentos"]) * 100, axis=1
     )
@@ -2527,7 +2551,8 @@ def roas_resumo(df_invest: pd.DataFrame, df_exec: pd.DataFrame,
     totais_exec = executivas_kpis(df_exec)
     receita = totais_exec.get("receita", 0)
     montante = totais_exec.get("montante", 0)
-    vendas = totais_exec.get("vendas", 0)
+    # `executivas_kpis` já devolve `vendas` = mix de ganhos.
+    vendas = totais_exec.get("ganhos", totais_exec.get("vendas", 0))
     invest = totais_inv.get("total", 0)
 
     taxa_periodo = _safe_div(receita, montante)
@@ -2565,16 +2590,19 @@ def visao_geral_kpis(df_exec: pd.DataFrame, df_inv: pd.DataFrame) -> dict:
     """Calcula os KPIs da home aplicando exatamente as fórmulas do Looker:
 
     - meta                = COUNT_DISTINCT(data_ref) * (625000/7)
-    - ticket_medio        = SUM(montante) / SUM(vendas)
-    - conversao_global    = SUM(vendas) / (SUM(vendas)+SUM(perdidos)+SUM(cancelados))
-    - cpa                 = SUM(investimento_total) / SUM(vendas)
+    - ticket_medio        = SUM(montante) / ganhos
+    - conversao_global    = ganhos / (ganhos+SUM(perdidos)+SUM(cancelados))
+    - cpa                 = SUM(investimento_total) / ganhos
     - pct_recebimento     = SUM(receita) / SUM(montante)
     - pct_atingimento     = SUM(receita) / meta
     - media_movel_diaria  = SUM(receita) / COUNT_DISTINCT(data_ref)
+
+    `ganhos` / `vendas` = novos + ascensões + renovações + indicações
+    (mesmo mix do card Ganhos / Top Closers).
     """
     if df_exec.empty:
         return {
-            "receita": 0, "montante": 0, "vendas": 0,
+            "receita": 0, "montante": 0, "vendas": 0, "ganhos": 0,
             "oportunidades": 0, "leads_totais": 0,
             "novos": 0, "ascensoes": 0, "renovacoes": 0, "indicacoes": 0,
             "perdidos": 0, "cancelados": 0,
@@ -2586,7 +2614,6 @@ def visao_geral_kpis(df_exec: pd.DataFrame, df_inv: pd.DataFrame) -> dict:
 
     receita = float(df_exec["receita"].sum())
     montante = float(df_exec["montante"].sum())
-    vendas = float(df_exec["vendas"].sum())
     perdidos = float(df_exec["perdidos"].sum()) if "perdidos" in df_exec.columns else 0
     cancelados = float(df_exec["cancelados"].sum()) if "cancelados" in df_exec.columns else 0
 
@@ -2597,6 +2624,10 @@ def visao_geral_kpis(df_exec: pd.DataFrame, df_inv: pd.DataFrame) -> dict:
     ascensoes = float(df_exec["ascensoes"].sum()) if "ascensoes" in df_exec.columns else 0
     renovacoes = float(df_exec["renovacoes"].sum()) if "renovacoes" in df_exec.columns else 0
     indicacoes = float(df_exec["indicacoes"].sum()) if "indicacoes" in df_exec.columns else 0
+    if any(c in df_exec.columns for c in VENDAS_MIX_COLS):
+        ganhos = vendas_mix_total(novos, ascensoes, renovacoes, indicacoes)
+    else:
+        ganhos = float(df_exec["vendas"].sum()) if "vendas" in df_exec.columns else 0.0
 
     investimento = float(df_inv["investimento_total"].sum()) if not df_inv.empty else 0.0
 
@@ -2617,7 +2648,8 @@ def visao_geral_kpis(df_exec: pd.DataFrame, df_inv: pd.DataFrame) -> dict:
         # totais absolutos
         "receita": receita,
         "montante": montante,
-        "vendas": vendas,
+        "vendas": ganhos,
+        "ganhos": ganhos,
         "oportunidades": oport,
         "leads_totais": leads,
         "novos": novos,
@@ -2628,14 +2660,14 @@ def visao_geral_kpis(df_exec: pd.DataFrame, df_inv: pd.DataFrame) -> dict:
         "cancelados": cancelados,
         "investimento": investimento,
         "dias": dias,
-        # campos calculados (fórmulas Looker)
+        # campos calculados (fórmulas Looker; denominador = mix de ganhos)
         "meta": meta,
         "pct_atingimento": pct_ating,
         "meta_status": status,
         "pct_recebimento": _safe_div(receita, montante) * 100,
-        "ticket_medio": _safe_div(montante, vendas),
-        "conversao_global": _safe_div(vendas, vendas + perdidos + cancelados) * 100,
-        "cpa": _safe_div(investimento, vendas),
+        "ticket_medio": _safe_div(montante, ganhos),
+        "conversao_global": _safe_div(ganhos, ganhos + perdidos + cancelados) * 100,
+        "cpa": _safe_div(investimento, ganhos),
         "media_movel_diaria": _safe_div(receita, dias),
     }
 

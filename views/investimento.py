@@ -94,7 +94,7 @@ with c5:
     metric_card_v2(
         "CPA",
         brl(r["cac"]) if r["cac"] else "—",
-        hint="investimento ÷ vendas",
+        hint="investimento ÷ ganhos",
     )
 
 # Linha 2 — receita realizada, montante e taxa do período (informativos)
@@ -103,7 +103,7 @@ with c6:
     metric_card_v2(
         "Receita Realizada",
         brl(r["receita"]) if r["receita"] else "—",
-        hint=f"receita já recebida · {int_br(r['vendas'])} vendas",
+        hint=f"receita já recebida · {int_br(r['vendas'])} ganhos",
     )
 with c7:
     metric_card_v2(
