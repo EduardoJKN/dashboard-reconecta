@@ -29,6 +29,7 @@ from src.transforms import (
     executivas_churn_agregar_por_executiva,
     executivas_churn_filtrar_closer,
     executivas_churn_filtrar_recorte,
+    executivas_churn_total,
     RANKING_EXIBICAO_ATIVOS,
     RANKING_EXIBICAO_HISTORICO,
     executivas_filtrar_time_oficial,
@@ -194,6 +195,31 @@ except Exception:
 k = visao_geral_kpis(df_exec_bruto, df_inv_all)
 kp = visao_geral_kpis(df_exec_prev_bruto, df_inv_prev)
 
+# Clientes Cancelados — mesma base do funil em Executivas & Times
+# (`get_executivas_churn_pos_venda` + recorte período/times). Na Visão
+# Geral também respeita o filtro Closer do header.
+_cadastro_churn_kpi = (
+    _df_oficiais_todas_home
+    if _df_oficiais_todas_home is not None and not _df_oficiais_todas_home.empty
+    else _df_oficiais_home
+)
+
+
+def _churn_kpi_total(data_ini, data_fim) -> int:
+    df = executivas_churn_filtrar_recorte(
+        _df_churn_all_home, data_ini, data_fim, _times_sel_home_churn,
+    )
+    if _closers_sel_home_churn:
+        mask = pd.Series(False, index=df.index)
+        for _c in _closers_sel_home_churn:
+            mask |= executivas_churn_filtrar_closer(df, _c, _cadastro_churn_kpi)
+        df = df.loc[mask].copy()
+    return executivas_churn_total(df)
+
+
+churn_tot = _churn_kpi_total(ctx.data_ini, ctx.data_fim)
+churn_prev = _churn_kpi_total(prev_ini, prev_fim)
+
 # ---------------------------------------------------------------------------
 # Bloco financeiro
 # ---------------------------------------------------------------------------
@@ -230,7 +256,7 @@ with fc3:
 # ---------------------------------------------------------------------------
 section_title("Operacional", "volume, conversão e eficiência")
 
-s1, s2, s3, s4 = st.columns(4, gap="small")
+s1, s2, s3, s4, s5 = st.columns(5, gap="small")
 with s1:
     if df_leads_all is not None:
         # Aplica os mesmos filtros (Closer / Times) já populados pelo
@@ -277,12 +303,19 @@ with s2:
         )
 with s3:
     metric_card_v2(
+        "Clientes Cancelados",
+        int_br(churn_tot),
+        delta_pct=delta_pct(churn_tot, churn_prev),
+        hint="stage = Churn · mesmo card de Executivas & Times",
+    )
+with s4:
+    metric_card_v2(
         "Ticket Médio",
         brl(k["ticket_medio"]),
         delta_pct=delta_pct(k["ticket_medio"], kp["ticket_medio"]),
         hint="montante ÷ ganhos",
     )
-with s4:
+with s5:
     metric_card_v2(
         "Conversão Global",
         pct(k["conversao_global"]),
