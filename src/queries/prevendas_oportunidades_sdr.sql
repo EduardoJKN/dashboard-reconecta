@@ -223,7 +223,7 @@ acts_comparecimentos_periodo AS (
       AND a.start_datetime IS NOT NULL
       AND a.start_datetime::date BETWEEN :data_ini AND :data_fim
       AND a.start_datetime::date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
-      AND TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
+      AND TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%'
 ),
 comp_por_deal AS (
     SELECT

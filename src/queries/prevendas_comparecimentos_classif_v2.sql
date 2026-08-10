@@ -81,9 +81,7 @@ acts_lead_sdr AS (
         a.deal_id,
         BOOL_OR(TRUE)                                AS teve_agend,
         BOOL_OR(
-            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN (
-                'concluída', 'concluído', 'concluida', 'concluido'
-            )
+            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%'
             AND a.start_datetime IS NOT NULL
             AND a.start_datetime::date
                 <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date

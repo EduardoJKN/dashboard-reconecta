@@ -16,48 +16,58 @@ from src.reuniao_concluida import (
 from src.transforms import comparecimento_ajustado_aplicar_flags
 
 
-def test_status_aceita_variantes_com_e_sem_acento():
+def test_status_aceita_variantes_normais_e_encoding():
     assert is_status_reuniao_concluida("Concluída")
     assert is_status_reuniao_concluida("Concluído")
     assert is_status_reuniao_concluida("concluida")
     assert is_status_reuniao_concluida("  CONCLUIDO  ")
+    # Encoding corrompido — começa com conclu
+    assert is_status_reuniao_concluida("Conclu" + chr(0xFFFD) + "da")
+    assert is_status_reuniao_concluida("Conclu\xda")  # starts with conclu
     assert not is_status_reuniao_concluida("Agendada")
+    assert not is_status_reuniao_concluida("Cancelada")
+    assert not is_status_reuniao_concluida("Vencida")
     assert not is_status_reuniao_concluida("Realizada")
     assert not is_status_reuniao_concluida(None)
+    assert not is_status_reuniao_concluida("")
 
 
-def test_sql_fragment_usa_trim_lower_e_aliases():
+def test_sql_fragment_usa_like_conclu():
     frag = sql_status_reuniao_concluida("a.")
-    assert "TRIM(LOWER(COALESCE(a.status_reuniao" in frag
-    assert "concluida" in frag
-    assert "concluída" in frag
+    assert frag == "TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%'"
+    assert "IN (" not in frag
 
 
 def test_bloqueia_reuniao_futura_mesmo_com_status_concluida():
     hoje = date(2026, 8, 10)
     df = pd.DataFrame(
         {
-            "activity_id": ["1", "2", "3"],
-            "activity_type": ["Consulta", "Consulta", "Indicação"],
-            "status_reuniao": ["Concluída", "concluido", "Concluído"],
+            "activity_id": ["1", "2", "3", "4"],
+            "activity_type": ["Consulta", "Consulta", "Indicação", "Consulta"],
+            "status_reuniao": [
+                "Concluída",
+                "concluido",
+                "Concluído",
+                "Conclu" + chr(0xFFFD) + "da",
+            ],
             "start_datetime": [
                 datetime(2026, 8, 10, 9, 0),
                 datetime(2026, 8, 11, 9, 0),  # futuro
                 datetime(2026, 8, 7, 14, 0),
+                datetime(2026, 8, 9, 10, 0),
             ],
         }
     )
     mask = mask_reuniao_concluida(
         df, data_ini=date(2026, 8, 1), data_fim=date(2026, 8, 31), hoje=hoje,
     )
-    assert mask.tolist() == [True, False, True]
+    assert mask.tolist() == [True, False, True, True]
     assert count_reunioes_concluidas(
         df, data_ini=date(2026, 8, 1), data_fim=date(2026, 8, 31), hoje=hoje,
-    ) == 2
+    ) == 3
 
 
 def test_fim_futuro_nao_aumenta_comparecimentos_do_dia():
-    """inicio=fim=hoje vs inicio=hoje fim=31/08 — mesmo total se hoje=10/08."""
     hoje = date(2026, 8, 10)
     df = pd.DataFrame(
         {
@@ -66,46 +76,50 @@ def test_fim_futuro_nao_aumenta_comparecimentos_do_dia():
             "status_reuniao": ["Concluída", "Concluída", "Concluída"],
             "start_datetime": [
                 datetime(2026, 8, 10, 10, 0),
-                datetime(2026, 8, 15, 10, 0),  # futuro no mês
+                datetime(2026, 8, 15, 10, 0),
                 datetime(2026, 8, 10, 16, 0),
             ],
         }
     )
-    n_dia = count_reunioes_concluidas(
-        df, data_ini=hoje, data_fim=hoje, hoje=hoje,
-    )
+    n_dia = count_reunioes_concluidas(df, data_ini=hoje, data_fim=hoje, hoje=hoje)
     n_mes = count_reunioes_concluidas(
         df, data_ini=hoje, data_fim=date(2026, 8, 31), hoje=hoje,
     )
     assert n_dia == 2
-    assert n_mes == 2  # não sobe só porque o fim avançou
+    assert n_mes == 2
 
 
 def test_flag_zoho_oficial_em_comparecimento_ajustado():
     agora = pd.Timestamp(datetime(2026, 8, 10, 12, 0))
     df = pd.DataFrame(
         {
-            "activity_id": ["1", "2", "3"],
-            "activity_type": ["Consulta", "Consulta", "Consulta"],
-            "status_reuniao": ["Concluída", "Agendada", "concluida"],
+            "activity_id": ["1", "2", "3", "4"],
+            "activity_type": ["Consulta", "Consulta", "Consulta", "Consulta"],
+            "status_reuniao": [
+                "Concluída",
+                "Agendada",
+                "concluida",
+                "Conclu" + chr(0xFFFD) + "da",
+            ],
             "start_datetime": [
                 datetime(2026, 8, 10, 9, 0),
                 datetime(2026, 8, 9, 9, 0),
-                datetime(2026, 8, 20, 9, 0),  # futuro com status concluída
+                datetime(2026, 8, 20, 9, 0),  # futuro
+                datetime(2026, 8, 8, 9, 0),
             ],
             "end_datetime": [
                 datetime(2026, 8, 10, 10, 0),
                 datetime(2026, 8, 9, 10, 0),
                 datetime(2026, 8, 20, 10, 0),
+                datetime(2026, 8, 8, 10, 0),
             ],
-            "deal_stage": ["", "", ""],
+            "deal_stage": ["", "", "", ""],
         }
     )
     out = comparecimento_ajustado_aplicar_flags(df, agora_brt=agora)
-    assert out["flag_comparecimento_zoho"].tolist() == [True, False, False]
+    assert out["flag_comparecimento_zoho"].tolist() == [True, False, False, True]
 
 
 def test_hoje_brasil_timezone():
     ts = datetime(2026, 8, 10, 2, 0, tzinfo=ZoneInfo("UTC"))
-    # 02:00 UTC = 23:00 do dia 09 em São Paulo
     assert hoje_brasil(ts) == date(2026, 8, 9)

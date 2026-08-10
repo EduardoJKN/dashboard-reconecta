@@ -79,9 +79,7 @@ pv_acts_comparecimentos AS (
     WHERE data_reuniao_ref BETWEEN :data_ini AND :data_fim
       AND data_reuniao_ref
           <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
-      AND TRIM(LOWER(COALESCE(status_reuniao, ''))) IN (
-              'concluída', 'concluído', 'concluida', 'concluido'
-          )
+      AND TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'
 ),
 pv_deals_vendas AS (
     SELECT

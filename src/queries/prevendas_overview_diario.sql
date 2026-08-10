@@ -179,16 +179,12 @@ agendamentos_diario AS (
         )::bigint AS agendamentos_mais_12,
         -- Regra oficial: src/reuniao_concluida.py (status normalizado + sem futuro).
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) IN (
-                      'concluída', 'concluído', 'concluida', 'concluido'
-                  )
+            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'
               AND data_reuniao_ref
                   <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint AS comparecimentos,
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) IN (
-                      'concluída', 'concluído', 'concluida', 'concluido'
-                  )
+            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'
               AND data_reuniao_ref
                   <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
               AND classif_final = 'Atua +12'

@@ -103,9 +103,7 @@ SELECT
         AND btrim(d.stage) = 'Recepção'
     )                                                       AS pre_mais_nao_qualificados,
     NULLIF(TRIM(uo.first_name || ' ' || uo.last_name), '')  AS activity_owner_nome,
-    (TRIM(LOWER(COALESCE(ac.status_reuniao, ''))) IN (
-         'concluída', 'concluído', 'concluida', 'concluido'
-     )
+    (TRIM(LOWER(COALESCE(ac.status_reuniao, ''))) LIKE 'conclu%'
      AND ac.start_datetime IS NOT NULL
      AND ac.start_datetime::date
          <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date

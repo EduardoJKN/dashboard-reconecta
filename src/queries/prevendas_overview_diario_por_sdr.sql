@@ -141,7 +141,7 @@ acts_agg AS (
         sdr,
         COUNT(*)::bigint AS agendamentos,
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
+            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'
               AND data_reuniao_ref <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint AS comparecimentos
     FROM acts_periodo

@@ -2038,7 +2038,7 @@ with st.expander("Ver leads/agendamentos detalhados"):
                 base_mask
                 & mask_atividade
                 & mask_data_agendamento
-                & tabelaseries_status_reuniao_concluida(_det["status_filtro"])
+                & series_status_reuniao_concluida(tabela_det["status_filtro"])
             ),
             "Vendas": base_mask & mask_venda & mask_data_venda,
             "Cancelados": (
@@ -2084,7 +2084,7 @@ with st.expander("Ver leads/agendamentos detalhados"):
             | (tabela_det["classificacao_filtro"]    == "Atua -12")
         )
         mask_comparecimentos = mask_agendamentos & (
-            tabelaseries_status_reuniao_concluida(_det["status_filtro"])
+            series_status_reuniao_concluida(tabela_det["status_filtro"])
         )
         mask_vendas = (
             (tabela_det["tipo_registro_base_filtro"] == "Venda")

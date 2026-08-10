@@ -5,14 +5,16 @@ Fonte: `zoho_activities`. Unidade: activity (`COUNT(DISTINCT id)`).
 Uma activity conta quando:
   - `start_datetime IS NOT NULL`
   - `activity_type IN ('Consulta', 'Indicação')`
-  - `TRIM(LOWER(COALESCE(status_reuniao, '')))` ∈
-      {'concluída', 'concluído', 'concluida', 'concluido'}
+  - `TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'`
+    (cobre Concluída/Concluído e variantes com encoding corrompido)
   - `start_datetime::date` no período filtrado
   - `start_datetime::date` ≤ hoje em America/Sao_Paulo
 
 A data de referência é sempre `start_datetime` (nunca modified_time /
 created_time / data do deal). Reuniões com start no futuro não entram,
 mesmo com status inconsistente no Zoho.
+
+Não usar `zoho_deals.stage` — o estágio atual do Deal não é histórico.
 """
 from __future__ import annotations
 
@@ -25,16 +27,11 @@ REUNIAO_CONCLUIDA_TZ = ZoneInfo("America/Sao_Paulo")
 
 ACTIVITY_TYPES_REUNIAO = frozenset({"Consulta", "Indicação"})
 
-STATUS_REUNIAO_CONCLUIDA = frozenset({
-    "concluída",
-    "concluído",
-    "concluida",
-    "concluido",
-})
+# Prefixo oficial — cobre encoding corrompido ("Conclu\ufffdda", etc.).
+STATUS_REUNIAO_CONCLUIDA_PREFIX = "conclu"
 
 SQL_STATUS_REUNIAO_CONCLUIDA = (
-    "TRIM(LOWER(COALESCE({alias}status_reuniao, ''))) IN ("
-    "'concluída', 'concluído', 'concluida', 'concluido')"
+    "TRIM(LOWER(COALESCE({alias}status_reuniao, ''))) LIKE 'conclu%'"
 )
 
 SQL_HOJE_BRASIL = (
@@ -43,10 +40,10 @@ SQL_HOJE_BRASIL = (
 
 REUNIAO_CONCLUIDA_HELP = (
     "Reunião concluída / comparecimento = activity Consulta/Indicação com "
-    "status_reuniao concluída/concluído (com ou sem acento), data = "
-    "start_datetime::date no período e ≤ hoje (America/Sao_Paulo). "
-    "Contagem: DISTINCT activity_id. modified_time não é a data do "
-    "comparecimento."
+    "status_reuniao começando por 'conclu' (LIKE conclu% — cobre encoding "
+    "corrompido), data = start_datetime::date no período e ≤ hoje "
+    "(America/Sao_Paulo). Contagem: DISTINCT activity_id. "
+    "modified_time / stage do Deal não definem comparecimento."
 )
 
 
@@ -67,7 +64,8 @@ def normalize_status_reuniao(value) -> str:
 
 
 def is_status_reuniao_concluida(value) -> bool:
-    return normalize_status_reuniao(value) in STATUS_REUNIAO_CONCLUIDA
+    """True se o status normalizado começa com 'conclu' (regra oficial)."""
+    return normalize_status_reuniao(value).startswith(STATUS_REUNIAO_CONCLUIDA_PREFIX)
 
 
 def sql_status_reuniao_concluida(alias: str = "") -> str:
@@ -77,7 +75,9 @@ def sql_status_reuniao_concluida(alias: str = "") -> str:
 
 
 def series_status_reuniao_concluida(series: pd.Series) -> pd.Series:
-    return series.map(normalize_status_reuniao).isin(STATUS_REUNIAO_CONCLUIDA)
+    return series.map(normalize_status_reuniao).str.startswith(
+        STATUS_REUNIAO_CONCLUIDA_PREFIX, na=False,
+    )
 
 
 def _to_naive_brt_timestamp(series: pd.Series) -> pd.Series:

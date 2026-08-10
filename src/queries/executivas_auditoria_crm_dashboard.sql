@@ -74,7 +74,7 @@ base AS (
             AND lower(btrim(a.status_reuniao)) <> 'vencida'
         )                                                             AS flag_agendamento_dashboard,
         (
-            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
+            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%'
         )                                                             AS flag_comparecimento_dashboard,
         (
             d.stage = 'Ganho'
@@ -84,23 +84,23 @@ base AS (
         )                                                             AS flag_venda_dashboard,
         -- Fallback hipotético (NÃO usado no dashboard hoje — só auditoria)
         (
-            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido'))
+            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%')
             AND d.stage ILIKE '%reuni%conclu%'
         )                                                             AS flag_comparecimento_fallback_stage,
         (
-            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido'))
+            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%')
             AND lower(btrim(COALESCE(d.triagem, ''))) IN (
                 'concluída', 'concluida', 'lead qualificado'
             )
         )                                                             AS flag_comparecimento_fallback_triagem,
         (
-            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
+            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%'
             AND d.deal_closer_id IS NOT NULL
             AND a.activity_owner_id IS NOT NULL
             AND d.deal_closer_id <> a.activity_owner_id
         )                                                             AS flag_closer_owner_divergente,
         (
-            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido'))
+            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%')
             AND d.stage ILIKE '%reuni%conclu%'
         )                                                             AS flag_deal_reuniao_concluida_activity_nao
     FROM acts a

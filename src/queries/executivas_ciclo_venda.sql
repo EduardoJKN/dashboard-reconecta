@@ -109,10 +109,7 @@ act_compareceu AS (
     FROM acts_consulta ac
     INNER JOIN deals_ganhos dg ON dg.deal_id = ac.deal_id
     WHERE ac.deal_id IS NOT NULL
-      AND TRIM(LOWER(COALESCE(ac.status_reuniao, ''))) IN (
-              'concluída', 'concluído', 'concluida', 'concluido'
-          )
-      AND ac.start_datetime IS NOT NULL
+      AND TRIM(LOWER(COALESCE(ac.status_reuniao, ''))) LIKE 'conclu%'
       AND ac.ts_reuniao_agendada IS NOT NULL
       AND ac.ts_reuniao_agendada <= dg.ts_venda
     ORDER BY ac.deal_id, ac.ts_reuniao_agendada ASC, ac.activity_id ASC

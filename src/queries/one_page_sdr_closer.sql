@@ -100,9 +100,7 @@ agend_por_par AS (
             WHERE za.status_reuniao <> 'Vencida'
         )                                                       AS agendamentos,
         COUNT(DISTINCT za.id) FILTER (
-            WHERE TRIM(LOWER(COALESCE(za.status_reuniao, ''))) IN (
-                      'concluída', 'concluído', 'concluida', 'concluido'
-                  )
+            WHERE TRIM(LOWER(COALESCE(za.status_reuniao, ''))) LIKE 'conclu%'
               AND za.start_datetime IS NOT NULL
               AND za.start_datetime::date
                   <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date

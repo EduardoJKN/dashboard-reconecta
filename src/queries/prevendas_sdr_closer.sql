@@ -79,7 +79,7 @@ acts_pair AS (
         sdr, fonte_sdr, closer,
         COUNT(*)::bigint                                         AS agendamentos,
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
+            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'
               AND start_datetime::date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint
                                                                   AS comparecimentos

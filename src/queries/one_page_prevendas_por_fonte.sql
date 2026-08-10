@@ -204,16 +204,12 @@ ag_dia AS (
         )::bigint                                                       AS agendamentos_menos_12_ate_hoje,
         -- Regra oficial: src/reuniao_concluida.py
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) IN (
-                      'concluída', 'concluído', 'concluida', 'concluido'
-                  )
+            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'
               AND data_reuniao
                   <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint                                                       AS comparecimentos,
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) IN (
-                      'concluída', 'concluído', 'concluida', 'concluido'
-                  )
+            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'
               AND data_reuniao
                   <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint                                                       AS comparecimentos_ate_hoje
