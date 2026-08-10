@@ -83,7 +83,12 @@ agend_por_executiva AS (
             WHERE za.status_reuniao <> 'Vencida'
         )                                                       AS agendamentos,
         COUNT(DISTINCT za.id) FILTER (
-            WHERE za.status_reuniao IN ('Concluída','Concluído')
+            WHERE TRIM(LOWER(COALESCE(za.status_reuniao, ''))) IN (
+                      'concluída', 'concluído', 'concluida', 'concluido'
+                  )
+              AND za.start_datetime IS NOT NULL
+              AND za.start_datetime::date
+                  <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )                                                       AS comparecimentos
     FROM zoho_activities za
     JOIN deals_validos dv ON dv.deal_id = za.what_id::text

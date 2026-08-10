@@ -107,7 +107,7 @@ SELECT
     COALESCE(ce.canal_final, 'Sem canal') AS canal,
     COUNT(DISTINCT a.email_norm)::bigint  AS leads_com_agendamento,
     COUNT(DISTINCT a.email_norm) FILTER (
-        WHERE a.status_reuniao = 'Concluída'
+        WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
     )::bigint                             AS leads_com_comparecimento
 FROM activities_in_window a
 LEFT JOIN canal_email ce ON ce.email_normalizado = a.email_norm

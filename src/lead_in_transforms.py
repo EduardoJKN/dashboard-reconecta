@@ -102,8 +102,8 @@ _RUIDO_PRE_LIMIAR_PCT = 15.0
 _STATUS_MAP: dict[str, tuple[str, ...]] = {
     "Agendada": ("agendada", "agendado"),
     "Realizada": (
+        # Alinhado à regra oficial (src/reuniao_concluida.py).
         "concluída", "concluído", "concluida", "concluido",
-        "realizada", "realizado", "compareceu", "comparecida", "comparecido",
     ),
     "Cancelada": ("cancelada", "cancelado", "cancelou"),
     "Reagendada": ("reagendada", "reagendado"),

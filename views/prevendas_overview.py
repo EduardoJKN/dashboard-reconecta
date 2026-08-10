@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.marketing_queries import get_mkt_visao_geral_periodo
+from src.reuniao_concluida import series_status_reuniao_concluida
 from src.prevendas_transforms import (
     prevendas_agregar_por_granularidade,
     prevendas_anotar_sdr,
@@ -286,7 +287,7 @@ if not _df_det_para_origens.empty:
         _det["data_venda"].notna()
         & _det["data_venda"].between(_ini_ts, _fim_ts, inclusive="both")
     )
-    _is_concl   = _det["status_filtro"].isin(["Concluída", "Concluído"])
+    _is_concl   = series_status_reuniao_concluida(_det["status_filtro"])
     _is_venc    = _det["status_filtro"] == "Vencida"
     _is_mais_12 = (
         (_det.get("classificacao_crm_filtro",
@@ -2037,7 +2038,7 @@ with st.expander("Ver leads/agendamentos detalhados"):
                 base_mask
                 & mask_atividade
                 & mask_data_agendamento
-                & tabela_det["status_filtro"].isin(["Concluída", "Concluído"])
+                & tabelaseries_status_reuniao_concluida(_det["status_filtro"])
             ),
             "Vendas": base_mask & mask_venda & mask_data_venda,
             "Cancelados": (
@@ -2083,7 +2084,7 @@ with st.expander("Ver leads/agendamentos detalhados"):
             | (tabela_det["classificacao_filtro"]    == "Atua -12")
         )
         mask_comparecimentos = mask_agendamentos & (
-            tabela_det["status_filtro"].isin(["Concluída", "Concluído"])
+            tabelaseries_status_reuniao_concluida(_det["status_filtro"])
         )
         mask_vendas = (
             (tabela_det["tipo_registro_base_filtro"] == "Venda")

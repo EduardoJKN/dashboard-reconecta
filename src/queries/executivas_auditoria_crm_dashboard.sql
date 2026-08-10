@@ -5,7 +5,7 @@
 --   agendamentos     : status_reuniao IS NOT NULL AND lower(trim) <> 'vencida'
 --                      data_ref = start_datetime::date
 --                      atribuição no ranking = za.owner (host da activity)
---   comparecimentos  : status_reuniao IN ('Concluída', 'Concluído')
+--   comparecimentos  : regra oficial (src/reuniao_concluida.py)
 --   vendas           : deal stage Ganho + tipo_venda Novo cliente +
 --                      COALESCE(data_hora_compra, created_at) no período
 --                      atribuição = executiva_vendas do deal
@@ -74,7 +74,7 @@ base AS (
             AND lower(btrim(a.status_reuniao)) <> 'vencida'
         )                                                             AS flag_agendamento_dashboard,
         (
-            a.status_reuniao IN ('Concluída', 'Concluído')
+            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
         )                                                             AS flag_comparecimento_dashboard,
         (
             d.stage = 'Ganho'
@@ -84,23 +84,23 @@ base AS (
         )                                                             AS flag_venda_dashboard,
         -- Fallback hipotético (NÃO usado no dashboard hoje — só auditoria)
         (
-            NOT (a.status_reuniao IN ('Concluída', 'Concluído'))
+            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido'))
             AND d.stage ILIKE '%reuni%conclu%'
         )                                                             AS flag_comparecimento_fallback_stage,
         (
-            NOT (a.status_reuniao IN ('Concluída', 'Concluído'))
+            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido'))
             AND lower(btrim(COALESCE(d.triagem, ''))) IN (
                 'concluída', 'concluida', 'lead qualificado'
             )
         )                                                             AS flag_comparecimento_fallback_triagem,
         (
-            a.status_reuniao IN ('Concluída', 'Concluído')
+            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
             AND d.deal_closer_id IS NOT NULL
             AND a.activity_owner_id IS NOT NULL
             AND d.deal_closer_id <> a.activity_owner_id
         )                                                             AS flag_closer_owner_divergente,
         (
-            NOT (a.status_reuniao IN ('Concluída', 'Concluído'))
+            NOT (TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido'))
             AND d.stage ILIKE '%reuni%conclu%'
         )                                                             AS flag_deal_reuniao_concluida_activity_nao
     FROM acts a

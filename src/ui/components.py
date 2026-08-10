@@ -54,7 +54,9 @@ _RANKING_COUNT_LABELS: dict[str, tuple[str, str]] = {
     ),
     "comparecimentos": (
         "Comparecimentos",
-        "Reuniões com status_reuniao Concluída/Concluído na data da call.",
+        "Activity Consulta/Indicação com status concluída/concluído "
+        "(com/sem acento), start_datetime::date no período e ≤ hoje "
+        "(America/Sao_Paulo). Contagem DISTINCT activity_id.",
     ),
     "comparecimentos_ajustado": (
         "Comparec. ajustado",

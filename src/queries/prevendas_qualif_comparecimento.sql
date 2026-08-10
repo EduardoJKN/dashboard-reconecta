@@ -13,7 +13,7 @@
 --   3) Interseção — tem_pre AND eh_nao_qualificados
 --
 -- Comparecimento:
---   status_reuniao IN ('Concluída', 'Concluído')
+--   status_reuniao concluída (regra oficial src/reuniao_concluida.py)
 -- =============================================================================
 WITH acts AS (
     SELECT
@@ -103,7 +103,13 @@ SELECT
         AND btrim(d.stage) = 'Recepção'
     )                                                       AS pre_mais_nao_qualificados,
     NULLIF(TRIM(uo.first_name || ' ' || uo.last_name), '')  AS activity_owner_nome,
-    (ac.status_reuniao IN ('Concluída', 'Concluído'))       AS comparecimento
+    (TRIM(LOWER(COALESCE(ac.status_reuniao, ''))) IN (
+         'concluída', 'concluído', 'concluida', 'concluido'
+     )
+     AND ac.start_datetime IS NOT NULL
+     AND ac.start_datetime::date
+         <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
+    )                                                       AS comparecimento
 FROM acts ac
 LEFT JOIN zoho_deals d ON d.id::text = NULLIF(ac.deal_id, '')
 LEFT JOIN zoho_users u ON u.id::text = d.sdr_ss::text

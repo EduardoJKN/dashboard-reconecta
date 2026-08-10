@@ -400,7 +400,7 @@ agend_compar_por_campanha AS (
         dec.utm_campaign_norm                                   AS campaign_name_norm,
         COUNT(DISTINCT a.email_norm)::bigint                    AS agendamentos,
         COUNT(DISTINCT a.email_norm) FILTER (
-            WHERE a.status_reuniao = 'Concluída'
+            WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
         )::bigint                                               AS comparecimentos
     FROM distinct_email_campanha dec
     LEFT JOIN activities_in_window a USING (email_norm)
@@ -413,7 +413,7 @@ agend_compar_aplicacoes AS (
             WHERE a.activity_id IS NOT NULL
         )::bigint                                               AS agendamentos_apl,
         COUNT(DISTINCT aec.email_norm) FILTER (
-            WHERE a.status_reuniao = 'Concluída'
+            WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
         )::bigint                                               AS comparecimentos_apl
     FROM aplicacoes_email_campanha aec
     LEFT JOIN activities_in_window a ON a.email_norm = aec.email_norm
@@ -425,7 +425,7 @@ agend_compar_aplicacoes_globais AS (
             WHERE a.activity_id IS NOT NULL
         )::bigint                                               AS agendamentos_apl,
         COUNT(DISTINCT ad.email_norm) FILTER (
-            WHERE a.status_reuniao = 'Concluída'
+            WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
         )::bigint                                               AS comparecimentos_apl
     FROM aplicacoes_dedup ad
     LEFT JOIN activities_in_window a ON a.email_norm = ad.email_norm
@@ -436,7 +436,7 @@ agend_compar_aplicacoes_vinculados AS (
             WHERE a.activity_id IS NOT NULL
         )::bigint                                               AS agendamentos_apl,
         COUNT(DISTINCT aev.email_norm) FILTER (
-            WHERE a.status_reuniao = 'Concluída'
+            WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
         )::bigint                                               AS comparecimentos_apl
     FROM aplicacoes_emails_vinculados aev
     LEFT JOIN activities_in_window a ON a.email_norm = aev.email_norm
@@ -500,12 +500,12 @@ emails_comp_leads_campanha AS (
     SELECT dec.utm_campaign_norm AS campaign_name_norm, a.email_norm
     FROM distinct_email_campanha dec
     INNER JOIN activities_in_window a ON a.email_norm = dec.email_norm
-    WHERE a.status_reuniao = 'Concluída'
+    WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
     UNION
     SELECT dech.utm_campaign_norm AS campaign_name_norm, a.email_norm
     FROM distinct_email_campanha_hist dech
     INNER JOIN activities_in_window a ON a.email_norm = dech.email_norm
-    WHERE a.status_reuniao = 'Concluída'
+    WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
       AND dech.email_norm NOT IN (SELECT email_norm FROM leads_periodo_emails)
 ),
 comp_leads_decomp_por_campanha AS (

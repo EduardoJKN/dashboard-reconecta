@@ -80,7 +80,14 @@ acts_lead_sdr AS (
         a.fonte_sdr,
         a.deal_id,
         BOOL_OR(TRUE)                                AS teve_agend,
-        BOOL_OR(a.status_reuniao = 'Concluída')      AS teve_compar
+        BOOL_OR(
+            TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN (
+                'concluída', 'concluído', 'concluida', 'concluido'
+            )
+            AND a.start_datetime IS NOT NULL
+            AND a.start_datetime::date
+                <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
+        ) AS teve_compar
     FROM acts a
     GROUP BY a.email_norm, a.sdr, a.fonte_sdr, a.deal_id
 ),

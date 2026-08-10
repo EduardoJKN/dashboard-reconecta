@@ -16,6 +16,7 @@ from src.repositories import (
     get_leads_visao_geral,
     get_vendas_leads_detalhe_diario,
 )
+from src.reuniao_concluida import REUNIAO_CONCLUIDA_HELP
 from src.transforms import (
     CHURN_POS_SEM_IDENTIFICADO,
     EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
@@ -416,7 +417,10 @@ k = executivas_kpis(df_bruto)
 
 opor_v = float(k.get(cmap["oportunidades"], 0) or 0)
 agen_v = float(k.get(cmap["agendamentos"], 0)  or 0)
-comp_v = float(k.get(cmap["comparecimentos"], 0) or 0)
+# Comparecimentos oficiais (zoho_activities / regra src/reuniao_concluida.py),
+# mesma base do card "Reunião Concluída" e do drilldown — não usa a BI view.
+_df_comp_oficial = _comp_zoho_por_classif(_df_comp_aj, classif_sel)
+comp_v = float(len(_df_comp_oficial))
 vend_v = float(k.get(cmap["vendas"], 0) or 0)
 mont_v = float(k.get(cmap["montante"], 0) or 0) if tem_fin else None
 rec_v  = float(k.get(cmap["receita"], 0) or 0)  if tem_fin else None
@@ -509,7 +513,7 @@ with r2c1:
                    hint="agend. ÷ oportunidades")
 with r2c2:
     metric_card_v2("% Comparecimento", pct(pct_comp),
-                   hint="comparec. ÷ agendamentos")
+                   hint="comparec. oficiais ÷ agendamentos")
 with r2c3:
     metric_card_v2("% Agend. -> Vendas", pct(pct_conv),
                    hint="ganhos ÷ agendamentos")
@@ -544,7 +548,8 @@ with f3:
     # Base do card "Reunião Concluída" — filtrada pela classificação ativa.
     # Mesma base alimenta o expander de detalhes (linha ~480), garantindo
     # `valor do card == #linhas da tabela`.
-    _df_card_reuniao_zoho = _comp_zoho_por_classif(_df_comp_aj, classif_sel)
+    # Reusa a mesma base já usada em % Comparecimento / % Conv. Vendas.
+    _df_card_reuniao_zoho = _df_comp_oficial
     _qtd_card_reuniao_zoho = len(_df_card_reuniao_zoho)
 
     _comp_bd: list[tuple[str, str]] = [
@@ -566,15 +571,15 @@ with f3:
         ),
     ]
     _hint_card = (
-        "classificação 'Concluída no Zoho'"
+        "regra oficial · start_datetime ≤ hoje BRT"
         if is_todas
-        else f"'Concluída no Zoho' · classif {classif_sel}"
+        else f"regra oficial · classif {classif_sel}"
     )
     metric_card_v2(
         "Reunião Concluída",
         int_br(_qtd_card_reuniao_zoho),
         hint=_hint_card,
-        help=COMPARECIMENTO_AJUSTADO_HELP,
+        help=REUNIAO_CONCLUIDA_HELP,
         breakdown=_comp_bd,
         accent=True,
     )
@@ -1023,6 +1028,32 @@ with tab_rank:
 
     if ranking is not None and not ranking.empty:
         ranking = comparecimento_ajustado_merge_ranking(ranking, _comp_aj_agg)
+        # Sobrescreve comparecimentos do ranking pela regra oficial (mesmo
+        # universo do card), respeitando a classificação selecionada.
+        _oficial_rank = _comp_zoho_por_classif(_df_comp_aj, classif_sel)
+        if not _oficial_rank.empty and "executiva" in _oficial_rank.columns:
+            _idcol = "activity_id" if "activity_id" in _oficial_rank.columns else None
+            if _idcol:
+                _map_oficial = (
+                    _oficial_rank.groupby(
+                        _oficial_rank["executiva"].astype(str).str.strip()
+                    )[_idcol].nunique()
+                )
+            else:
+                _map_oficial = (
+                    _oficial_rank.groupby(
+                        _oficial_rank["executiva"].astype(str).str.strip()
+                    ).size()
+                )
+            ranking["comparecimentos"] = (
+                ranking["executiva"].astype(str).str.strip()
+                .map(_map_oficial).fillna(0).astype(int)
+            )
+            _comparecimentos = _col_or_zero(ranking, "comparecimentos")
+            _agendamentos = _col_or_zero(ranking, "agendamentos")
+            _vendas = _col_or_zero(ranking, "vendas")
+            ranking["pct_comparecimento"] = _safe_pct_vec(_comparecimentos, _agendamentos)
+            ranking["pct_vendas"] = _safe_pct_vec(_vendas, _comparecimentos)
         _validacao_comp_aj = comparecimento_ajustado_validacao(
             _kpi_comp_aj,
             _comp_aj_agg,

@@ -23,6 +23,7 @@ from .team_classification import (
     classify_sdr,
 )
 from .ui.theme import int_br
+from .reuniao_concluida import hoje_brasil, series_status_reuniao_concluida
 from .transforms import (
     STAGE_HINT_NAO_QUALIFICADOS,
     STAGE_HINT_QUALIFICADOS,
@@ -767,7 +768,14 @@ def prevendas_diario_filtrado_por_sdr(df_detalhe_norm: pd.DataFrame,
         (df.get("classificacao_crm_filtro", pd.Series("", index=df.index)) == "Atua +12")
         | (df["classificacao_filtro"] == "Atua +12")
     )
-    is_concluido = df["status_filtro"].isin(["Concluída", "Concluído"])
+    is_concluido = series_status_reuniao_concluida(df["status_filtro"])
+    # Bloqueio de futuro (America/Sao_Paulo) — alinhado à regra oficial.
+    _hoje = hoje_brasil()
+    not_future = (
+        df["data_agendamento"].notna()
+        & (df["data_agendamento"].dt.date <= _hoje)
+    )
+    is_concluido = is_concluido & not_future
 
     def _conta(mask, data_col, unidade_col) -> dict:
         sub = df.loc[mask, [data_col, unidade_col]].dropna()
@@ -943,7 +951,7 @@ def prevendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
                    | (df_det_norm["classificacao_filtro"]     == "Atua -12")))
     if metrica == "comparecimentos":
         return (base_atividade & em_periodo_agend
-                & df_det_norm["status_filtro"].isin(["Concluída", "Concluído"]))
+                & series_status_reuniao_concluida(df_det_norm["status_filtro"]))
     if metrica == "vendas":
         return base_venda & em_periodo_vnd
     if metrica == "cancelados":

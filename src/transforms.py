@@ -8,6 +8,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .reuniao_concluida import (
+    hoje_brasil,
+    mask_reuniao_concluida,
+    series_status_reuniao_concluida,
+)
+
 from .team_classification import (
     TIME_VENDAS_VISUAL_LABELS,
     TIME_VENDAS_VISUAL_OUTROS,
@@ -1035,7 +1041,7 @@ def vendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
     is_nao_atua = ~flag_mais_12 & ~flag_menos_12 & flag_nao_atua
     is_sem_clf  = ~flag_mais_12 & ~flag_menos_12 & ~flag_nao_atua
 
-    status_concluida = df_det_norm["status_filtro"].isin(["Concluída", "Concluído"])
+    status_concluida = series_status_reuniao_concluida(df_det_norm["status_filtro"])
     status_cancelada = df_det_norm["status_filtro"].isin(["Cancelada", "Cancelado"])
     status_vencida   = df_det_norm["status_filtro"] == "Vencida"
 
@@ -1693,7 +1699,7 @@ def comparecimento_ajustado_classificacao_dashboard(
     is_noshow = _comparecimento_ajustado_stage_is_noshow(stage)
     is_cancel = status_lower.isin(["cancelada", "cancelado"])
     is_vencida = status_lower.eq("vencida")
-    is_zoho = status.isin(["Concluída", "Concluído"])
+    is_zoho = series_status_reuniao_concluida(df["status_reuniao"])
     is_agendada = status.isin(["Agendada", "Agendado"])
     has_start = start.notna()
     is_futura = is_agendada & has_start & (start > agora_brt)
@@ -1742,17 +1748,25 @@ def comparecimento_ajustado_aplicar_flags(
     )
     cls = out["classificacao_dashboard"]
 
-    out["flag_comparecimento_zoho"] = cls.eq("Concluída no Zoho")
+    # Regra oficial independente da cascata de classificação do teste:
+    # status normalizado + start_datetime::date <= hoje BRT (não usa deal stage).
+    out["flag_comparecimento_zoho"] = mask_reuniao_concluida(
+        out,
+        hoje=hoje_brasil(agora_brt),
+        require_activity_type=("activity_type" in out.columns),
+    )
     out["flag_agendada_horario_encerrado"] = cls.eq("Agendada com horário encerrado")
     out["flag_agendada_em_andamento"] = cls.eq("Agendada em andamento")
     out["flag_agendada_futura"] = cls.eq("Agendada futura")
     out["flag_noshow"] = cls.eq("No-show")
     out["flag_cancelada"] = cls.eq("Cancelada")
     out["flag_fora_vencida"] = cls.eq("Vencida")
-    out["flag_comparecimento_ajustado"] = cls.isin([
-        "Concluída no Zoho",
-        "Agendada com horário encerrado",
-    ])
+    # Ajustado = regra oficial Zoho OU Agendada com horário encerrado.
+    # Usa flag_comparecimento_zoho (já bloqueia futuro) em vez da classif.
+    out["flag_comparecimento_ajustado"] = (
+        out["flag_comparecimento_zoho"].fillna(False)
+        | out["flag_agendada_horario_encerrado"].fillna(False)
+    )
     out["entra_comparecimento_ajustado"] = out["flag_comparecimento_ajustado"]
     out["entra_reuniao_cancelada"] = cls.isin(["No-show", "Cancelada"])
     out["observacao"] = cls.map(_COMPARECIMENTO_OBSERVACAO).fillna(

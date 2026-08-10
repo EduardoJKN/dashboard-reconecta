@@ -209,9 +209,8 @@ agend_por_deal AS (
     WHERE anp.deal_id IS NOT NULL AND anp.deal_id <> ''
 ),
 acts_comparecimentos_periodo AS (
-    -- Comparecimentos: activities concluídas no período (mesma janela
-    -- de agendamentos; status IN ('Concluída','Concluído') — regra
-    -- centralizada do projeto / prevendas_overview_diario.sql).
+    -- Comparecimentos: regra oficial (src/reuniao_concluida.py).
+    -- Data = start_datetime::date; bloqueia futuro (America/Sao_Paulo).
     SELECT
         a.id::text                              AS activity_id,
         CASE
@@ -221,11 +220,10 @@ acts_comparecimentos_periodo AS (
         END                                     AS deal_id
     FROM zoho_activities a
     WHERE a.activity_type IN ('Consulta', 'Indicação')
-      AND a.status_reuniao IN ('Concluída', 'Concluído')
-      AND (
-          a.created_time::date     BETWEEN :data_ini AND :data_fim
-          OR a.start_datetime::date BETWEEN :data_ini AND :data_fim
-      )
+      AND a.start_datetime IS NOT NULL
+      AND a.start_datetime::date BETWEEN :data_ini AND :data_fim
+      AND a.start_datetime::date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
+      AND TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN ('concluída', 'concluído', 'concluida', 'concluido')
 ),
 comp_por_deal AS (
     SELECT

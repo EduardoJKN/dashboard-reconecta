@@ -187,24 +187,35 @@ ag_dia AS (
         )::bigint                                                       AS agendamentos_menos_12,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE status_reuniao <> 'Vencida'
-              AND data_reuniao <= CURRENT_DATE
+              AND data_reuniao
+                  <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint                                                       AS agendamentos_ate_hoje,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE status_reuniao <> 'Vencida'
-              AND data_reuniao <= CURRENT_DATE
+              AND data_reuniao
+                  <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
               AND tem_mais_12
         )::bigint                                                       AS agendamentos_mais_12_ate_hoje,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE status_reuniao <> 'Vencida'
-              AND data_reuniao <= CURRENT_DATE
+              AND data_reuniao
+                  <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
               AND tem_menos_12
         )::bigint                                                       AS agendamentos_menos_12_ate_hoje,
+        -- Regra oficial: src/reuniao_concluida.py
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE status_reuniao IN ('Concluída', 'Concluído')
+            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) IN (
+                      'concluída', 'concluído', 'concluida', 'concluido'
+                  )
+              AND data_reuniao
+                  <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint                                                       AS comparecimentos,
         COUNT(DISTINCT activity_id) FILTER (
-            WHERE status_reuniao IN ('Concluída', 'Concluído')
-              AND data_reuniao <= CURRENT_DATE
+            WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) IN (
+                      'concluída', 'concluído', 'concluida', 'concluido'
+                  )
+              AND data_reuniao
+                  <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint                                                       AS comparecimentos_ate_hoje
     FROM acts_reuniao
     GROUP BY data_reuniao, fonte

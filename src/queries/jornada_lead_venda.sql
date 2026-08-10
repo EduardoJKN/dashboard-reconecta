@@ -118,7 +118,12 @@ act_compareceu AS (
         ts_reuniao_agendada AS ts_comparecimento
     FROM acts_consulta
     WHERE deal_id IS NOT NULL
-      AND status_reuniao = 'Concluída'
+      AND TRIM(LOWER(COALESCE(status_reuniao, ''))) IN (
+              'concluída', 'concluído', 'concluida', 'concluido'
+          )
+      AND start_datetime IS NOT NULL
+      AND start_datetime::date
+          <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
     ORDER BY deal_id, ts_reuniao_agendada ASC, activity_id ASC
 ),
 sdr_via_activity AS (

@@ -173,7 +173,12 @@ acts_agg AS (
             WHERE COALESCE(dc.tem_menos_12, FALSE)
         )::bigint                                                AS agendamentos_menos_12,
         COUNT(DISTINCT a.activity_id) FILTER (
-            WHERE a.status_reuniao IN ('Concluída', 'Concluído')
+            WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) IN (
+                      'concluída', 'concluído', 'concluida', 'concluido'
+                  )
+              AND a.start_datetime IS NOT NULL
+              AND a.start_datetime::date
+                  <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint                                                AS comparecimentos,
         COUNT(DISTINCT a.activity_id) FILTER (
             WHERE a.status_reuniao IN ('Cancelada', 'Cancelado')
