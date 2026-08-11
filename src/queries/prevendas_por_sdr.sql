@@ -206,8 +206,8 @@ acts_agg AS (
         )::bigint                                                AS agendamentos_menos_12,
         COUNT(DISTINCT a.activity_id) FILTER (
             WHERE TRIM(LOWER(COALESCE(a.status_reuniao, ''))) LIKE 'conclu%'
-              AND a.start_datetime IS NOT NULL
-              AND a.start_datetime::date
+              AND a.data_ref IS NOT NULL
+              AND a.data_ref
                   <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint                                                AS comparecimentos,
         COUNT(DISTINCT a.activity_id) FILTER (

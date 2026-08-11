@@ -54,6 +54,7 @@ acts AS (
         lwd.email_norm,
         lwd.deal_id,
         za.status_reuniao,
+        za.start_datetime,
         COALESCE(
             NULLIF(btrim(za.prevendas), ''),
             TRIM(u.first_name || ' ' || u.last_name),

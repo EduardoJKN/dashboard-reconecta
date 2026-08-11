@@ -80,7 +80,8 @@ acts_pair AS (
         COUNT(*)::bigint                                         AS agendamentos,
         COUNT(DISTINCT activity_id) FILTER (
             WHERE TRIM(LOWER(COALESCE(status_reuniao, ''))) LIKE 'conclu%'
-              AND start_datetime::date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
+              AND data_ref IS NOT NULL
+              AND data_ref <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
         )::bigint
                                                                   AS comparecimentos
     FROM acts
