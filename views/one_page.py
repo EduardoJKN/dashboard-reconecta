@@ -122,7 +122,7 @@ def _sum(df: pd.DataFrame, col: str) -> float:
 #   - hero    → valor + padding maior (Aplicações, Agendamentos, Receita,
 #               Investido, Ticket médio)
 #   - compact → padding/altura ainda menores (cards de apoio: ±12, CPA,
-#               Ascensões, Renovações, Indicações, custos)
+#               Ascensões, Renovações, Indicações, Upgrades, custos)
 #   - default → intermediário (Leads, % Apl/Leads, %s, Agend./Comp., etc.)
 #
 # CSS é escopado via `:has(.op-card)` — só apertam o gap as linhas
@@ -2142,7 +2142,7 @@ def _render_onepage_vendas(
     section_title("Vendas / Financeiro", "meta proporcional ao período")
     k_vendas, k_vendas_prev = data.k_vendas, data.k_vendas_prev
     pct_conversao = _safe_div(k_vendas["novos"], comparecimentos) * 100
-    r = st.columns(4, gap="small")
+    r = st.columns(5, gap="small")
     with r[0]:
         one_page_metric_card(
             "Novos",
@@ -2179,6 +2179,17 @@ def _render_onepage_vendas(
             "Indic.",
             int_br(k_vendas["indicacoes"]),
             delta_pct=delta_pct(k_vendas["indicacoes"], k_vendas_prev["indicacoes"]),
+            compact=True,
+            row_class="op-row-vendas-top",
+        )
+    with r[4]:
+        one_page_metric_card(
+            "Upg.",
+            int_br(k_vendas.get("upgrades", 0)),
+            delta_pct=delta_pct(
+                k_vendas.get("upgrades", 0),
+                k_vendas_prev.get("upgrades", 0),
+            ),
             compact=True,
             row_class="op-row-vendas-top",
         )

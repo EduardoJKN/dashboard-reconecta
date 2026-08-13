@@ -1171,7 +1171,9 @@ def bar_ranked(df: pd.DataFrame, category: str, value: str,
 def bar_ranked_vendas_mix(
     df: pd.DataFrame,
     category: str = "executiva",
-    mix_cols: tuple[str, ...] = ("novos", "ascensoes", "renovacoes", "indicacoes"),
+    mix_cols: tuple[str, ...] = (
+        "novos", "ascensoes", "renovacoes", "indicacoes", "upgrades",
+    ),
     top_n: int = 12,
     height: int | None = None,
     label_max_len: int = 26,
@@ -1222,6 +1224,7 @@ def bar_ranked_vendas_mix(
             ascensoes=row["ascensoes"] if "ascensoes" in data.columns else 0,
             renovacoes=row["renovacoes"] if "renovacoes" in data.columns else 0,
             indicacoes=row["indicacoes"] if "indicacoes" in data.columns else 0,
+            upgrades=row["upgrades"] if "upgrades" in data.columns else 0,
         )
         for _, row in data.iterrows()
     ]

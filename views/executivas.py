@@ -425,13 +425,14 @@ vend_v = float(k.get(cmap["vendas"], 0) or 0)
 mont_v = float(k.get(cmap["montante"], 0) or 0) if tem_fin else None
 rec_v  = float(k.get(cmap["receita"], 0) or 0)  if tem_fin else None
 
-# Ganhos = mix canônico (novas + ascensões + renovações + indicações) em
+# Ganhos = mix canônico (novas + ascensões + renovações + indicações + upgrades) em
 # "Todas"; nos buckets de classif continua `ganhos_*` via `vend_v`.
 # % Agend. -> Vendas e % Conv. Vendas usam esse total — alinhado ao card Ganhos.
 if is_todas:
     ganhos_v = vendas_mix_total(
         k.get("novos", 0), k.get("ascensoes", 0),
         k.get("renovacoes", 0), k.get("indicacoes", 0),
+        k.get("upgrades", 0),
     )
 else:
     ganhos_v = vend_v
@@ -635,6 +636,7 @@ with f6:
         format_vendas_mix_hint(
             k.get("novos", 0), k.get("ascensoes", 0),
             k.get("renovacoes", 0), k.get("indicacoes", 0),
+            k.get("upgrades", 0),
         )
         if is_todas else None
     )
@@ -1130,7 +1132,7 @@ with tab_rank:
     st.caption(
         "**Oportunidades** = deals criados no período · **Agendamentos** = reuniões "
         "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída · "
-        "**Vendas** = novos + ascensões + renovações + indicações. "
+        "**Vendas** = novos + ascensões + renovações + indicações + upgrades. "
         "Agendamentos e comparecimentos seguem o *owner* da activity no CRM; "
         "oportunidades e vendas seguem o closer do deal."
     )
@@ -1446,7 +1448,7 @@ with tab_rank:
                     with mc1:
                         metric_card_v2(
                             "Vendas", int_br(_sum_col("vendas")),
-                            hint="novos + ascensões + renovações + indicações",
+                            hint="novos + ascensões + renovações + indicações + upgrades",
                             accent=True,
                             breakdown=_forma_vendas_breakdown,
                         )

@@ -279,13 +279,15 @@ with s1:
         metric_card_v2("Leads Totais", "—",
                        hint="fonte de leads indisponível")
 with s2:
-    # Total de ganhos = novas + ascensões + renovações + indicações
+    # Total de ganhos = novas + ascensões + renovações + indicações + upgrades
     # (mesmo mix do ranking Top Closers). A legenda distingue a natureza.
     ganhos_tot = vendas_mix_total(
         k["novos"], k["ascensoes"], k["renovacoes"], k["indicacoes"],
+        k.get("upgrades", 0),
     )
     ganhos_prev = vendas_mix_total(
         kp["novos"], kp["ascensoes"], kp["renovacoes"], kp["indicacoes"],
+        kp.get("upgrades", 0),
     )
     metric_card_v2(
         "Ganhos",
@@ -293,6 +295,7 @@ with s2:
         delta_pct=delta_pct(ganhos_tot, ganhos_prev),
         hint=format_vendas_mix_hint(
             k["novos"], k["ascensoes"], k["renovacoes"], k["indicacoes"],
+            k.get("upgrades", 0),
         ),
     )
     if media_movel_val is not None:
@@ -479,7 +482,7 @@ section_title(
 st.caption(
     "**Oportunidades** = deals criados no período · **Agendamentos** = reuniões "
     "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída · "
-    "**Vendas** = novos + ascensões + renovações + indicações. "
+    "**Vendas** = novos + ascensões + renovações + indicações + upgrades. "
     "Agendamentos e comparecimentos seguem o *owner* da activity no CRM."
 )
 
@@ -734,7 +737,7 @@ else:
                 with mc1:
                     metric_card_v2(
                         "Vendas", int_br(_sum_col_h("vendas")),
-                        hint="novos + ascensões + renovações + indicações",
+                        hint="novos + ascensões + renovações + indicações + upgrades",
                         accent=True,
                         breakdown=_forma_vendas_breakdown_h,
                     )

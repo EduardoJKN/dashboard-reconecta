@@ -68,6 +68,8 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
     _time_vendas_rules = "marcelo_executivas_v2"
     # v1: novos = max(novos, vendas) — Ganho sem data_hora_compra.
     _novos_align_rules = "novos_max_vendas_v1"
+    # v1: upgrades agregado de trat_negocios_rw (ainda fora da view BI).
+    _upgrades_mix_rules = "upgrades_trat_negocios_v1"
 
     df = run_sql_file("dashboard_executivas.sql", _date_params(data_ini, data_fim))
     if not df.empty:
@@ -76,6 +78,7 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
         df = executivas_alinhar_novos_com_vendas(df)
         df.attrs["time_vendas_rules"] = _time_vendas_rules
         df.attrs["novos_align_rules"] = _novos_align_rules
+        df.attrs["upgrades_mix_rules"] = _upgrades_mix_rules
     return df
 
 
@@ -83,8 +86,13 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
 def get_executivas_for_funil_v2(
     data_ini_iso: str,
     data_fim_iso: str,
+    _mix_rules: str = "upgrades_trat_negocios_v1",
 ) -> pd.DataFrame:
-    """Executivas agregadas diárias — view BI v2, colunas mínimas para o Funil."""
+    """Executivas agregadas diárias — view BI v2, colunas mínimas para o Funil.
+
+    `_mix_rules` entra na assinatura só para invalidar o cache do Streamlit
+    quando o mix de vendas (ex.: upgrades) muda — não é usado no SQL.
+    """
     data_ini = date.fromisoformat(data_ini_iso)
     data_fim = date.fromisoformat(data_fim_iso)
     df = run_sql_file(
@@ -482,8 +490,12 @@ def get_prevendas_leads_por_origem(data_ini: date, data_fim: date) -> pd.DataFra
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (detalhe diário)…")
-def get_prevendas_leads_detalhe_diario(data_ini: date,
-                                       data_fim: date) -> pd.DataFrame:
+def get_prevendas_leads_detalhe_diario(
+    data_ini: date,
+    data_fim: date,
+    _mix_rules: str = "upgrade_tipo_venda_v1",
+) -> pd.DataFrame:
+    """Detalhe diário (agendamentos + vendas). `_mix_rules` só invalida cache."""
     df = run_sql_file(
         "prevendas_leads_detalhe_diario.sql",
         _date_params(data_ini, data_fim),

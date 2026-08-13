@@ -210,13 +210,14 @@ sales_base AS (
            ON lf.lead_zoho_id = b.deal_id
     WHERE b.stage = 'Ganho'
       -- Mix de vendas do Top Closers: novos + ascensões + renovações +
-      -- indicações (alinhado a `VENDAS_MIX_COLS` / ranking).
+      -- indicações + upgrades (alinhado a `VENDAS_MIX_COLS` / ranking).
       AND b.tipo_venda IN (
           'Novo cliente',
           'Ascensão',
           'Renovação',
           'Renovação antecipada',
-          'Indicação'
+          'Indicação',
+          'Upgrade'
       )
       AND b.data_venda BETWEEN :data_ini AND :data_fim
     ORDER BY b.deal_id, b.lead_created_at DESC NULLS LAST, b.nome_cliente
