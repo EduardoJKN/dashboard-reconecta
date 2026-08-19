@@ -91,8 +91,8 @@ from src.transforms import (
     STAGE_LABEL_NAO_QUALIFICADOS,
     STAGE_LABEL_QUALIFICADOS,
     VENDAS_MIX_COLS,
-    format_vendas_mix_hint,
-    vendas_mix_total,
+    format_vendas_mix_hint_from_kpis,
+    vendas_mix_from_kpis,
     vendas_detalhe_mask_por_metrica,
     vendas_forma_venda_breakdown,
     vendas_forma_venda_breakdown_rows,
@@ -425,15 +425,10 @@ vend_v = float(k.get(cmap["vendas"], 0) or 0)
 mont_v = float(k.get(cmap["montante"], 0) or 0) if tem_fin else None
 rec_v  = float(k.get(cmap["receita"], 0) or 0)  if tem_fin else None
 
-# Ganhos = mix canônico (novas + ascensões + renovações + indicações + upgrades) em
-# "Todas"; nos buckets de classif continua `ganhos_*` via `vend_v`.
-# % Agend. -> Vendas e % Conv. Vendas usam esse total — alinhado ao card Ganhos.
+# Ganhos = mix canônico em "Todas"; nos buckets de classif continua
+# `ganhos_*` via `vend_v`.
 if is_todas:
-    ganhos_v = vendas_mix_total(
-        k.get("novos", 0), k.get("ascensoes", 0),
-        k.get("renovacoes", 0), k.get("indicacoes", 0),
-        k.get("upgrades", 0),
-    )
+    ganhos_v = vendas_mix_from_kpis(k)
 else:
     ganhos_v = vend_v
 
@@ -633,11 +628,7 @@ with f6:
     # Mesmo `ganhos_v` das taxas % Agend. -> Vendas / % Conv. Vendas (mix em "Todas",
     # `ganhos_*` nos buckets de classif).
     _hint_ganhos = (
-        format_vendas_mix_hint(
-            k.get("novos", 0), k.get("ascensoes", 0),
-            k.get("renovacoes", 0), k.get("indicacoes", 0),
-            k.get("upgrades", 0),
-        )
+        format_vendas_mix_hint_from_kpis(k)
         if is_todas else None
     )
     metric_card_v2("Ganhos", int_br(ganhos_v), hint=_hint_ganhos)
@@ -1132,7 +1123,8 @@ with tab_rank:
     st.caption(
         "**Oportunidades** = deals criados no período · **Agendamentos** = reuniões "
         "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída · "
-        "**Vendas** = novos + ascensões + renovações + indicações + upgrades. "
+        "**Vendas** = mix (novos + ascensões + renovações + indicações + upgrades "
+        "+ eventos + ingressos). "
         "Agendamentos e comparecimentos seguem o *owner* da activity no CRM; "
         "oportunidades e vendas seguem o closer do deal."
     )
@@ -1448,7 +1440,7 @@ with tab_rank:
                     with mc1:
                         metric_card_v2(
                             "Vendas", int_br(_sum_col("vendas")),
-                            hint="novos + ascensões + renovações + indicações + upgrades",
+                            hint="mix de tipo_venda (inclui evento e ingresso)",
                             accent=True,
                             breakdown=_forma_vendas_breakdown,
                         )

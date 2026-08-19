@@ -68,8 +68,8 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
     _time_vendas_rules = "marcelo_executivas_v2"
     # v1: novos = max(novos, vendas) — Ganho sem data_hora_compra.
     _novos_align_rules = "novos_max_vendas_v1"
-    # v1: upgrades agregado de trat_negocios_rw (ainda fora da view BI).
-    _upgrades_mix_rules = "upgrades_trat_negocios_v1"
+    # v2: extras do mix (upgrade, evento, ingresso) via trat_negocios_rw.
+    _upgrades_mix_rules = "tipos_extra_trat_negocios_v2"
 
     df = run_sql_file("dashboard_executivas.sql", _date_params(data_ini, data_fim))
     if not df.empty:
@@ -86,7 +86,7 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
 def get_executivas_for_funil_v2(
     data_ini_iso: str,
     data_fim_iso: str,
-    _mix_rules: str = "upgrades_trat_negocios_v1",
+    _mix_rules: str = "tipos_extra_trat_negocios_v2",
 ) -> pd.DataFrame:
     """Executivas agregadas diárias — view BI v2, colunas mínimas para o Funil.
 
@@ -493,7 +493,7 @@ def get_prevendas_leads_por_origem(data_ini: date, data_fim: date) -> pd.DataFra
 def get_prevendas_leads_detalhe_diario(
     data_ini: date,
     data_fim: date,
-    _mix_rules: str = "upgrade_tipo_venda_v1",
+    _mix_rules: str = "evento_ingresso_tipo_venda_v1",
 ) -> pd.DataFrame:
     """Detalhe diário (agendamentos + vendas). `_mix_rules` só invalida cache."""
     df = run_sql_file(

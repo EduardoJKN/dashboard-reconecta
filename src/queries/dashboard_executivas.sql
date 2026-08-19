@@ -2,11 +2,12 @@
 -- Executivas — KPIs diários por closer (Visão Geral / Executivas & Times).
 -- Fonte principal: bi.vw_dashboard_comercial_executivas_rw
 --
--- `upgrades` NÃO existe ainda na view BI. Agregamos à parte a partir de
--- bi.trat_negocios_rw com a MESMA regra do CTE `tipos_venda` da view
--- (data_compra + stage Ganho + nome da executiva via zoho_users).
+-- Tipos extras (Upgrade, Novo cliente EVENTO, Ingresso) NÃO existem ainda
+-- na view BI. Agregamos à parte a partir de bi.trat_negocios_rw com a MESMA
+-- regra do CTE `tipos_venda` da view (data_compra + stage Ganho + nome da
+-- executiva via zoho_users).
 -- =============================================================================
-WITH upgrades AS (
+WITH tipos_extra AS (
     SELECT
         n.data_compra AS data_ref,
         COALESCE(
@@ -14,14 +15,22 @@ WITH upgrades AS (
             n.executiva_vendas,
             'SEM_EXECUTIVA'
         ) AS executiva,
-        COUNT(*)::bigint AS upgrades
+        COUNT(*) FILTER (WHERE n.tipo_venda = 'Upgrade')::bigint
+            AS upgrades,
+        COUNT(*) FILTER (WHERE n.tipo_venda = 'Novo cliente EVENTO')::bigint
+            AS eventos,
+        COUNT(*) FILTER (WHERE n.tipo_venda LIKE 'Ingresso%')::bigint
+            AS ingressos
     FROM bi.trat_negocios_rw n
     LEFT JOIN zoho_users u
            ON n.executiva_vendas = u.id
     WHERE n.data_compra IS NOT NULL
       AND n.stage = 'Ganho'
-      AND n.tipo_venda = 'Upgrade'
       AND n.data_compra BETWEEN :data_ini AND :data_fim
+      AND (
+          n.tipo_venda IN ('Upgrade', 'Novo cliente EVENTO')
+          OR n.tipo_venda LIKE 'Ingresso%'
+      )
     GROUP BY 1, 2
 )
 SELECT
@@ -49,7 +58,9 @@ SELECT
     v.ascensoes,
     v.renovacoes,
     v.indicacoes,
-    COALESCE(u.upgrades, 0)::bigint AS upgrades,
+    COALESCE(x.upgrades, 0)::bigint AS upgrades,
+    COALESCE(x.eventos, 0)::bigint AS eventos,
+    COALESCE(x.ingressos, 0)::bigint AS ingressos,
     v.variacao_receita_mes_pct,
     v.lead_in_consultoria_gratuita,
     -- leads_lp_form: agregado por data na view (lp_classificacao só agrupa
@@ -87,8 +98,8 @@ SELECT
     v.receita_menos_12,
     v.receita_nao_atua
 FROM bi.vw_dashboard_comercial_executivas_rw v
-LEFT JOIN upgrades u
-       ON u.data_ref = v.data_ref
-      AND u.executiva = v.executiva
+LEFT JOIN tipos_extra x
+       ON x.data_ref = v.data_ref
+      AND x.executiva = v.executiva
 WHERE v.data_ref BETWEEN :data_ini AND :data_fim
 ORDER BY v.data_ref;

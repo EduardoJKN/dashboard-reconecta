@@ -19,8 +19,8 @@ from src.transforms import (
     EXECUTIVAS_RANKING_METRICAS_FINANCEIRAS,
     EXECUTIVAS_RANKING_METRIC_OPTIONS,
     VENDAS_MIX_COLS,
-    format_vendas_mix_hint,
-    vendas_mix_total,
+    format_vendas_mix_hint_from_kpis,
+    vendas_mix_from_kpis,
     ciclo_venda_agregar_por_closer,
     ciclo_venda_filtrar,
     ciclo_venda_merge_ranking,
@@ -279,24 +279,14 @@ with s1:
         metric_card_v2("Leads Totais", "—",
                        hint="fonte de leads indisponível")
 with s2:
-    # Total de ganhos = novas + ascensões + renovações + indicações + upgrades
-    # (mesmo mix do ranking Top Closers). A legenda distingue a natureza.
-    ganhos_tot = vendas_mix_total(
-        k["novos"], k["ascensoes"], k["renovacoes"], k["indicacoes"],
-        k.get("upgrades", 0),
-    )
-    ganhos_prev = vendas_mix_total(
-        kp["novos"], kp["ascensoes"], kp["renovacoes"], kp["indicacoes"],
-        kp.get("upgrades", 0),
-    )
+    # Total de ganhos = mix canônico (todas as naturezas de tipo_venda).
+    ganhos_tot = vendas_mix_from_kpis(k)
+    ganhos_prev = vendas_mix_from_kpis(kp)
     metric_card_v2(
         "Ganhos",
         int_br(ganhos_tot),
         delta_pct=delta_pct(ganhos_tot, ganhos_prev),
-        hint=format_vendas_mix_hint(
-            k["novos"], k["ascensoes"], k["renovacoes"], k["indicacoes"],
-            k.get("upgrades", 0),
-        ),
+        hint=format_vendas_mix_hint_from_kpis(k),
     )
     if media_movel_val is not None:
         ritmo_fmt = f"{media_movel_val:.1f}".replace(".", ",")
@@ -482,7 +472,8 @@ section_title(
 st.caption(
     "**Oportunidades** = deals criados no período · **Agendamentos** = reuniões "
     "na data da call (exc. Vencida) · **Comparecimentos** = status Concluída · "
-    "**Vendas** = novos + ascensões + renovações + indicações + upgrades. "
+    "**Vendas** = mix (novos + ascensões + renovações + indicações + upgrades "
+    "+ eventos + ingressos). "
     "Agendamentos e comparecimentos seguem o *owner* da activity no CRM."
 )
 
@@ -737,7 +728,7 @@ else:
                 with mc1:
                     metric_card_v2(
                         "Vendas", int_br(_sum_col_h("vendas")),
-                        hint="novos + ascensões + renovações + indicações + upgrades",
+                        hint="mix de tipo_venda (inclui evento e ingresso)",
                         accent=True,
                         breakdown=_forma_vendas_breakdown_h,
                     )

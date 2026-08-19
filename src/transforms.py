@@ -96,7 +96,8 @@ _EXEC_SUM = [
     # passou a ser líquido (sem status `Vencida`). Não é re-injetado via
     # detalhe — soma normal por executiva no groupby.
     "vencidos",
-    "novos", "ascensoes", "renovacoes", "indicacoes", "upgrades",
+    "novos", "ascensoes", "renovacoes", "indicacoes",
+    "upgrades", "eventos", "ingressos",
     "lead_in_consultoria_gratuita",
     *_EXEC_CLASSIF_SUM,
 ]
@@ -119,11 +120,9 @@ def executivas_kpis(df: pd.DataFrame) -> dict:
       ticket_medio       = montante / ganhos
       pct_recebimento    = receita / montante
 
-    `ganhos` = novos + ascensões + renovações + indicações + upgrades
-    (mesmo mix do card Ganhos / Top Closers). A chave `vendas` no retorno
-    espelha `ganhos` — todo cálculo do Time de Vendas que leia `vendas`
-    usa o mix. Os componentes (`novos`, `ascensoes`, …) permanecem nas
-    chaves próprias.
+    `ganhos` = mix canônico (novos + ascensões + renovações + indicações
+    + upgrades + eventos + ingressos). Mesmo mix do card Ganhos / Top
+    Closers. A chave `vendas` no retorno espelha `ganhos`.
     """
     if df.empty:
         # Default derivado de `_EXEC_SUM` (inclui buckets) + as 7 pcts derivadas.
@@ -167,7 +166,7 @@ def executivas_por_dia(df: pd.DataFrame) -> pd.DataFrame:
         return df
     cols = [c for c in _EXEC_SUM if c in df.columns]
     out = df.groupby("data_ref", as_index=False)[cols].sum().sort_values("data_ref")
-    # `vendas` diário = mix (novos+asc+ren+ind+upg), igual ao ranking / KPIs.
+    # `vendas` diário = mix canônico, igual ao ranking / KPIs.
     return executivas_recalcular_vendas_mix(out)
 
 
@@ -175,7 +174,8 @@ _RANKING_BASE_COLS = (
     "oportunidades", "agendamentos", "comparecimentos",
     "vendas", "montante", "receita",
     "perdidos", "cancelados", "churn", "vencidos",
-    "novos", "ascensoes", "renovacoes", "indicacoes", "upgrades",
+    "novos", "ascensoes", "renovacoes", "indicacoes",
+    "upgrades", "eventos", "ingressos",
     "lead_in_consultoria_gratuita",
     *_EXEC_CLASSIF_SUM,
 )
@@ -212,7 +212,8 @@ EXECUTIVAS_RANKING_METRICAS_NEUTRAS = frozenset({
 # Mix canônico de vendas no ranking Top Closers / Ver ranking completo.
 # `vendas` passa a ser a soma destas colunas (não só "Novo cliente").
 VENDAS_MIX_COLS: tuple[str, ...] = (
-    "novos", "ascensoes", "renovacoes", "indicacoes", "upgrades",
+    "novos", "ascensoes", "renovacoes", "indicacoes",
+    "upgrades", "eventos", "ingressos",
 )
 VENDAS_MIX_LABELS: dict[str, tuple[str, str]] = {
     "novos":       ("nova", "novas"),
@@ -220,6 +221,8 @@ VENDAS_MIX_LABELS: dict[str, tuple[str, str]] = {
     "renovacoes":  ("renovação", "renovações"),
     "indicacoes":  ("indicação", "indicações"),
     "upgrades":    ("upgrade", "upgrades"),
+    "eventos":     ("evento", "eventos"),
+    "ingressos":   ("ingresso", "ingressos"),
 }
 VENDAS_MIX_HINT_ABBR: dict[str, str] = {
     "novos": "Nov.",
@@ -227,6 +230,8 @@ VENDAS_MIX_HINT_ABBR: dict[str, str] = {
     "renovacoes": "Ren.",
     "indicacoes": "Ind.",
     "upgrades": "Upg.",
+    "eventos": "Evt.",
+    "ingressos": "Ing.",
 }
 
 RANKING_EXIBICAO_ATIVOS = "Somente ativos"
@@ -264,7 +269,8 @@ def executivas_alinhar_novos_com_vendas(df: pd.DataFrame) -> pd.DataFrame:
 
 def executivas_recalcular_vendas_mix(df: pd.DataFrame) -> pd.DataFrame:
     """Sobrescreve `vendas` com a soma do mix canônico
-    (novos + ascensões + renovações + indicações + upgrades).
+    (novos + ascensões + renovações + indicações + upgrades + eventos
+    + ingressos).
 
     Usado no ranking de closers (Top Closers / Ver ranking completo). Se
     nenhuma coluna do mix existir, devolve o df intacto.
@@ -292,15 +298,24 @@ def vendas_mix_total(
     renovacoes: float = 0,
     indicacoes: float = 0,
     upgrades: float = 0,
+    eventos: float = 0,
+    ingressos: float = 0,
 ) -> float:
-    """Soma canônica do mix: novas + ascensões + renovações + indicações + upgrades."""
+    """Soma canônica do mix de ganhos (todas as naturezas de tipo_venda)."""
     return (
         float(novos or 0)
         + float(ascensoes or 0)
         + float(renovacoes or 0)
         + float(indicacoes or 0)
         + float(upgrades or 0)
+        + float(eventos or 0)
+        + float(ingressos or 0)
     )
+
+
+def vendas_mix_from_kpis(k: dict) -> float:
+    """Soma o mix a partir de um dict de KPIs (`novos`, `upgrades`, …)."""
+    return vendas_mix_total(**{c: k.get(c, 0) for c in VENDAS_MIX_COLS})
 
 
 def format_vendas_mix_hint(
@@ -309,14 +324,18 @@ def format_vendas_mix_hint(
     renovacoes: float = 0,
     indicacoes: float = 0,
     upgrades: float = 0,
+    eventos: float = 0,
+    ingressos: float = 0,
 ) -> str:
-    """Legenda curta do card de ganhos, ex.: `Nov. 8 · Asc. 0 · Ren. 1 · Ind. 0 · Upg. 1`."""
+    """Legenda curta, ex.: `Nov. 8 · Asc. 0 · Ren. 1 · Ind. 0 · Upg. 1 · Evt. 2 · Ing. 1`."""
     valores = {
         "novos": novos,
         "ascensoes": ascensoes,
         "renovacoes": renovacoes,
         "indicacoes": indicacoes,
         "upgrades": upgrades,
+        "eventos": eventos,
+        "ingressos": ingressos,
     }
     return " · ".join(
         f"{VENDAS_MIX_HINT_ABBR[col]} {int(float(valores.get(col, 0) or 0))}"
@@ -325,12 +344,18 @@ def format_vendas_mix_hint(
     )
 
 
+def format_vendas_mix_hint_from_kpis(k: dict) -> str:
+    return format_vendas_mix_hint(**{c: k.get(c, 0) for c in VENDAS_MIX_COLS})
+
+
 def format_vendas_mix_label(
     novos: float = 0,
     ascensoes: float = 0,
     renovacoes: float = 0,
     indicacoes: float = 0,
     upgrades: float = 0,
+    eventos: float = 0,
+    ingressos: float = 0,
 ) -> str:
     """Rótulo curto do mix, ex.: `4 novas · 1 renovação · 1 upgrade`."""
     valores = {
@@ -339,6 +364,8 @@ def format_vendas_mix_label(
         "renovacoes": renovacoes,
         "indicacoes": indicacoes,
         "upgrades": upgrades,
+        "eventos": eventos,
+        "ingressos": ingressos,
     }
     parts: list[str] = []
     for col, (sing, plur) in VENDAS_MIX_LABELS.items():
@@ -355,6 +382,8 @@ def format_vendas_mix_bar_label(
     renovacoes: float = 0,
     indicacoes: float = 0,
     upgrades: float = 0,
+    eventos: float = 0,
+    ingressos: float = 0,
 ) -> str:
     """Rótulo do Top Closers (métrica Vendas).
 
@@ -368,6 +397,8 @@ def format_vendas_mix_bar_label(
         "renovacoes": int(float(renovacoes or 0)),
         "indicacoes": int(float(indicacoes or 0)),
         "upgrades": int(float(upgrades or 0)),
+        "eventos": int(float(eventos or 0)),
+        "ingressos": int(float(ingressos or 0)),
     }
     parts: list[str] = []
     for col, (sing, plur) in VENDAS_MIX_LABELS.items():
@@ -394,8 +425,7 @@ def executivas_ranking(df: pd.DataFrame) -> pd.DataFrame:
     das taxas, evitando KeyError em produção quando a view tiver schema
     levemente diferente do esperado em dev.
 
-    `vendas` = novos + ascensoes + renovacoes + indicacoes + upgrades
-    (quando o mix
+    `vendas` = mix canônico (quando o mix
     estiver disponível na view).
     """
     if df.empty or "executiva" not in df.columns:
@@ -1018,7 +1048,8 @@ def vendas_detalhe_mask_por_metrica(df_det_norm: pd.DataFrame,
 
     Métricas SEM cobertura no detalhe → devolve all-False:
       oportunidades, perdidos, lead_in_consultoria_gratuita,
-      novos/ascensoes/renovacoes/indicacoes, leads_lp_form.
+      novos/ascensoes/renovacoes/indicacoes/upgrades/eventos/ingressos,
+      leads_lp_form.
 
     ⚠ Classificação no detalhe usa 2 fontes (`lead_classification` CRM +
     `classificado` ext.leads), enquanto a view usa 4 fontes
@@ -2632,15 +2663,15 @@ def visao_geral_kpis(df_exec: pd.DataFrame, df_inv: pd.DataFrame) -> dict:
     - pct_atingimento     = SUM(receita) / meta
     - media_movel_diaria  = SUM(receita) / COUNT_DISTINCT(data_ref)
 
-    `ganhos` / `vendas` = novos + ascensões + renovações + indicações + upgrades
-    (mesmo mix do card Ganhos / Top Closers).
+    `ganhos` / `vendas` = mix canônico (novos + ascensões + renovações
+    + indicações + upgrades + eventos + ingressos).
     """
+    mix_zeros = {c: 0 for c in VENDAS_MIX_COLS}
     if df_exec.empty:
         return {
             "receita": 0, "montante": 0, "vendas": 0, "ganhos": 0,
             "oportunidades": 0, "leads_totais": 0,
-            "novos": 0, "ascensoes": 0, "renovacoes": 0, "indicacoes": 0,
-            "upgrades": 0,
+            **mix_zeros,
             "perdidos": 0, "cancelados": 0,
             "meta": 0, "pct_atingimento": 0, "meta_status": "sem_dados",
             "pct_recebimento": 0, "ticket_medio": 0,
@@ -2656,15 +2687,12 @@ def visao_geral_kpis(df_exec: pd.DataFrame, df_inv: pd.DataFrame) -> dict:
     oport = float(df_exec["oportunidades"].sum()) if "oportunidades" in df_exec.columns else 0
     leads = oport  # mapeamento: leads totais == oportunidades na view
 
-    novos = float(df_exec["novos"].sum()) if "novos" in df_exec.columns else 0
-    ascensoes = float(df_exec["ascensoes"].sum()) if "ascensoes" in df_exec.columns else 0
-    renovacoes = float(df_exec["renovacoes"].sum()) if "renovacoes" in df_exec.columns else 0
-    indicacoes = float(df_exec["indicacoes"].sum()) if "indicacoes" in df_exec.columns else 0
-    upgrades = float(df_exec["upgrades"].sum()) if "upgrades" in df_exec.columns else 0
+    mix_vals = {
+        c: float(df_exec[c].sum()) if c in df_exec.columns else 0.0
+        for c in VENDAS_MIX_COLS
+    }
     if any(c in df_exec.columns for c in VENDAS_MIX_COLS):
-        ganhos = vendas_mix_total(
-            novos, ascensoes, renovacoes, indicacoes, upgrades,
-        )
+        ganhos = vendas_mix_total(**mix_vals)
     else:
         ganhos = float(df_exec["vendas"].sum()) if "vendas" in df_exec.columns else 0.0
 
@@ -2691,11 +2719,7 @@ def visao_geral_kpis(df_exec: pd.DataFrame, df_inv: pd.DataFrame) -> dict:
         "ganhos": ganhos,
         "oportunidades": oport,
         "leads_totais": leads,
-        "novos": novos,
-        "ascensoes": ascensoes,
-        "renovacoes": renovacoes,
-        "indicacoes": indicacoes,
-        "upgrades": upgrades,
+        **mix_vals,
         "perdidos": perdidos,
         "cancelados": cancelados,
         "investimento": investimento,

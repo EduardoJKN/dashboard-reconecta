@@ -211,13 +211,17 @@ sales_base AS (
     WHERE b.stage = 'Ganho'
       -- Mix de vendas do Top Closers: novos + ascensões + renovações +
       -- indicações + upgrades (alinhado a `VENDAS_MIX_COLS` / ranking).
-      AND b.tipo_venda IN (
-          'Novo cliente',
-          'Ascensão',
-          'Renovação',
-          'Renovação antecipada',
-          'Indicação',
-          'Upgrade'
+      AND (
+          b.tipo_venda IN (
+              'Novo cliente',
+              'Ascensão',
+              'Renovação',
+              'Renovação antecipada',
+              'Indicação',
+              'Upgrade',
+              'Novo cliente EVENTO'
+          )
+          OR b.tipo_venda LIKE 'Ingresso%'
       )
       AND b.data_venda BETWEEN :data_ini AND :data_fim
     ORDER BY b.deal_id, b.lead_created_at DESC NULLS LAST, b.nome_cliente

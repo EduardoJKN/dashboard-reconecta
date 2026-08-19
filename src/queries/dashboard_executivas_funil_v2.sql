@@ -5,7 +5,7 @@
 -- Fonte: `bi.vw_dashboard_comercial_executivas_rw` (mesma view da v1).
 -- Agrega por `data_ref` — reduz linhas transferidas (executiva × dia → dia).
 -- Não aplica `executivas_aplicar_time_vendas_overrides` (só altera time_vendas).
--- `upgrades` vem de bi.trat_negocios_rw (ainda não está na view BI).
+-- Tipos extras (Upgrade / EVENTO / Ingresso) vêm de bi.trat_negocios_rw.
 -- =============================================================================
 WITH base AS (
     SELECT
@@ -24,15 +24,22 @@ WITH base AS (
     WHERE data_ref BETWEEN :data_ini AND :data_fim
     GROUP BY data_ref
 ),
-upgrades AS (
+tipos_extra AS (
     SELECT
         n.data_compra AS data_ref,
-        COUNT(*)::bigint AS upgrades
+        COUNT(*) FILTER (WHERE n.tipo_venda = 'Upgrade')::bigint AS upgrades,
+        COUNT(*) FILTER (WHERE n.tipo_venda = 'Novo cliente EVENTO')::bigint
+            AS eventos,
+        COUNT(*) FILTER (WHERE n.tipo_venda LIKE 'Ingresso%')::bigint
+            AS ingressos
     FROM bi.trat_negocios_rw n
     WHERE n.data_compra IS NOT NULL
       AND n.stage = 'Ganho'
-      AND n.tipo_venda = 'Upgrade'
       AND n.data_compra BETWEEN :data_ini AND :data_fim
+      AND (
+          n.tipo_venda IN ('Upgrade', 'Novo cliente EVENTO')
+          OR n.tipo_venda LIKE 'Ingresso%'
+      )
     GROUP BY 1
 )
 SELECT
@@ -47,8 +54,10 @@ SELECT
     b.ascensoes,
     b.renovacoes,
     b.indicacoes,
-    COALESCE(u.upgrades, 0)::bigint AS upgrades
+    COALESCE(x.upgrades, 0)::bigint AS upgrades,
+    COALESCE(x.eventos, 0)::bigint AS eventos,
+    COALESCE(x.ingressos, 0)::bigint AS ingressos
 FROM base b
-LEFT JOIN upgrades u
-       ON u.data_ref = b.data_ref
+LEFT JOIN tipos_extra x
+       ON x.data_ref = b.data_ref
 ORDER BY b.data_ref;

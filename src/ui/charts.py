@@ -1172,7 +1172,8 @@ def bar_ranked_vendas_mix(
     df: pd.DataFrame,
     category: str = "executiva",
     mix_cols: tuple[str, ...] = (
-        "novos", "ascensoes", "renovacoes", "indicacoes", "upgrades",
+        "novos", "ascensoes", "renovacoes", "indicacoes",
+        "upgrades", "eventos", "ingressos",
     ),
     top_n: int = 12,
     height: int | None = None,
@@ -1220,11 +1221,7 @@ def bar_ranked_vendas_mix(
 
     text_vals = [
         format_vendas_mix_bar_label(
-            novos=row["novos"] if "novos" in data.columns else 0,
-            ascensoes=row["ascensoes"] if "ascensoes" in data.columns else 0,
-            renovacoes=row["renovacoes"] if "renovacoes" in data.columns else 0,
-            indicacoes=row["indicacoes"] if "indicacoes" in data.columns else 0,
-            upgrades=row["upgrades"] if "upgrades" in data.columns else 0,
+            **{c: (row[c] if c in data.columns else 0) for c in mix_cols}
         )
         for _, row in data.iterrows()
     ]
