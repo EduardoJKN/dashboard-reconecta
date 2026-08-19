@@ -684,7 +684,7 @@ else:
                     linhas_h = linhas_brutas_h.copy()
                 linhas_dup_h = len(linhas_brutas_h) - len(linhas_h)
 
-                # ---------- Mini-cards de resumo (3+2) ---------------------
+                # ---------- Mini-cards de resumo (3+3) ---------------------
                 if closer_escolhido_h == OPCAO_TODOS_HOME:
                     fonte_h = ranking_plot_home
                 else:
@@ -735,18 +735,18 @@ else:
                     metric_card_v2("Comparecimentos", int_br(_sum_col_h("comparecimentos")),
                                    hint="status Concluída/Concluído")
 
-                mc4, mc5 = st.columns(2, gap="small")
+                mc4, mc5, mc6 = st.columns(3, gap="small")
                 with mc4:
-                    rec_val_h = _sum_money_h("receita")
-                    if rec_val_h == 0:
-                        mont_val_h = _sum_money_h("montante")
-                        label_rec_h = "Montante" if mont_val_h > 0 else "Receita"
-                        val_rec_h = brl(mont_val_h) if mont_val_h > 0 else "—"
-                    else:
-                        label_rec_h, val_rec_h = "Receita", brl(rec_val_h)
-                    metric_card_v2(label_rec_h, val_rec_h,
-                                   hint="financeiro dos deals ganhos")
+                    metric_card_v2(
+                        "Receita", brl(_sum_money_h("receita")),
+                        hint="receita dos deals ganhos",
+                    )
                 with mc5:
+                    metric_card_v2(
+                        "Montante", brl(_sum_money_h("montante")),
+                        hint="montante dos deals ganhos",
+                    )
+                with mc6:
                     vend_h = _sum_col_h("vendas")
                     mont_h = _sum_money_h("montante")
                     if vend_h > 0 and mont_h > 0:
@@ -824,7 +824,7 @@ else:
                         else:
                             cols_map_resumo_h = [
                                 ("#",                    "#"),
-                                ("nome_cliente_view",    "Nome do cliente/lead"),
+                                ("nome_deal_filtro",     "Nome do deal"),
                                 ("email_final_filtro",   "E-mail"),
                                 ("telefone_filtro",      "Telefone"),
                                 ("tipo_venda",           "Tipo de venda"),
@@ -874,7 +874,8 @@ else:
                         if ver_completa_h:
                             cols_map_full_h = [
                                 ("#",                       "#"),
-                                ("nome_cliente_view",       "Nome do cliente/lead"),
+                                ("nome_deal_filtro",        "Nome do deal"),
+                                ("nome_cliente_view",       "Nome do contato"),
                                 ("email_final_filtro",      "E-mail"),
                                 ("telefone_filtro",         "Telefone"),
                                 ("email_lead_filtro",       "E-mail (lead)"),

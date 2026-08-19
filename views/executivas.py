@@ -1390,7 +1390,7 @@ with tab_rank:
                             .sum()
                         )
 
-                    # ---------- Mini-cards de resumo (5 cards: 3+2) -------
+                    # ---------- Mini-cards de resumo (3+3) ----------------
                     if closer_escolhido == OPCAO_TODAS:
                         fonte = ranking_plot
                     else:
@@ -1447,19 +1447,22 @@ with tab_rank:
                         metric_card_v2("Comparecimentos", int_br(_sum_col("comparecimentos")),
                                        hint="status Concluída/Concluído")
 
-                    mc4, mc5 = st.columns(2, gap="small")
+                    mc4, mc5, mc6 = st.columns(3, gap="small")
                     with mc4:
                         rec_val = _sum_money("receita")
-                        if rec_val == 0 and not tem_fin:
-                            label_rec, val_rec = "Receita", "—"
-                        elif rec_val == 0:
-                            label_rec = "Montante"
-                            val_rec = brl(_sum_money("montante"))
-                        else:
-                            label_rec, val_rec = "Receita", brl(rec_val)
-                        metric_card_v2(label_rec, val_rec,
-                                       hint="financeiro dos deals ganhos")
+                        metric_card_v2(
+                            "Receita",
+                            brl(rec_val) if tem_fin else "—",
+                            hint="receita dos deals ganhos",
+                        )
                     with mc5:
+                        mont_val = _sum_money("montante")
+                        metric_card_v2(
+                            "Montante",
+                            brl(mont_val) if tem_fin else "—",
+                            hint="montante dos deals ganhos",
+                        )
+                    with mc6:
                         vend_v_local = _sum_col("vendas")
                         mont_v_local = _sum_money("montante")
                         if tem_fin and vend_v_local > 0:
@@ -1562,7 +1565,7 @@ with tab_rank:
                             else:
                                 cols_map_resumo = [
                                     ("#",                    "#"),
-                                    ("nome_cliente_view",    "Nome do cliente/lead"),
+                                    ("nome_deal_filtro",     "Nome do deal"),
                                     ("email_final_filtro",   "E-mail"),
                                     ("telefone_filtro",      "Telefone"),
                                     ("tipo_venda",           "Tipo de venda"),
@@ -1621,7 +1624,8 @@ with tab_rank:
                             if ver_completa:
                                 cols_map_full = [
                                     ("#",                       "#"),
-                                    ("nome_cliente_view",       "Nome do cliente/lead"),
+                                    ("nome_deal_filtro",        "Nome do deal"),
+                                    ("nome_cliente_view",       "Nome do contato"),
                                     ("email_final_filtro",      "E-mail"),
                                     ("telefone_filtro",         "Telefone"),
                                     ("email_lead_filtro",       "E-mail (lead)"),

@@ -137,6 +137,7 @@ def ranking_column_config(
 
 
 _DETALHE_BUSCA_COLS = (
+    "nome_deal_filtro", "nome_deal",
     "nome_cliente_view", "nome_cliente", "nome_lead",
     "email_final_filtro", "email", "email_lead_filtro", "email_crm_filtro",
     "telefone_filtro", "telefone",

@@ -514,8 +514,9 @@ def classificacao_final_com_prioridade_crm(crm, lead) -> str:
 def prevendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
     """Enriquecimento mínimo do detalhe diário para máscaras estáveis.
 
-    Adiciona colunas *_filtro (strings limpas, sem NaN) e `nome_cliente_view`
-    (fallback `nome_deal`). Não remove nada — preserva colunas originais.
+    Adiciona colunas *_filtro (strings limpas, sem NaN), `nome_cliente_view`
+    (fallback `nome_deal`) e `nome_deal_filtro` (nome do deal, com fallback
+    para o contato). Não remove nada — preserva colunas originais.
     """
     if df_det is None or df_det.empty:
         return df_det
@@ -593,6 +594,13 @@ def prevendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
         out.loc[sem_nome, "nome_cliente_view"] = (
             out.loc[sem_nome, "nome_deal"].fillna("").astype(str).str.strip()
         )
+    deal_nome = (
+        _series_or_default("nome_deal", "")
+        .fillna("").astype(str).str.strip()
+    )
+    out["nome_deal_filtro"] = deal_nome.where(
+        deal_nome != "", out["nome_cliente_view"],
+    )
     return out
 
 
