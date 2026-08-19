@@ -560,6 +560,10 @@ def prevendas_normalizar_detalhe(df_det: pd.DataFrame) -> pd.DataFrame:
         email_final_com_prioridade_crm(c, l)
         for c, l in zip(out["email_crm_filtro"], out["email_lead_filtro"])
     ]
+    out["telefone_filtro"] = (
+        _series_or_default("telefone", "")
+        .fillna("").astype(str).str.strip()
+    )
     out["sdr_filtro"] = (
         _series_or_default("sdr", "")
         .fillna("").astype(str).str.strip().replace("", "Sem SDR")

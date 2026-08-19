@@ -136,6 +136,88 @@ def ranking_column_config(
     return cfg
 
 
+_DETALHE_BUSCA_COLS = (
+    "nome_cliente_view", "nome_cliente", "nome_lead",
+    "email_final_filtro", "email", "email_lead_filtro", "email_crm_filtro",
+    "telefone_filtro", "telefone",
+)
+_DETALHE_CLASSIF_OPCOES = (
+    "Todas",
+    "+12",
+    "-12",
+    "Não atua",
+    "Sem classificação",
+)
+_DETALHE_CLASSIF_VALOR = {
+    "+12": "Atua +12",
+    "-12": "Atua -12",
+    "Não atua": "Não atua",
+    "Sem classificação": "Sem classificação",
+}
+
+
+def filtrar_tabela_detalhe_closers(
+    df: pd.DataFrame,
+    *,
+    key_prefix: str,
+) -> pd.DataFrame:
+    """Busca (nome/e-mail/telefone) + filtros de tipo_venda e classificação."""
+    if df is None or df.empty:
+        return df
+
+    c1, c2, c3 = st.columns([2.0, 1.3, 1.2], gap="small")
+    with c1:
+        busca = st.text_input(
+            "Buscar nome, e-mail ou telefone",
+            key=f"{key_prefix}_busca",
+            placeholder="Digite para filtrar a tabela",
+        )
+    with c2:
+        tipos: list[str] = []
+        if "tipo_venda" in df.columns:
+            tipos = sorted(
+                {
+                    str(v).strip()
+                    for v in df["tipo_venda"].tolist()
+                    if v is not None and str(v).strip() and str(v).strip().lower() != "nan"
+                }
+            )
+        tipo_sel = st.multiselect(
+            "Tipo de venda",
+            options=tipos,
+            default=[],
+            key=f"{key_prefix}_tipo",
+        )
+    with c3:
+        classif_sel = st.selectbox(
+            "Classificação",
+            options=list(_DETALHE_CLASSIF_OPCOES),
+            key=f"{key_prefix}_classif",
+        )
+
+    out = df
+    q = (busca or "").strip().lower()
+    if q:
+        mask = pd.Series(False, index=out.index)
+        q_digits = "".join(ch for ch in q if ch.isdigit())
+        for col in _DETALHE_BUSCA_COLS:
+            if col not in out.columns:
+                continue
+            serie = out[col].fillna("").astype(str)
+            mask = mask | serie.str.lower().str.contains(q, regex=False)
+            if q_digits and col in ("telefone_filtro", "telefone"):
+                mask = mask | serie.str.replace(r"\D", "", regex=True).str.contains(
+                    q_digits, regex=False,
+                )
+        out = out.loc[mask]
+    if tipo_sel and "tipo_venda" in out.columns:
+        out = out[out["tipo_venda"].astype(str).isin(tipo_sel)]
+    if classif_sel != "Todas" and "classificacao_final_filtro" in out.columns:
+        alvo = _DETALHE_CLASSIF_VALOR[classif_sel]
+        out = out[out["classificacao_final_filtro"].astype(str) == alvo]
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Setup / boilerplate
 # ---------------------------------------------------------------------------

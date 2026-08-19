@@ -493,7 +493,7 @@ def get_prevendas_leads_por_origem(data_ini: date, data_fim: date) -> pd.DataFra
 def get_prevendas_leads_detalhe_diario(
     data_ini: date,
     data_fim: date,
-    _mix_rules: str = "evento_ingresso_tipo_venda_v1",
+    _mix_rules: str = "detalhe_telefone_v1",
 ) -> pd.DataFrame:
     """Detalhe diário (agendamentos + vendas). `_mix_rules` só invalida cache."""
     df = run_sql_file(

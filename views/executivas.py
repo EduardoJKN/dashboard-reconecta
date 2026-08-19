@@ -110,6 +110,7 @@ from src.ui.charts import (
 from src.ui.components import (
     metric_card_v2,
     ranking_column_config,
+    filtrar_tabela_detalhe_closers,
     render_kanban_board,
     section_title,
 )
@@ -1132,15 +1133,10 @@ with tab_rank:
     if ranking is None or ranking.empty:
         st.info("Sem dados de ranking no período/filtros atuais.")
     else:
-        col_grafico, col_detalhe = st.columns([1.45, 1], gap="large")
-
-        # ===================================================================
-        # COLUNA ESQUERDA — selectbox de métrica + gráfico clicável
-        # ===================================================================
         chart_state = None
         ranking_plot = pd.DataFrame()
         metric_col = "receita"
-        with col_grafico:
+        with st.container():
             metric_base = _RANKING_METRIC_OPTIONS[metric_label]
             metric_col = _resolve_metric_col(metric_base)
             is_money = metric_col in _METRICAS_FINANCEIRAS
@@ -1184,12 +1180,12 @@ with tab_rank:
                             category="executiva",
                             mix_cols=VENDAS_MIX_COLS,
                             top_n=12,
-                            height=320,
+                            height=380,
                         )
                     else:
                         fig_top = bar_ranked(
                             ranking_plot, "executiva", metric_col,
-                            top_n=12, height=320,
+                            top_n=12, height=380,
                             money=is_money,
                             days_format=is_ciclo,
                             lower_is_better=is_ciclo,
@@ -1203,9 +1199,9 @@ with tab_rank:
                     )
 
         # ===================================================================
-        # COLUNA DIREITA — painel retrátil de detalhe nome a nome
+        # Detalhe nome-a-nome — abaixo do gráfico (largura total)
         # ===================================================================
-        with col_detalhe:
+        with st.container():
             if ranking_plot.empty:
                 with st.expander("Detalhe do closer selecionado", expanded=False):
                     st.caption("Sem ranking pra detalhar nesta métrica/filtro.")
@@ -1270,7 +1266,7 @@ with tab_rank:
                 titulo = ("Detalhe do closer selecionado" if closer_atual == OPCAO_TODAS
                           else f"Detalhe — {closer_atual}")
 
-                with st.expander(titulo, expanded=False):
+                with st.expander(titulo, expanded=True):
                     st.caption(
                         "💡 **Clique numa barra do gráfico** para detalhar aquele "
                         "closer — ou use o seletor abaixo. 'Todos' mostra o consolidado."
@@ -1531,137 +1527,147 @@ with tab_rank:
                         linhas = linhas.sort_values(
                             sort_cols, na_position="last",
                         ).reset_index(drop=True)
-                        linhas.insert(0, "#", range(1, len(linhas) + 1))
-
-                        if metric_col == "churn":
-                            cols_map_resumo = [
-                                ("#",              "#"),
-                                ("nome_cliente",   "Cliente"),
-                                ("email",          "E-mail"),
-                                ("data_churn",     "Data churn"),
-                                ("closer_nome",    "Closer"),
-                                ("montante",       "Montante"),
-                                ("receita",        "Receita"),
-                            ]
-                        elif metric_col == "comparecimentos_ajustado":
-                            cols_map_resumo = [
-                                ("#",                    "#"),
-                                ("nome_lead",            "Nome do cliente/lead"),
-                                ("email",                "E-mail"),
-                                ("tipo_comparecimento",  "Tipo (teste)"),
-                                ("status_reuniao",       "Status reunião"),
-                                ("deal_stage",           "Stage do deal"),
-                                ("start_datetime",       "Data/hora reunião"),
-                                ("closer_deal",          "Closer (deal)"),
-                                ("executiva",            "Owner activity"),
-                            ]
+                        linhas = filtrar_tabela_detalhe_closers(
+                            linhas, key_prefix="executivas_top_closer_tbl",
+                        )
+                        if linhas.empty:
+                            st.caption("Nenhum registro com esses filtros.")
                         else:
-                            cols_map_resumo = [
-                                ("#",                    "#"),
-                                ("nome_cliente_view",    "Nome do cliente/lead"),
-                                ("email_final_filtro",   "E-mail"),
-                                ("tipo_venda",           "Tipo de venda"),
-                                ("classificacao_final_filtro", "Classificação"),
-                                ("status_filtro",        "Status reunião"),
-                                ("origem_fonte",         "Origem/fonte"),
-                                ("data_agendamento",     "Data agendamento"),
-                                ("data_venda",           "Data venda"),
-                                ("sdr_filtro",           "SDR"),
-                            ]
-                        cols_resumo = [c for c, _ in cols_map_resumo
-                                       if c in linhas.columns]
-                        tabela_resumo = linhas[cols_resumo].rename(
-                            columns={c: lbl for c, lbl in cols_map_resumo
-                                     if c in cols_resumo}
-                        )
-                        cfg_resumo = {"#": st.column_config.NumberColumn("#", format="%d")}
-                        if "Data agendamento" in tabela_resumo.columns:
-                            cfg_resumo["Data agendamento"] = st.column_config.DateColumn(
-                                "Data agendamento", format="DD/MM/YYYY"
-                            )
-                        if "Data venda" in tabela_resumo.columns:
-                            cfg_resumo["Data venda"] = st.column_config.DateColumn(
-                                "Data venda", format="DD/MM/YYYY"
-                            )
-                        if "Data churn" in tabela_resumo.columns:
-                            cfg_resumo["Data churn"] = st.column_config.DateColumn(
-                                "Data churn", format="DD/MM/YYYY"
-                            )
-                        if "Data/hora reunião" in tabela_resumo.columns:
-                            cfg_resumo["Data/hora reunião"] = (
-                                st.column_config.DatetimeColumn(
-                                    "Data/hora reunião",
-                                    format="DD/MM/YYYY HH:mm",
-                                )
-                            )
-                        for _ml in ("Montante", "Receita"):
-                            if _ml in tabela_resumo.columns:
-                                cfg_resumo[_ml] = st.column_config.NumberColumn(
-                                    _ml, format="R$ %.0f"
-                                )
-                        st.dataframe(
-                            tabela_resumo,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config=cfg_resumo,
-                        )
+                            linhas = linhas.reset_index(drop=True)
+                            linhas.insert(0, "#", range(1, len(linhas) + 1))
 
-                        # Toggle "Ver tabela completa" (Streamlit não permite
-                        # expander aninhado dentro de expander).
-                        ver_completa = st.toggle(
-                            "Ver tabela completa",
-                            value=False,
-                            key="executivas_top_closer_ver_completa",
-                        )
-                        if ver_completa:
-                            cols_map_full = [
-                                ("#",                       "#"),
-                                ("nome_cliente_view",       "Nome do cliente/lead"),
-                                ("email_final_filtro",      "E-mail"),
-                                ("email_lead_filtro",       "E-mail (lead)"),
-                                ("email_crm_filtro",        "E-mail (CRM)"),
-                                ("sdr_filtro",              "SDR"),
-                                ("closer_filtro",           "Closer"),
-                                ("time_vendas_filtro",      "Time"),
-                                ("classificacao_filtro",    "Classif. (lead)"),
-                                ("classificacao_crm_filtro","Classif. (CRM)"),
-                                ("status_filtro",           "Status reunião"),
-                                ("origem_fonte",            "Origem/fonte"),
-                                ("data_criacao",            "Data de criação"),
-                                ("data_agendamento",        "Data do agendamento"),
-                                ("data_venda",              "Data da venda"),
-                                ("deal_id",                 "ID do deal"),
-                                ("activity_id",             "ID da activity"),
-                                ("montante",                "Montante"),
-                                ("receita",                 "Receita"),
-                            ]
-                            cols_full = [c for c, _ in cols_map_full
-                                         if c in linhas.columns]
-                            tabela_full = linhas[cols_full].rename(
-                                columns={c: lbl for c, lbl in cols_map_full
-                                         if c in cols_full}
+                        if not linhas.empty and "#" in linhas.columns:
+                            if metric_col == "churn":
+                                cols_map_resumo = [
+                                    ("#",              "#"),
+                                    ("nome_cliente",   "Cliente"),
+                                    ("email",          "E-mail"),
+                                    ("data_churn",     "Data churn"),
+                                    ("closer_nome",    "Closer"),
+                                    ("montante",       "Montante"),
+                                    ("receita",        "Receita"),
+                                ]
+                            elif metric_col == "comparecimentos_ajustado":
+                                cols_map_resumo = [
+                                    ("#",                    "#"),
+                                    ("nome_lead",            "Nome do cliente/lead"),
+                                    ("email",                "E-mail"),
+                                    ("tipo_comparecimento",  "Tipo (teste)"),
+                                    ("status_reuniao",       "Status reunião"),
+                                    ("deal_stage",           "Stage do deal"),
+                                    ("start_datetime",       "Data/hora reunião"),
+                                    ("closer_deal",          "Closer (deal)"),
+                                    ("executiva",            "Owner activity"),
+                                ]
+                            else:
+                                cols_map_resumo = [
+                                    ("#",                    "#"),
+                                    ("nome_cliente_view",    "Nome do cliente/lead"),
+                                    ("email_final_filtro",   "E-mail"),
+                                    ("telefone_filtro",      "Telefone"),
+                                    ("tipo_venda",           "Tipo de venda"),
+                                    ("classificacao_final_filtro", "Classificação"),
+                                    ("status_filtro",        "Status reunião"),
+                                    ("origem_fonte",         "Origem/fonte"),
+                                    ("data_agendamento",     "Data agendamento"),
+                                    ("data_venda",           "Data venda"),
+                                    ("sdr_filtro",           "SDR"),
+                                ]
+                            cols_resumo = [c for c, _ in cols_map_resumo
+                                           if c in linhas.columns]
+                            tabela_resumo = linhas[cols_resumo].rename(
+                                columns={c: lbl for c, lbl in cols_map_resumo
+                                         if c in cols_resumo}
                             )
-                            cfg_full = {"#": st.column_config.NumberColumn("#", format="%d")}
-                            for date_lbl in ("Data de criação", "Data do agendamento",
-                                              "Data da venda"):
-                                if date_lbl in tabela_full.columns:
-                                    cfg_full[date_lbl] = st.column_config.DateColumn(
-                                        date_lbl, format="DD/MM/YYYY"
+                            cfg_resumo = {"#": st.column_config.NumberColumn("#", format="%d")}
+                            if "Data agendamento" in tabela_resumo.columns:
+                                cfg_resumo["Data agendamento"] = st.column_config.DateColumn(
+                                    "Data agendamento", format="DD/MM/YYYY"
+                                )
+                            if "Data venda" in tabela_resumo.columns:
+                                cfg_resumo["Data venda"] = st.column_config.DateColumn(
+                                    "Data venda", format="DD/MM/YYYY"
+                                )
+                            if "Data churn" in tabela_resumo.columns:
+                                cfg_resumo["Data churn"] = st.column_config.DateColumn(
+                                    "Data churn", format="DD/MM/YYYY"
+                                )
+                            if "Data/hora reunião" in tabela_resumo.columns:
+                                cfg_resumo["Data/hora reunião"] = (
+                                    st.column_config.DatetimeColumn(
+                                        "Data/hora reunião",
+                                        format="DD/MM/YYYY HH:mm",
                                     )
-                            for money_lbl in ("Montante", "Receita"):
-                                if money_lbl in tabela_full.columns:
-                                    cfg_full[money_lbl] = st.column_config.NumberColumn(
-                                        money_lbl, format="R$ %.0f"
+                                )
+                            for _ml in ("Montante", "Receita"):
+                                if _ml in tabela_resumo.columns:
+                                    cfg_resumo[_ml] = st.column_config.NumberColumn(
+                                        _ml, format="R$ %.0f"
                                     )
                             st.dataframe(
-                                tabela_full,
+                                tabela_resumo,
                                 use_container_width=True,
                                 hide_index=True,
-                                column_config=cfg_full,
+                                column_config=cfg_resumo,
                             )
 
+                            # Toggle "Ver tabela completa" (Streamlit não permite
+                            # expander aninhado dentro de expander).
+                            ver_completa = st.toggle(
+                                "Ver tabela completa",
+                                value=False,
+                                key="executivas_top_closer_ver_completa",
+                            )
+                            if ver_completa:
+                                cols_map_full = [
+                                    ("#",                       "#"),
+                                    ("nome_cliente_view",       "Nome do cliente/lead"),
+                                    ("email_final_filtro",      "E-mail"),
+                                    ("telefone_filtro",         "Telefone"),
+                                    ("email_lead_filtro",       "E-mail (lead)"),
+                                    ("email_crm_filtro",        "E-mail (CRM)"),
+                                    ("sdr_filtro",              "SDR"),
+                                    ("closer_filtro",           "Closer"),
+                                    ("time_vendas_filtro",      "Time"),
+                                    ("classificacao_filtro",    "Classif. (lead)"),
+                                    ("classificacao_crm_filtro","Classif. (CRM)"),
+                                    ("status_filtro",           "Status reunião"),
+                                    ("origem_fonte",            "Origem/fonte"),
+                                    ("data_criacao",            "Data de criação"),
+                                    ("data_agendamento",        "Data do agendamento"),
+                                    ("data_venda",              "Data da venda"),
+                                    ("deal_id",                 "ID do deal"),
+                                    ("activity_id",             "ID da activity"),
+                                    ("montante",                "Montante"),
+                                    ("receita",                 "Receita"),
+                                ]
+                                cols_full = [c for c, _ in cols_map_full
+                                             if c in linhas.columns]
+                                tabela_full = linhas[cols_full].rename(
+                                    columns={c: lbl for c, lbl in cols_map_full
+                                             if c in cols_full}
+                                )
+                                cfg_full = {"#": st.column_config.NumberColumn("#", format="%d")}
+                                for date_lbl in ("Data de criação", "Data do agendamento",
+                                                  "Data da venda"):
+                                    if date_lbl in tabela_full.columns:
+                                        cfg_full[date_lbl] = st.column_config.DateColumn(
+                                            date_lbl, format="DD/MM/YYYY"
+                                        )
+                                for money_lbl in ("Montante", "Receita"):
+                                    if money_lbl in tabela_full.columns:
+                                        cfg_full[money_lbl] = st.column_config.NumberColumn(
+                                            money_lbl, format="R$ %.0f"
+                                        )
+                                st.dataframe(
+                                    tabela_full,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config=cfg_full,
+                                )
+
         # ===================================================================
-        # Expander auxiliar fora das 2 colunas — ranking completo, dividido
+        # Expander auxiliar abaixo do detalhe — ranking completo, dividido
         # em tabela principal (métricas-chave, ordem canônica) + tabela
         # complementar (demais colunas, incluindo buckets +12/-12 etc.).
         # Mesma divisão é usada na Visão Geral (views/home.py) via

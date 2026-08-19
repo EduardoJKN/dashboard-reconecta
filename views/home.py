@@ -52,6 +52,7 @@ from src.ui.components import (
     hero_revenue_card,
     metric_card_v2,
     ranking_column_config,
+    filtrar_tabela_detalhe_closers,
     section_title,
 )
 from src.ui.page import start_page
@@ -480,15 +481,10 @@ st.caption(
 if ranking_home is None or ranking_home.empty:
     st.info("Sem dados de ranking no período/filtros atuais.")
 else:
-    col_grafico_h, col_detalhe_h = st.columns([1.45, 1], gap="large")
-
-    # =======================================================================
-    # COLUNA ESQUERDA — selectbox + gráfico clicável
-    # =======================================================================
     chart_state_home = None
     ranking_plot_home = pd.DataFrame()
     metric_col_home = "receita"
-    with col_grafico_h:
+    with st.container():
         metric_col_home = _RANKING_METRIC_OPTIONS[metric_label_home]
         is_money_home = metric_col_home in _METRICAS_FINANCEIRAS
         is_ciclo_home = metric_col_home in EXECUTIVAS_RANKING_METRICAS_CICLO
@@ -526,12 +522,12 @@ else:
                         category="executiva",
                         mix_cols=VENDAS_MIX_COLS,
                         top_n=12,
-                        height=320,
+                        height=380,
                     )
                 else:
                     fig_top_h = bar_ranked(
                         ranking_plot_home, "executiva", metric_col_home,
-                        top_n=12, height=320,
+                        top_n=12, height=380,
                         money=is_money_home,
                         days_format=is_ciclo_home,
                         lower_is_better=is_ciclo_home,
@@ -545,9 +541,9 @@ else:
                 )
 
     # =======================================================================
-    # COLUNA DIREITA — painel retrátil com detalhe nome-a-nome
+    # Detalhe nome-a-nome — abaixo do gráfico (largura total)
     # =======================================================================
-    with col_detalhe_h:
+    with st.container():
         if ranking_plot_home.empty:
             with st.expander("Detalhe do closer selecionado", expanded=False):
                 st.caption("Sem ranking pra detalhar nesta métrica/filtros.")
@@ -602,7 +598,7 @@ else:
                         if closer_atual_h == OPCAO_TODOS_HOME
                         else f"Detalhe — {closer_atual_h}")
 
-            with st.expander(titulo_h, expanded=False):
+            with st.expander(titulo_h, expanded=True):
                 st.caption(
                     "💡 **Clique numa barra do gráfico** para detalhar aquele "
                     "closer — ou use o seletor abaixo. 'Todos' mostra o consolidado."
@@ -806,113 +802,122 @@ else:
                     linhas_h = linhas_h.sort_values(
                         sort_cols_h, na_position="last",
                     ).reset_index(drop=True)
-                    linhas_h.insert(0, "#", range(1, len(linhas_h) + 1))
-
-                    if metric_col_home == "churn":
-                        cols_map_resumo_h = [
-                            ("#",              "#"),
-                            ("nome_cliente",   "Cliente"),
-                            ("email",          "E-mail"),
-                            ("data_churn",     "Data churn"),
-                            ("closer_nome",    "Closer"),
-                            ("montante",       "Montante"),
-                            ("receita",        "Receita"),
-                        ]
+                    linhas_h = filtrar_tabela_detalhe_closers(
+                        linhas_h, key_prefix="home_top_closer_tbl",
+                    )
+                    if linhas_h.empty:
+                        st.caption("Nenhum registro com esses filtros.")
                     else:
-                        cols_map_resumo_h = [
-                            ("#",                    "#"),
-                            ("nome_cliente_view",    "Nome do cliente/lead"),
-                            ("email_final_filtro",   "E-mail"),
-                            ("tipo_venda",           "Tipo de venda"),
-                            ("classificacao_final_filtro", "Classificação"),
-                            ("status_filtro",        "Status reunião"),
-                            ("origem_fonte",         "Origem/fonte"),
-                            ("data_agendamento",     "Data agendamento"),
-                            ("data_venda",           "Data venda"),
-                            ("sdr_filtro",           "SDR"),
-                        ]
-                    cols_resumo_h = [c for c, _ in cols_map_resumo_h
-                                     if c in linhas_h.columns]
-                    tabela_resumo_h = linhas_h[cols_resumo_h].rename(
-                        columns={c: lbl for c, lbl in cols_map_resumo_h
-                                 if c in cols_resumo_h}
-                    )
-                    cfg_resumo_h = {"#": st.column_config.NumberColumn("#", format="%d")}
-                    if "Data agendamento" in tabela_resumo_h.columns:
-                        cfg_resumo_h["Data agendamento"] = st.column_config.DateColumn(
-                            "Data agendamento", format="DD/MM/YYYY"
-                        )
-                    if "Data venda" in tabela_resumo_h.columns:
-                        cfg_resumo_h["Data venda"] = st.column_config.DateColumn(
-                            "Data venda", format="DD/MM/YYYY"
-                        )
-                    if "Data churn" in tabela_resumo_h.columns:
-                        cfg_resumo_h["Data churn"] = st.column_config.DateColumn(
-                            "Data churn", format="DD/MM/YYYY"
-                        )
-                    for _mlh in ("Montante", "Receita"):
-                        if _mlh in tabela_resumo_h.columns:
-                            cfg_resumo_h[_mlh] = st.column_config.NumberColumn(
-                                _mlh, format="R$ %.0f"
-                            )
-                    st.dataframe(
-                        tabela_resumo_h,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config=cfg_resumo_h,
-                    )
+                        linhas_h = linhas_h.reset_index(drop=True)
+                        linhas_h.insert(0, "#", range(1, len(linhas_h) + 1))
 
-                    ver_completa_h = st.toggle(
-                        "Ver tabela completa",
-                        value=False,
-                        key="home_top_closer_ver_completa",
-                    )
-                    if ver_completa_h:
-                        cols_map_full_h = [
-                            ("#",                       "#"),
-                            ("nome_cliente_view",       "Nome do cliente/lead"),
-                            ("email_final_filtro",      "E-mail"),
-                            ("email_lead_filtro",       "E-mail (lead)"),
-                            ("email_crm_filtro",        "E-mail (CRM)"),
-                            ("sdr_filtro",              "SDR"),
-                            ("closer_filtro",           "Closer"),
-                            ("time_vendas_filtro",      "Time"),
-                            ("classificacao_filtro",    "Classif. (lead)"),
-                            ("classificacao_crm_filtro","Classif. (CRM)"),
-                            ("status_filtro",           "Status reunião"),
-                            ("origem_fonte",            "Origem/fonte"),
-                            ("data_criacao",            "Data de criação"),
-                            ("data_agendamento",        "Data do agendamento"),
-                            ("data_venda",              "Data da venda"),
-                            ("deal_id",                 "ID do deal"),
-                            ("activity_id",             "ID da activity"),
-                            ("montante",                "Montante"),
-                            ("receita",                 "Receita"),
-                        ]
-                        cols_full_h = [c for c, _ in cols_map_full_h
-                                       if c in linhas_h.columns]
-                        tabela_full_h = linhas_h[cols_full_h].rename(
-                            columns={c: lbl for c, lbl in cols_map_full_h
-                                     if c in cols_full_h}
+                        if metric_col_home == "churn":
+                            cols_map_resumo_h = [
+                                ("#",              "#"),
+                                ("nome_cliente",   "Cliente"),
+                                ("email",          "E-mail"),
+                                ("data_churn",     "Data churn"),
+                                ("closer_nome",    "Closer"),
+                                ("montante",       "Montante"),
+                                ("receita",        "Receita"),
+                            ]
+                        else:
+                            cols_map_resumo_h = [
+                                ("#",                    "#"),
+                                ("nome_cliente_view",    "Nome do cliente/lead"),
+                                ("email_final_filtro",   "E-mail"),
+                                ("telefone_filtro",      "Telefone"),
+                                ("tipo_venda",           "Tipo de venda"),
+                                ("classificacao_final_filtro", "Classificação"),
+                                ("status_filtro",        "Status reunião"),
+                                ("origem_fonte",         "Origem/fonte"),
+                                ("data_agendamento",     "Data agendamento"),
+                                ("data_venda",           "Data venda"),
+                                ("sdr_filtro",           "SDR"),
+                            ]
+                        cols_resumo_h = [c for c, _ in cols_map_resumo_h
+                                         if c in linhas_h.columns]
+                        tabela_resumo_h = linhas_h[cols_resumo_h].rename(
+                            columns={c: lbl for c, lbl in cols_map_resumo_h
+                                     if c in cols_resumo_h}
                         )
-                        cfg_full_h = {"#": st.column_config.NumberColumn("#", format="%d")}
-                        for date_lbl in ("Data de criação", "Data do agendamento",
-                                          "Data da venda"):
-                            if date_lbl in tabela_full_h.columns:
-                                cfg_full_h[date_lbl] = st.column_config.DateColumn(
-                                    date_lbl, format="DD/MM/YYYY"
-                                )
-                        for money_lbl in ("Montante", "Receita"):
-                            if money_lbl in tabela_full_h.columns:
-                                cfg_full_h[money_lbl] = st.column_config.NumberColumn(
-                                    money_lbl, format="R$ %.0f"
+                        cfg_resumo_h = {"#": st.column_config.NumberColumn("#", format="%d")}
+                        if "Data agendamento" in tabela_resumo_h.columns:
+                            cfg_resumo_h["Data agendamento"] = st.column_config.DateColumn(
+                                "Data agendamento", format="DD/MM/YYYY"
+                            )
+                        if "Data venda" in tabela_resumo_h.columns:
+                            cfg_resumo_h["Data venda"] = st.column_config.DateColumn(
+                                "Data venda", format="DD/MM/YYYY"
+                            )
+                        if "Data churn" in tabela_resumo_h.columns:
+                            cfg_resumo_h["Data churn"] = st.column_config.DateColumn(
+                                "Data churn", format="DD/MM/YYYY"
+                            )
+                        for _mlh in ("Montante", "Receita"):
+                            if _mlh in tabela_resumo_h.columns:
+                                cfg_resumo_h[_mlh] = st.column_config.NumberColumn(
+                                    _mlh, format="R$ %.0f"
                                 )
                         st.dataframe(
-                            tabela_full_h,
+                            tabela_resumo_h,
                             use_container_width=True,
                             hide_index=True,
-                            column_config=cfg_full_h,
+                            column_config=cfg_resumo_h,
                         )
+
+                        ver_completa_h = st.toggle(
+                            "Ver tabela completa",
+                            value=False,
+                            key="home_top_closer_ver_completa",
+                        )
+                        if ver_completa_h:
+                            cols_map_full_h = [
+                                ("#",                       "#"),
+                                ("nome_cliente_view",       "Nome do cliente/lead"),
+                                ("email_final_filtro",      "E-mail"),
+                                ("telefone_filtro",         "Telefone"),
+                                ("email_lead_filtro",       "E-mail (lead)"),
+                                ("email_crm_filtro",        "E-mail (CRM)"),
+                                ("sdr_filtro",              "SDR"),
+                                ("closer_filtro",           "Closer"),
+                                ("time_vendas_filtro",      "Time"),
+                                ("classificacao_filtro",    "Classif. (lead)"),
+                                ("classificacao_crm_filtro","Classif. (CRM)"),
+                                ("status_filtro",           "Status reunião"),
+                                ("origem_fonte",            "Origem/fonte"),
+                                ("data_criacao",            "Data de criação"),
+                                ("data_agendamento",        "Data do agendamento"),
+                                ("data_venda",              "Data da venda"),
+                                ("deal_id",                 "ID do deal"),
+                                ("activity_id",             "ID da activity"),
+                                ("montante",                "Montante"),
+                                ("receita",                 "Receita"),
+                            ]
+                            cols_full_h = [c for c, _ in cols_map_full_h
+                                           if c in linhas_h.columns]
+                            tabela_full_h = linhas_h[cols_full_h].rename(
+                                columns={c: lbl for c, lbl in cols_map_full_h
+                                         if c in cols_full_h}
+                            )
+                            cfg_full_h = {"#": st.column_config.NumberColumn("#", format="%d")}
+                            for date_lbl in ("Data de criação", "Data do agendamento",
+                                              "Data da venda"):
+                                if date_lbl in tabela_full_h.columns:
+                                    cfg_full_h[date_lbl] = st.column_config.DateColumn(
+                                        date_lbl, format="DD/MM/YYYY"
+                                    )
+                            for money_lbl in ("Montante", "Receita"):
+                                if money_lbl in tabela_full_h.columns:
+                                    cfg_full_h[money_lbl] = st.column_config.NumberColumn(
+                                        money_lbl, format="R$ %.0f"
+                                    )
+                            st.dataframe(
+                                tabela_full_h,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config=cfg_full_h,
+                            )
 
     # =======================================================================
     # Expander fora do layout 2-cols — ranking completo agregado, dividido
