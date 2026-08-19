@@ -2417,17 +2417,12 @@ def comparecimento_ajustado_tabela_leidianne(
 def vendas_detalhe_filtrar_closer(df_det_norm: pd.DataFrame,
                                   closer_nome: str) -> pd.Series:
     """Mask booleana — linhas do detalhe cujo `closer_filtro` casa com
-    `closer_nome` (match exato, espaços normalizados).
+    `closer_nome`.
 
-    O ranking de Vendas expõe `executiva` = `TRIM(first_name||' '||last_name)`
-    via zoho_users (com fallback pro owner_id quando não pareia); o detalhe
-    expõe `closer_filtro` com a mesma fórmula (fallback 'Sem Closer'). Match
-    string-exato funciona pra todos os closers cadastrados em zoho_users.
-    Também produz `classificacao_final_filtro` (CRM > lead/ext) para a
-    coluna resumida "Classificação" nas tabelas de detalhe.
-    Edge case: um closer cujo `executiva_vendas` é ID sem user pareado
-    aparece no ranking como o ID raw e no detalhe como 'Sem Closer' — essa
-    linha do ranking não terá detalhe disponível (caller deve sinalizar).
+    O ranking reescreve `executiva` pelo nome oficial (`Leandro Marcelino
+    Alves`, `Karine Pacífico`). O detalhe traz o nome do `zoho_users`
+    (`Leandro Alves`, `Karine Pacifico`). Match só-exato zera a tabela.
+    Usa a mesma regra de tokens do churn (`_executivas_churn_nomes_casam`).
     """
     if df_det_norm is None or df_det_norm.empty:
         idx = df_det_norm.index if df_det_norm is not None else []
@@ -2435,7 +2430,8 @@ def vendas_detalhe_filtrar_closer(df_det_norm: pd.DataFrame,
     nome = (closer_nome or "").strip()
     if not nome:
         return pd.Series(False, index=df_det_norm.index)
-    return df_det_norm["closer_filtro"].astype(str).str.strip() == nome
+    col = df_det_norm["closer_filtro"].astype(str).str.strip()
+    return col.map(lambda c: _executivas_churn_nomes_casam(nome, c))
 
 
 def vendas_detalhe_filtrar_time(df_det_norm: pd.DataFrame,
