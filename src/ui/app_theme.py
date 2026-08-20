@@ -16,7 +16,7 @@ from typing import Literal
 import streamlit as st
 import streamlit.components.v1 as components
 
-from .theme import GLOBAL_CSS_STATIC, PALETTE_DARK, PALETTE_LIGHT
+from .theme import CHART_ANIM_JS, GLOBAL_CSS_STATIC, PALETTE_DARK, PALETTE_LIGHT
 
 ThemeMode = Literal["dark", "light", "system"]
 ThemeBase = Literal["dark", "light"]
@@ -113,7 +113,6 @@ def _run_system_theme_probe() -> None:
         </script>
         """,
         height=0,
-        key="rc_system_theme_probe",
     )
 
     if detected not in ("dark", "light"):
@@ -141,6 +140,9 @@ def apply_theme_css(theme_name: str | None = None) -> None:
         unsafe_allow_html=True,
     )
     st.html(f"<style>\n{_theme_stylesheet()}\n</style>")
+    # iframe height=0; script age no document pai (orientações H/V das barras).
+    # Sem `key=` — versões antigas do Streamlit não aceitam esse kwarg.
+    components.html(CHART_ANIM_JS, height=0)
 
 
 def apply_app_theme() -> None:

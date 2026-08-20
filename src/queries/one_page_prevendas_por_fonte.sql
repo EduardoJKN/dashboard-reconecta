@@ -5,14 +5,15 @@
 -- (que vinha de team_classification.py) pela regra oficial do Looker, que
 -- olha `zoho_deals.fonte_de_lead`:
 --
---   - 'Fábrica de Contatos'           → 'Fábrica'   (SS no One Page)
---   - 'Outbound', 'Prospecção'        → 'Outbound'
---   - 'Reagendamento', 'Follow-up'    → desambigua por `sdr_ss` (Fábrica
---                                       vs Outbound vs Inbound). Sem as
---                                       IDs reais hoje, fallback = 'Inbound'.
---                                       TODO: receber as IDs reais e
---                                       acrescentar a CASE secundária.
---   - qualquer outro / NULL           → 'Inbound'
+--   - 'Indicação'                         → 'Indicação' (cards One Page)
+--   - 'Fábrica de Contatos'               → 'Fábrica'   (SS no One Page)
+--   - 'Outbound', 'Prospecção'            → 'Outbound'
+--   - 'Reagendamento', 'Follow-up'        → desambigua por `sdr_ss` (Fábrica
+--                                           vs Outbound vs Inbound). Sem as
+--                                           IDs reais hoje, fallback = 'Inbound'.
+--                                           TODO: receber as IDs reais e
+--                                           acrescentar a CASE secundária.
+--   - qualquer outro / NULL               → 'Inbound'
 --
 -- Activities: `activity_type IN ('Consulta','Indicação')` AND
 -- `status_reuniao IS NOT NULL`. Filtro alinhado com
@@ -54,6 +55,7 @@ deals_clean AS (
         d.qualificacao,
         d.classificado_cal,
         CASE
+            WHEN d.fonte_de_lead = 'Indicação'                   THEN 'Indicação'
             WHEN d.fonte_de_lead = 'Fábrica de Contatos'         THEN 'Fábrica'
             WHEN d.fonte_de_lead IN ('Outbound', 'Prospecção')   THEN 'Outbound'
             -- TODO Looker legacy: desambiguar Reagendamento/Follow-up via

@@ -48,10 +48,67 @@ def _base_layout(height: int = 320, unified: bool = False) -> dict:
             font=dict(color=PALETTE["text"], family="Inter"),
         ),
         hovermode="x unified" if unified else "closest",
-        transition=dict(duration=650, easing="cubic-in-out"),
+        transition=dict(duration=900, easing="cubic-in-out"),
         # Suaviza redesenhos (filtro/métrica) sem atrapalhar o 1º paint CSS.
         uirevision="reconecta",
     )
+
+
+def _hex_to_rgba(color: str, alpha: float) -> str:
+    """Converte `#rgb`/`#rrggbb` (ou rgba já pronto) em `rgba(...)` com alpha."""
+    c = (color or "").strip()
+    if c.startswith("rgba(") or c.startswith("rgb("):
+        return c
+    if not c.startswith("#"):
+        return f"rgba(201,168,76,{alpha})"  # gold fallback
+    h = c[1:]
+    if len(h) == 3:
+        h = "".join(ch * 2 for ch in h)
+    if len(h) != 6:
+        return f"rgba(201,168,76,{alpha})"
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def soften_line_fills(
+    fig: go.Figure,
+    *,
+    alpha: float = 0.16,
+    only_first: bool = True,
+) -> go.Figure:
+    """Área suave sob a(s) linha(s) — CSS aplica o degradê (mask).
+
+    Por padrão só a 1ª série recebe fill, pra não poluir gráficos multi-linha.
+    """
+    filled = 0
+    for tr in fig.data:
+        if getattr(tr, "type", None) != "scatter":
+            continue
+        mode = str(getattr(tr, "mode", "") or "")
+        if "lines" not in mode:
+            continue
+        fill = getattr(tr, "fill", None)
+        if fill and fill not in ("none", "None"):
+            continue
+        if only_first and filled >= 1:
+            break
+        line = getattr(tr, "line", None)
+        color = None
+        dash = None
+        if line is not None:
+            color = getattr(line, "color", None)
+            dash = getattr(line, "dash", None)
+        # Linhas pontilhadas/tracejadas (meta, +12/-12) não ganham sombra.
+        if dash and str(dash) not in ("solid", "None", "none"):
+            continue
+        if not color:
+            color = PALETTE["gold"]
+        tr.update(
+            fill="tozeroy",
+            fillcolor=_hex_to_rgba(str(color), alpha),
+        )
+        filled += 1
+    return fig
 
 
 def _style_axes(fig: go.Figure, money_axis: str | None = None) -> None:
@@ -69,6 +126,8 @@ def _style_axes(fig: go.Figure, money_axis: str | None = None) -> None:
         fig.update_yaxes(tickprefix="R$ ", separatethousands=True)
     if money_axis == "x":
         fig.update_xaxes(tickprefix="R$ ", separatethousands=True)
+    # Sombra em degradê sob a linha principal (quando ainda não há fill).
+    soften_line_fills(fig)
 
 
 def _truncate(s, max_len: int = 26) -> str:
@@ -981,7 +1040,7 @@ def area(df: pd.DataFrame, x: str, y: str,
         x=df[x], y=df[y],
         fill="tozeroy",
         line=dict(color=PALETTE["gold"], width=2.5),
-        fillcolor="rgba(201,168,76,0.18)",
+        fillcolor="rgba(201,168,76,0.16)",
         mode="lines+markers",
         marker=dict(size=5),
     ))

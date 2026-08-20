@@ -212,19 +212,33 @@ def get_one_page_novos_forma_venda(data_ini: date, data_fim: date) -> dict:
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
 def get_one_page_indicacoes_fonte(data_ini: date, data_fim: date) -> int:
-    """Card Indic. da One Page — ganhos com `fonte_de_lead = 'Indicação'`.
+    """Total de indicações (fonte_de_lead) — atalho sobre o breakdown por tipo."""
+    return int(get_one_page_indicacoes_por_tipo(data_ini, data_fim).get("total", 0))
 
-    Substitui a coluna `indicacoes` da view legada apenas neste card.
-    Alinhado ao Looker: inclui qualquer `tipo_venda` (também Renovação).
-    Janela por `data_hora_compra` + filtros de e-mail de teste.
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def get_one_page_indicacoes_por_tipo(data_ini: date, data_fim: date) -> dict:
+    """Indicações (fonte_de_lead) quebradas por tipo_venda — chips nos cards.
+
+    Indicação não é tipo de venda: conta origem do lead dentro de cada
+    card (Novos, Asc., Renov., Upg., Evt., Ing.).
     """
+    empty = {
+        "total": 0,
+        "novos": 0,
+        "ascensoes": 0,
+        "renovacoes": 0,
+        "upgrades": 0,
+        "eventos": 0,
+        "ingressos": 0,
+    }
     df = run_sql_file(
-        "one_page_indicacoes_fonte.sql", _date_params(data_ini, data_fim)
+        "one_page_indicacoes_por_tipo.sql", _date_params(data_ini, data_fim)
     )
     if df.empty:
-        return 0
-    val = df.iloc[0]["indicacoes"]
-    return int(val) if val is not None else 0
+        return empty
+    row = df.iloc[0]
+    return {k: int(row[k] or 0) for k in empty}
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)

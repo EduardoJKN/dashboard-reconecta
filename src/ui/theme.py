@@ -1566,62 +1566,238 @@ section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"][aria-current="
   pointer-events: none !important;
 }}
 
-/* Entrada dos gráficos em toda a app: fade/slide + linha se desenhando. */
+/* Entrada dos gráficos — animação bem perceptível, sem glow nas linhas. */
 @keyframes rc-chart-in {{
-  from {{ opacity: 0; transform: translateY(8px); }}
+  from {{ opacity: 0; transform: translateY(12px); }}
   to {{ opacity: 1; transform: translateY(0); }}
 }}
 @keyframes rc-trace-in {{
   from {{ opacity: 0; }}
   to {{ opacity: 1; }}
 }}
-@keyframes rc-line-draw {{
-  to {{ stroke-dashoffset: 0; }}
+/* Barras horizontais: nascem da esquerda → direita. */
+@keyframes rc-bar-grow-x {{
+  from {{
+    transform: scaleX(0.04);
+    opacity: 0.15;
+  }}
+  to {{
+    transform: scaleX(1);
+    opacity: 1;
+  }}
+}}
+/* Barras verticais: nascem de baixo → cima. */
+@keyframes rc-bar-grow-y {{
+  from {{
+    transform: scaleY(0.04);
+    opacity: 0.15;
+  }}
+  to {{
+    transform: scaleY(1);
+    opacity: 1;
+  }}
+}}
+/* Linhas: revelação L→R (clip) — lenta o bastante pra “desenhar”. */
+@keyframes rc-line-wipe {{
+  from {{
+    clip-path: inset(0 100% 0 0);
+    opacity: 0.2;
+  }}
+  to {{
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }}
+}}
+@keyframes rc-fill-in {{
+  0% {{ opacity: 0; }}
+  40% {{ opacity: 0; }}
+  100% {{ opacity: 1; }}
 }}
 @keyframes rc-marker-pop {{
-  from {{ opacity: 0; transform: scale(0.35); }}
+  from {{ opacity: 0; transform: scale(0.25); }}
   to {{ opacity: 1; transform: scale(1); }}
 }}
+@keyframes rc-slice-in {{
+  from {{ opacity: 0; transform: scale(0.88); }}
+  to {{ opacity: 1; transform: scale(1); }}
+}}
+
 .js-plotly-plot {{
-  animation: rc-chart-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: rc-chart-in 0.75s cubic-bezier(0.22, 1, 0.36, 1) both;
 }}
-.js-plotly-plot .barlayer,
+
+/* ---- Barras ----
+   Só animam depois do JS marcar .rc-bars-h / .rc-bars-v. */
+.js-plotly-plot .barlayer .point path,
+.js-plotly-plot .barlayer path.point {{
+  transform-box: fill-box;
+}}
+.js-plotly-plot.rc-bars-h .barlayer .point path,
+.js-plotly-plot.rc-bars-h .barlayer path.point {{
+  transform-origin: left center;
+  animation: rc-bar-grow-x 2.05s cubic-bezier(0.16, 1, 0.3, 1) both;
+}}
+.js-plotly-plot.rc-bars-v .barlayer .point path,
+.js-plotly-plot.rc-bars-v .barlayer path.point {{
+  transform-origin: center bottom;
+  animation: rc-bar-grow-y 2.05s cubic-bezier(0.16, 1, 0.3, 1) both;
+}}
+/* Fallback antes do JS: assume ranking horizontal (base à esquerda). */
+.js-plotly-plot:not(.rc-bars-h):not(.rc-bars-v) .barlayer .point path,
+.js-plotly-plot:not(.rc-bars-h):not(.rc-bars-v) .barlayer path.point {{
+  transform-origin: left center;
+  animation: rc-bar-grow-x 2.05s cubic-bezier(0.16, 1, 0.3, 1) both;
+}}
+/* Cascata leve entre barras (mais perceptível). */
+.js-plotly-plot .barlayer .points .point:nth-child(1) path {{ animation-delay: 0.00s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(2) path {{ animation-delay: 0.06s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(3) path {{ animation-delay: 0.12s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(4) path {{ animation-delay: 0.18s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(5) path {{ animation-delay: 0.24s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(6) path {{ animation-delay: 0.30s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(7) path {{ animation-delay: 0.36s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(8) path {{ animation-delay: 0.42s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(9) path {{ animation-delay: 0.48s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(10) path {{ animation-delay: 0.54s; }}
+.js-plotly-plot .barlayer .points .point:nth-child(n+11) path {{ animation-delay: 0.60s; }}
+
 .js-plotly-plot .pielayer,
-.js-plotly-plot .funnellayer,
-.js-plotly-plot .heatmaplayer,
-.js-plotly-plot .ternarylayer {{
-  animation: rc-trace-in 0.7s ease-out both;
+.js-plotly-plot .funnellayer {{
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: rc-slice-in 1.55s cubic-bezier(0.22, 1, 0.36, 1) both;
 }}
+.js-plotly-plot .heatmaplayer,
+.js-plotly-plot .ternarylayer,
+.js-plotly-plot .boxlayer,
+.js-plotly-plot .violinlayer {{
+  animation: rc-trace-in 1.55s ease-out both;
+}}
+
+/* ---- Linhas: wipe L→R bem visível ---- */
 .js-plotly-plot .scatterlayer {{
-  animation: rc-trace-in 0.35s ease-out both;
+  animation: rc-line-wipe 3.1s cubic-bezier(0.33, 0, 0.2, 1) both;
 }}
 .js-plotly-plot .scatterlayer path.js-line {{
-  stroke-dasharray: 2400;
-  stroke-dashoffset: 2400;
-  animation: rc-line-draw 1.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  /* cor flat — sem glow */
+  filter: none !important;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }}
+
+/* Sombra sob a linha em degradê (perto da linha → some embaixo) */
+.js-plotly-plot .scatterlayer path.js-fill,
+.js-plotly-plot .scatterlayer .js-fill {{
+  animation: rc-fill-in 3.1s cubic-bezier(0.33, 1, 0.68, 1) both;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.42) 0%,
+    rgba(0, 0, 0, 0.18) 38%,
+    rgba(0, 0, 0, 0.05) 72%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.42) 0%,
+    rgba(0, 0, 0, 0.18) 38%,
+    rgba(0, 0, 0, 0.05) 72%,
+    transparent 100%
+  );
+}}
+
 .js-plotly-plot .scatterlayer .points path,
 .js-plotly-plot .scatterlayer path.point {{
   transform-box: fill-box;
   transform-origin: center;
-  animation: rc-marker-pop 0.45s ease-out 0.55s both;
+  animation: rc-marker-pop 0.7s cubic-bezier(0.22, 1, 0.36, 1) 2.05s both;
 }}
+
+.js-plotly-plot .textlayer {{
+  animation: rc-trace-in 0.75s ease-out 2.25s both;
+}}
+
 @media (prefers-reduced-motion: reduce) {{
   .js-plotly-plot,
-  .js-plotly-plot .barlayer,
+  .js-plotly-plot .barlayer .point path,
+  .js-plotly-plot .barlayer path.point,
   .js-plotly-plot .scatterlayer,
   .js-plotly-plot .pielayer,
   .js-plotly-plot .funnellayer,
   .js-plotly-plot .heatmaplayer,
   .js-plotly-plot .ternarylayer,
+  .js-plotly-plot .boxlayer,
+  .js-plotly-plot .violinlayer,
   .js-plotly-plot .scatterlayer path.js-line,
+  .js-plotly-plot .scatterlayer path.js-fill,
+  .js-plotly-plot .scatterlayer .js-fill,
   .js-plotly-plot .scatterlayer .points path,
-  .js-plotly-plot .scatterlayer path.point {{
+  .js-plotly-plot .scatterlayer path.point,
+  .js-plotly-plot .textlayer {{
     animation: none !important;
-    stroke-dasharray: none !important;
-    stroke-dashoffset: 0 !important;
     opacity: 1 !important;
     transform: none !important;
+    filter: none !important;
+    clip-path: none !important;
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
   }}
 }}
+"""
+
+# Script: marca barras H vs V pra animação correta (L→R ou baixo→cima).
+# Rodado via components.html (iframe) → opera em window.parent.document.
+CHART_ANIM_JS = """
+<script>
+(function () {
+  var root = window.parent && window.parent.document ? window.parent.document : document;
+  var w = window.parent && window.parent !== window ? window.parent : window;
+  if (w.__rcChartAnimBound) return;
+  w.__rcChartAnimBound = true;
+
+  function restartBarAnims(gd) {
+    var paths = gd.querySelectorAll(".barlayer .point path, .barlayer path.point");
+    paths.forEach(function (p) { p.style.animation = "none"; });
+    void gd.offsetWidth;
+    paths.forEach(function (p) { p.style.animation = ""; });
+  }
+
+  function tagPlot(gd) {
+    if (!gd || !gd.classList || !gd.classList.contains("js-plotly-plot")) return;
+    var data = gd.data || [];
+    var bars = data.filter(function (t) { return t && t.type === "bar"; });
+    if (!bars.length) {
+      gd.classList.remove("rc-bars-h", "rc-bars-v");
+      delete gd.dataset.rcBarOrient;
+      delete gd.dataset.rcBarSig;
+      return;
+    }
+    var horizontal = bars.some(function (t) { return t.orientation === "h"; });
+    var key = horizontal ? "h" : "v";
+    var n = 0;
+    try {
+      var b0 = bars[0];
+      var axis = horizontal ? (b0.x || b0.y) : (b0.y || b0.x);
+      n = axis && axis.length != null ? axis.length : bars.length;
+    } catch (e) { n = bars.length; }
+    var sig = key + ":" + n;
+    if (gd.dataset.rcBarSig === sig) return;
+    gd.dataset.rcBarSig = sig;
+    gd.dataset.rcBarOrient = key;
+    gd.classList.toggle("rc-bars-h", horizontal);
+    gd.classList.toggle("rc-bars-v", !horizontal);
+    restartBarAnims(gd);
+  }
+
+  function scan() {
+    root.querySelectorAll(".js-plotly-plot").forEach(tagPlot);
+  }
+
+  var mo = new MutationObserver(function () { scan(); });
+  mo.observe(root.documentElement, { childList: true, subtree: true });
+  scan();
+  root.addEventListener("plotly_afterplot", function (ev) {
+    if (ev && ev.target) tagPlot(ev.target);
+  }, true);
+})();
+</script>
 """

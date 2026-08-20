@@ -71,7 +71,7 @@ ONE_PAGE_THEMES: dict[str, dict[str, Any]] = {
         # Cores específicas de gráficos Plotly — lidas via op_theme_color().
         "chart": {
             "gold":         "#c9a84c",
-            "gold_fill":    "rgba(201,168,76,0.18)",  # área translúcida (Investimento)
+            "gold_fill":    "rgba(201,168,76,0.16)",  # área sob linha (mask CSS = degradê)
             "wine_light":   "#c03048",
             "green":        "#4ade80",
             "plus_12":      "#1D4ED8",  # azul (era hardcoded no .py)
@@ -115,7 +115,7 @@ ONE_PAGE_THEMES: dict[str, dict[str, Any]] = {
         },
         "chart": {
             "gold":         "#d4a017",
-            "gold_fill":    "rgba(212,160,23,0.18)",
+            "gold_fill":    "rgba(212,160,23,0.16)",
             "wine_light":   "#a83838",
             "green":        "#0f9d58",
             "plus_12":      "#1a73e8",

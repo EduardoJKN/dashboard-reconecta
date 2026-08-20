@@ -43,6 +43,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.marketing_queries import get_mkt_visao_geral_periodo
+from src.marketing_transforms import visao_geral_kpis as mkt_visao_geral_kpis
 from src.prevendas_transforms import prevendas_overview_kpis
 from src.one_page_funnel import aplicacoes_kpis
 from src.parallel_fetch import fetch_named
@@ -50,7 +52,7 @@ from src.repositories import (
     get_executivas,
     get_investimento_diario,
     get_media_movel_vendas,
-    get_one_page_indicacoes_fonte,
+    get_one_page_indicacoes_por_tipo,
     get_one_page_legacy_diario,
     get_one_page_novos_forma_venda,
     get_one_page_por_executiva,
@@ -802,6 +804,8 @@ section[data-testid="stMain"]
     width: 100%;
     margin-top: 2px;
 }
+.op-novos-chips.op-novos-chips-1 { grid-template-columns: 1fr; }
+.op-novos-chips.op-novos-chips-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .op-chip {
     background: var(--color-bg-soft);
     border: 1px solid var(--color-border);
@@ -1008,7 +1012,13 @@ def one_page_metric_card(
             f'</div>'
             for lbl, val in footer_chips
         )
-        chips_html = f'<div class="op-novos-chips">{chip_items}</div>'
+        chips_cls = "op-novos-chips"
+        n_chips = len(footer_chips)
+        if n_chips == 1:
+            chips_cls += " op-novos-chips-1"
+        elif n_chips >= 3:
+            chips_cls += " op-novos-chips-3"
+        chips_html = f'<div class="{chips_cls}">{chip_items}</div>'
 
     val_cls = (
         "op-value onepage-card-value accent"
@@ -1097,16 +1107,19 @@ def _br_format_table(df: pd.DataFrame,
 
 
 # Rótulos canônicos da classificação por FONTE (regra `origem_final` do
-# Looker legado). INBOUND = `fonte = 'Inbound'`; SS = `fonte = 'Fábrica'`.
+# Looker legado). INBOUND = `fonte = 'Inbound'`; SS = `fonte = 'Fábrica'`;
+# IND = `fonte = 'Indicação'` (`fonte_de_lead = 'Indicação'`).
 _FONTE_INBOUND = "Inbound"
 _FONTE_SS = "Fábrica"
+_FONTE_INDICACOES = "Indicação"
+_FONTES_PREV_CARDS = (_FONTE_INBOUND, _FONTE_SS, _FONTE_INDICACOES)
 
 
 def _prev_por_fonte(df_fonte: pd.DataFrame) -> dict:
     """Soma métricas de Pré-vendas por `fonte` (regra origem_final Looker).
 
-    Devolve dict `{fonte: {metric: valor}}` com chaves `'Inbound'` e
-    `'Fábrica'` sempre presentes — quando o df vem vazio ou uma das
+    Devolve dict `{fonte: {metric: valor}}` com Inbound / Fábrica /
+    Indicação sempre presentes — quando o df vem vazio ou uma das
     fontes não tem linhas no período, devolve zeros (cards exibem "0"
     em vez de "—").
     """
@@ -1120,7 +1133,7 @@ def _prev_por_fonte(df_fonte: pd.DataFrame) -> dict:
                   "comparecimentos", "comparecimentos_ate_hoje",
                   "vendas", "montante", "receita")
     }
-    out = {_FONTE_INBOUND: dict(base), _FONTE_SS: dict(base)}
+    out = {f: dict(base) for f in _FONTES_PREV_CARDS}
 
     if df_fonte is None or df_fonte.empty or "fonte" not in df_fonte.columns:
         return out
@@ -1133,6 +1146,19 @@ def _prev_por_fonte(df_fonte: pd.DataFrame) -> dict:
             for c in sum_cols:
                 out[f][c] = float(row.get(c, 0) or 0)
     return out
+
+
+def _ensure_por_fonte(por: dict | None) -> dict:
+    """Garante as 3 fontes dos cards mesmo em cache antigo."""
+    empty = _prev_por_fonte(pd.DataFrame())
+    if not por:
+        return empty
+    for f, vals in por.items():
+        if f in empty and isinstance(vals, dict):
+            for k in empty[f]:
+                if k in vals:
+                    empty[f][k] = float(vals.get(k, 0) or 0)
+    return empty
 
 
 def _df_evolucao_aplicacoes(df_one: pd.DataFrame) -> pd.DataFrame:
@@ -1209,7 +1235,7 @@ def _tabela_indicadores_fonte(df_fonte: pd.DataFrame) -> pd.DataFrame:
 
     # Ordem fixa pra leitura estável (Looker). Outbound só entra se
     # houver atividade no período (segue o padrão da própria SQL).
-    ordem = ["Inbound", "Fábrica", "Outbound"]
+    ordem = ["Inbound", "Fábrica", "Indicação", "Outbound"]
     agg["__ord"] = agg["fonte"].map({n: i for i, n in enumerate(ordem)})
     agg = agg[agg["__ord"].notna()].copy()
     agg = agg.sort_values("__ord").drop(columns="__ord")
@@ -1646,12 +1672,13 @@ def _op_clear_onepage_caches() -> None:
     load_onepage_vendas_financeiro_cached.clear()
     # Caches aninhados dos repositories — sem isso o botão "Atualizar
     # dados" recarrega a seção mas reutiliza o Indic./Novos antigo.
-    get_one_page_indicacoes_fonte.clear()
+    get_one_page_indicacoes_por_tipo.clear()
     get_one_page_novos_forma_venda.clear()
     get_executivas.clear()
     get_investimento_diario.clear()
     get_media_movel_vendas.clear()
     get_one_page_legacy_diario.clear()
+    get_mkt_visao_geral_periodo.clear()
     get_one_page_prevendas_por_fonte.clear()
     get_prevendas_overview_diario.clear()
     get_one_page_por_executiva.clear()
@@ -1699,6 +1726,7 @@ class _VendasSectionData:
     k_vendas_prev: dict = field(default_factory=dict)
     media_movel_val: float | None = None
     novos_forma: dict = field(default_factory=lambda: {"em_call": 0, "follow": 0})
+    indicacoes_por_tipo: dict = field(default_factory=dict)
     df_exec: pd.DataFrame = field(default_factory=pd.DataFrame)
     error: str | None = None
 
@@ -1779,7 +1807,7 @@ def _prevendas_to_cache(data: _PrevendasSectionData) -> dict:
 def _prevendas_from_cache(payload: dict) -> _PrevendasSectionData:
     return _PrevendasSectionData(
         k_prev=payload.get("k_prev") or {},
-        por_fonte=payload.get("por_fonte") or {},
+        por_fonte=_ensure_por_fonte(payload.get("por_fonte")),
         df_prev_dia=_op_cache_safe_df(payload.get("df_prev_dia")),
         df_prev_fonte=_op_cache_safe_df(payload.get("df_prev_fonte")),
         error=payload.get("error"),
@@ -1795,6 +1823,7 @@ def _vendas_to_cache(data: _VendasSectionData) -> dict:
         "k_vendas_prev": _op_cache_safe_dict(data.k_vendas_prev),
         "media_movel_val": media,
         "novos_forma": _op_cache_safe_dict(data.novos_forma),
+        "indicacoes_por_tipo": _op_cache_safe_dict(data.indicacoes_por_tipo),
         "df_exec": _op_cache_safe_df(data.df_exec),
         "error": data.error,
     }
@@ -1809,6 +1838,7 @@ def _vendas_from_cache(payload: dict) -> _VendasSectionData:
         k_vendas_prev=payload.get("k_vendas_prev") or {},
         media_movel_val=media,
         novos_forma=payload.get("novos_forma") or {"em_call": 0, "follow": 0},
+        indicacoes_por_tipo=payload.get("indicacoes_por_tipo") or {},
         df_exec=_op_cache_safe_df(payload.get("df_exec")),
         error=payload.get("error"),
     )
@@ -1821,7 +1851,7 @@ def load_onepage_marketing(
     prev_fim: date,
     excluir_testes_aplicacoes: bool,
 ) -> _MarketingSectionData:
-    """Marketing — regra legada (typeform + anúncios)."""
+    """Marketing — regra legada (typeform + anúncios) + orgânicas Looker."""
     try:
         t0 = time.perf_counter()
         _r, _e = fetch_named({
@@ -1835,20 +1865,52 @@ def load_onepage_marketing(
                 (prev_ini, prev_fim),
                 {"excluir_testes_aplicacoes": excluir_testes_aplicacoes},
             ),
+            # Orgânicas / tráfego — mesma regra Looker da Visão Geral Mkt
+            # (utm_campaign no dia + exclusões evento/QUIZ/diagnóstico).
+            "periodo": (get_mkt_visao_geral_periodo, (data_ini, data_fim)),
+            "periodo_prev": (get_mkt_visao_geral_periodo, (prev_ini, prev_fim)),
         })
-        _op_log_query("one_page_legacy_diario (parallel)", t0)
-        if _e:
-            raise next(iter(_e.values()))
+        _op_log_query("one_page_legacy_diario + organicas (parallel)", t0)
+        hard = next(
+            (_e[k] for k in ("one", "one_prev") if k in _e),
+            None,
+        )
+        if hard is not None:
+            raise hard
         df_one = _r["one"]
         df_one_prev = _r["one_prev"]
+        k_apl = aplicacoes_kpis(df_one)
+        k_apl_prev = aplicacoes_kpis(df_one_prev)
+
+        if "periodo" in _e or "periodo_prev" in _e:
+            _org_err = _e.get("periodo") or _e.get("periodo_prev")
+            st.warning(f"Falha ao consultar Aplicações Orgânicas: {_org_err}")
+            k_apl["aplicacoes_organicas"] = 0
+            k_apl["aplicacoes_trafego"] = 0
+            k_apl_prev["aplicacoes_organicas"] = 0
+            k_apl_prev["aplicacoes_trafego"] = 0
+        else:
+            k_org = mkt_visao_geral_kpis(_r["periodo"])
+            k_org_prev = mkt_visao_geral_kpis(_r["periodo_prev"])
+            k_apl["aplicacoes_organicas"] = int(k_org.get("aplicacoes_organicas", 0) or 0)
+            k_apl["aplicacoes_trafego"] = int(k_org.get("aplicacoes_trafego", 0) or 0)
+            k_apl_prev["aplicacoes_organicas"] = int(
+                k_org_prev.get("aplicacoes_organicas", 0) or 0
+            )
+            k_apl_prev["aplicacoes_trafego"] = int(
+                k_org_prev.get("aplicacoes_trafego", 0) or 0
+            )
+
         return _MarketingSectionData(
-            k_apl=aplicacoes_kpis(df_one),
-            k_apl_prev=aplicacoes_kpis(df_one_prev),
+            k_apl=k_apl,
+            k_apl_prev=k_apl_prev,
             df_one=df_one,
             df_one_prev=df_one_prev,
         )
     except Exception as e:
         empty = aplicacoes_kpis(pd.DataFrame())
+        empty["aplicacoes_organicas"] = 0
+        empty["aplicacoes_trafego"] = 0
         return _MarketingSectionData(
             k_apl=empty,
             k_apl_prev=empty,
@@ -1887,7 +1949,7 @@ def load_onepage_prevendas(
             "vendas", "montante", "receita",
         )
     }
-    empty_fonte = {_FONTE_INBOUND: dict(base_fonte), _FONTE_SS: dict(base_fonte)}
+    empty_fonte = {f: dict(base_fonte) for f in _FONTES_PREV_CARDS}
     try:
         t0 = time.perf_counter()
         _r, _e = fetch_named({
@@ -1934,8 +1996,8 @@ def load_onepage_vendas_financeiro(
             "inv": (get_investimento_diario, (data_ini, data_fim)),
             "exec_prev": (get_executivas, (prev_ini, prev_fim)),
             "inv_prev": (get_investimento_diario, (prev_ini, prev_fim)),
-            "indicacoes": (get_one_page_indicacoes_fonte, (data_ini, data_fim)),
-            "indicacoes_prev": (get_one_page_indicacoes_fonte, (prev_ini, prev_fim)),
+            "indicacoes": (get_one_page_indicacoes_por_tipo, (data_ini, data_fim)),
+            "indicacoes_prev": (get_one_page_indicacoes_por_tipo, (prev_ini, prev_fim)),
             "novos_forma": (get_one_page_novos_forma_venda, (data_ini, data_fim)),
             "media_movel": (get_media_movel_vendas, ()),
         })
@@ -1955,12 +2017,17 @@ def load_onepage_vendas_financeiro(
         k_vendas = visao_geral_kpis(df_exec, df_inv)
         k_vendas_prev = visao_geral_kpis(df_exec_prev, df_inv_prev)
 
+        indicacoes_por_tipo = {
+            "total": 0, "novos": 0, "ascensoes": 0, "renovacoes": 0,
+            "upgrades": 0, "eventos": 0, "ingressos": 0,
+        }
         if "indicacoes" in _e or "indicacoes_prev" in _e:
             _ind_err = _e.get("indicacoes") or _e.get("indicacoes_prev")
-            st.warning(f"Falha ao consultar Indic. (fonte): {_ind_err}")
+            st.warning(f"Falha ao consultar Indicações (fonte): {_ind_err}")
         else:
-            k_vendas["indicacoes"] = _r["indicacoes"]
-            k_vendas_prev["indicacoes"] = _r["indicacoes_prev"]
+            indicacoes_por_tipo = _r["indicacoes"] or indicacoes_por_tipo
+            # Não sobrescreve k_vendas["indicacoes"] do mix da view —
+            # indicação é origem (fonte_de_lead), não tipo de venda.
 
         novos_forma = {"em_call": 0, "follow": 0}
         if "novos_forma" in _e:
@@ -1977,6 +2044,7 @@ def load_onepage_vendas_financeiro(
             k_vendas_prev=k_vendas_prev,
             media_movel_val=media_movel_val,
             novos_forma=novos_forma,
+            indicacoes_por_tipo=indicacoes_por_tipo,
             df_exec=df_exec,
         )
     except Exception as e:
@@ -2000,18 +2068,19 @@ def load_onepage_vendas_financeiro_cached(
 
 
 def _render_onepage_marketing(data: _MarketingSectionData) -> None:
-    """Coluna Marketing — cards de aplicações e ±12."""
+    """Coluna Marketing — hero selecionável + ±12."""
     op_section_marker("mkt")
     section_title("Marketing", "leads × aplicações")
     k_apl, k_apl_prev = data.k_apl, data.k_apl_prev
     mkt_hero_opt = st.segmented_control(
         "Métrica principal",
-        options=["Aplicações", "Leads Totais"],
+        options=["Aplicações", "Orgânicas", "Tráfego", "Leads Totais"],
         default="Aplicações",
         key="op_mkt_hero_metric",
         label_visibility="collapsed",
         required=True,
     )
+    apl_total = float(k_apl.get("aplicacoes", 0) or 0)
     if mkt_hero_opt == "Leads Totais":
         one_page_metric_card(
             "Leads Totais",
@@ -2023,6 +2092,38 @@ def _render_onepage_marketing(data: _MarketingSectionData) -> None:
             badges=[
                 ("% Aplic. / Leads", pct(k_apl["pct_aplicacoes"])),
                 ("CPL",              brl(k_apl["cpl"], casas=2)),
+            ],
+        )
+    elif mkt_hero_opt == "Orgânicas":
+        org = float(k_apl.get("aplicacoes_organicas", 0) or 0)
+        one_page_metric_card(
+            "Apl. Orgânicas",
+            int_br(org),
+            delta_pct=delta_pct(
+                org, k_apl_prev.get("aplicacoes_organicas", 0),
+            ),
+            hint="lead do dia sem utm_campaign",
+            accent=True,
+            hero=True,
+            badges=[
+                ("% do total", pct(_safe_div(org, apl_total) * 100)),
+                ("Custo / Apl.", brl(_safe_div(k_apl.get("investimento", 0), org), casas=2)),
+            ],
+        )
+    elif mkt_hero_opt == "Tráfego":
+        traf = float(k_apl.get("aplicacoes_trafego", 0) or 0)
+        one_page_metric_card(
+            "Apl. Tráfego",
+            int_br(traf),
+            delta_pct=delta_pct(
+                traf, k_apl_prev.get("aplicacoes_trafego", 0),
+            ),
+            hint="lead do dia com utm_campaign",
+            accent=True,
+            hero=True,
+            badges=[
+                ("% do total", pct(_safe_div(traf, apl_total) * 100)),
+                ("Custo / Apl.", brl(_safe_div(k_apl.get("investimento", 0), traf), casas=2)),
             ],
         )
     else:
@@ -2079,6 +2180,7 @@ def _render_onepage_prevendas(
     k_prev = data.k_prev
     inb = data.por_fonte[_FONTE_INBOUND]
     ss = data.por_fonte[_FONTE_SS]
+    ind_f = data.por_fonte[_FONTE_INDICACOES]
     ag_bruto = int(k_prev.get("agendamentos", 0))
     ag_venc = int(k_prev.get("vencidas", 0))
     ag_exib = int(k_prev.get("agendamentos_exibidos", max(ag_bruto - ag_venc, 0)))
@@ -2093,61 +2195,56 @@ def _render_onepage_prevendas(
         ],
     )
     op_spacer("parent")
-    inb_tot = inb["agendamentos"]
-    ss_tot = ss["agendamentos"]
-    r = st.columns(2, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Agend. INBOUND",
-            int_br(inb_tot),
-            hint="agendamentos Inbound",
-            row_class="op-row-prev-pair",
-            badges=[
-                ("Agend. -12 IN", int_br(inb["agendamentos_menos_12"]), [
-                    ("% Agend.", pct(_safe_div(inb["agendamentos_menos_12"], inb_tot) * 100)),
-                    ("Custo / Ag.", brl(_safe_div(inv_total, inb["agendamentos_menos_12"]), casas=2)),
-                ]),
-                ("Agend. +12 IN", int_br(inb["agendamentos_mais_12"]), [
-                    ("% Agend.", pct(_safe_div(inb["agendamentos_mais_12"], inb_tot) * 100)),
-                    ("Custo / Ag.", brl(_safe_div(inv_total, inb["agendamentos_mais_12"]), casas=2)),
-                ]),
-            ],
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Agend. SS",
-            int_br(ss_tot),
-            hint="agendamentos Fábrica",
-            row_class="op-row-prev-pair",
-            badges=[
-                ("Agend. -12 SS", int_br(ss["agendamentos_menos_12"]), [
-                    ("% Agend.", pct(_safe_div(ss["agendamentos_menos_12"], ss_tot) * 100)),
-                    ("Custo / Ag.", brl(_safe_div(inv_total, ss["agendamentos_menos_12"]), casas=2)),
-                ]),
-                ("Agend. +12 SS", int_br(ss["agendamentos_mais_12"]), [
-                    ("% Agend.", pct(_safe_div(ss["agendamentos_mais_12"], ss_tot) * 100)),
-                    ("Custo / Ag.", brl(_safe_div(inv_total, ss["agendamentos_mais_12"]), casas=2)),
-                ]),
-            ],
-        )
+
+    fontes_ag = (
+        ("Agend. INBOUND", inb, "IN", "agendamentos Inbound"),
+        ("Agend. SS", ss, "SS", "agendamentos Fábrica"),
+        ("Agend. INDIC.", ind_f, "IND", "agendamentos Indicação"),
+    )
+    r = st.columns(3, gap="small")
+    for col, (title, fonte, suf, hint) in zip(r, fontes_ag):
+        tot = fonte["agendamentos"]
+        with col:
+            one_page_metric_card(
+                title,
+                int_br(tot),
+                hint=hint,
+                row_class="op-row-prev-pair",
+                badges=[
+                    (f"Agend. -12 {suf}", int_br(fonte["agendamentos_menos_12"]), [
+                        ("% Agend.", pct(_safe_div(fonte["agendamentos_menos_12"], tot) * 100)),
+                        ("Custo / Ag.", brl(_safe_div(inv_total, fonte["agendamentos_menos_12"]), casas=2)),
+                    ]),
+                    (f"Agend. +12 {suf}", int_br(fonte["agendamentos_mais_12"]), [
+                        ("% Agend.", pct(_safe_div(fonte["agendamentos_mais_12"], tot) * 100)),
+                        ("Custo / Ag.", brl(_safe_div(inv_total, fonte["agendamentos_mais_12"]), casas=2)),
+                    ]),
+                ],
+            )
+
     op_spacer("row")
-    r = st.columns(2, gap="small")
-    with r[0]:
-        one_page_metric_card(
-            "Comp. INBOUND",
-            int_br(inb["comparecimentos"]),
-            hint="comparecimentos Inbound",
-            row_class="op-row-prev-pair",
-            badges=[("% Comp.", pct(_safe_div(inb["comparecimentos"], inb["agendamentos"]) * 100))],
-        )
-    with r[1]:
-        one_page_metric_card(
-            "Comp. SS",
-            int_br(ss["comparecimentos"]),
-            hint="comparecimentos Fábrica",
-            row_class="op-row-prev-pair",
-            badges=[("% Comp.", pct(_safe_div(ss["comparecimentos"], ss["agendamentos"]) * 100))],
-        )
+    fontes_comp = (
+        ("Comp. INBOUND", inb, "comparecimentos Inbound"),
+        ("Comp. SS", ss, "comparecimentos Fábrica"),
+        ("Comp. INDIC.", ind_f, "comparecimentos Indicação"),
+    )
+    r = st.columns(3, gap="small")
+    for col, (title, fonte, hint) in zip(r, fontes_comp):
+        with col:
+            one_page_metric_card(
+                title,
+                int_br(fonte["comparecimentos"]),
+                hint=hint,
+                row_class="op-row-prev-pair",
+                badges=[
+                    ("% Comp.", pct(_safe_div(fonte["comparecimentos"], fonte["agendamentos"]) * 100)),
+                ],
+            )
+
+
+def _indic_chip(indicacoes: dict, key: str) -> list[tuple[str, str]]:
+    """Chip 'Indic.' — origem do lead, não tipo de venda."""
+    return [("Indic.", int_br(indicacoes.get(key, 0)))]
 
 
 def _render_onepage_vendas(
@@ -2159,8 +2256,11 @@ def _render_onepage_vendas(
     op_section_marker("vendas")
     section_title("Vendas / Financeiro", "meta proporcional ao período")
     k_vendas, k_vendas_prev = data.k_vendas, data.k_vendas_prev
+    ind = data.indicacoes_por_tipo or {}
     pct_conversao = _safe_div(k_vendas["novos"], comparecimentos) * 100
-    r = st.columns(7, gap="small")
+
+    # Linha 1: Novos · Asc. · Renov.
+    r = st.columns(3, gap="small")
     with r[0]:
         one_page_metric_card(
             "Novos",
@@ -2173,6 +2273,7 @@ def _render_onepage_vendas(
             footer_chips=[
                 ("Em call", int_br(data.novos_forma.get("em_call", 0))),
                 ("Follow",  int_br(data.novos_forma.get("follow", 0))),
+                *_indic_chip(ind, "novos"),
             ],
             row_class="op-row-vendas-top",
         )
@@ -2182,6 +2283,7 @@ def _render_onepage_vendas(
             int_br(k_vendas["ascensoes"]),
             delta_pct=delta_pct(k_vendas["ascensoes"], k_vendas_prev["ascensoes"]),
             compact=True,
+            footer_chips=_indic_chip(ind, "ascensoes"),
             row_class="op-row-vendas-top",
         )
     with r[2]:
@@ -2190,17 +2292,14 @@ def _render_onepage_vendas(
             int_br(k_vendas["renovacoes"]),
             delta_pct=delta_pct(k_vendas["renovacoes"], k_vendas_prev["renovacoes"]),
             compact=True,
+            footer_chips=_indic_chip(ind, "renovacoes"),
             row_class="op-row-vendas-top",
         )
-    with r[3]:
-        one_page_metric_card(
-            "Indic.",
-            int_br(k_vendas["indicacoes"]),
-            delta_pct=delta_pct(k_vendas["indicacoes"], k_vendas_prev["indicacoes"]),
-            compact=True,
-            row_class="op-row-vendas-top",
-        )
-    with r[4]:
+
+    op_spacer("row")
+    # Linha 2: Upg. · Evt. · Ing.
+    r = st.columns(3, gap="small")
+    with r[0]:
         one_page_metric_card(
             "Upg.",
             int_br(k_vendas.get("upgrades", 0)),
@@ -2209,9 +2308,10 @@ def _render_onepage_vendas(
                 k_vendas_prev.get("upgrades", 0),
             ),
             compact=True,
+            footer_chips=_indic_chip(ind, "upgrades"),
             row_class="op-row-vendas-top",
         )
-    with r[5]:
+    with r[1]:
         one_page_metric_card(
             "Evt.",
             int_br(k_vendas.get("eventos", 0)),
@@ -2220,9 +2320,10 @@ def _render_onepage_vendas(
                 k_vendas_prev.get("eventos", 0),
             ),
             compact=True,
+            footer_chips=_indic_chip(ind, "eventos"),
             row_class="op-row-vendas-top",
         )
-    with r[6]:
+    with r[2]:
         one_page_metric_card(
             "Ing.",
             int_br(k_vendas.get("ingressos", 0)),
@@ -2231,6 +2332,7 @@ def _render_onepage_vendas(
                 k_vendas_prev.get("ingressos", 0),
             ),
             compact=True,
+            footer_chips=_indic_chip(ind, "ingressos"),
             row_class="op-row-vendas-top",
         )
     op_spacer("row")
