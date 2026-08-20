@@ -26,7 +26,7 @@ from src.marketing_queries import (
     get_mkt_visao_geral_diario,
     get_mkt_visao_geral_kpis_canal,
 )
-from src.marketing_safe import safe_run
+from src.marketing_safe import parallel_safe_runs
 from src.marketing_transforms import (
     CANAIS_VISIVEIS_OVERVIEW,
     filtro_canais_padrao,
@@ -55,31 +55,37 @@ ctx.apply_filters(filtro_canais_padrao(CANAIS_VISIVEIS_OVERVIEW), col_map)
 # ---------------------------------------------------------------------------
 # Carga (período atual + período anterior para deltas)
 # ---------------------------------------------------------------------------
-df_kpc = safe_run(
-    lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
-    view_label="mkt_visao_geral_kpis_canal",
-)
-df_atividades = safe_run(
-    lambda: get_mkt_growth_atividades_canal(ctx.data_ini, ctx.data_fim),
-    view_label="mkt_growth_atividades_canal",
-)
-df_vg_diario = safe_run(
-    lambda: get_mkt_visao_geral_diario(ctx.data_ini, ctx.data_fim),
-    view_label="mkt_visao_geral_diario",
-)
-
 dias = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias - 1)
 
-df_kpc_prev = safe_run(
-    lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
-    view_label="mkt_visao_geral_kpis_canal",
-)
-df_atividades_prev = safe_run(
-    lambda: get_mkt_growth_atividades_canal(prev_ini, prev_fim),
-    view_label="mkt_growth_atividades_canal",
-)
+_loaded = parallel_safe_runs({
+    "kpc": (
+        lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
+        "mkt_visao_geral_kpis_canal",
+    ),
+    "atividades": (
+        lambda: get_mkt_growth_atividades_canal(ctx.data_ini, ctx.data_fim),
+        "mkt_growth_atividades_canal",
+    ),
+    "vg_diario": (
+        lambda: get_mkt_visao_geral_diario(ctx.data_ini, ctx.data_fim),
+        "mkt_visao_geral_diario",
+    ),
+    "kpc_prev": (
+        lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
+        "mkt_visao_geral_kpis_canal",
+    ),
+    "atividades_prev": (
+        lambda: get_mkt_growth_atividades_canal(prev_ini, prev_fim),
+        "mkt_growth_atividades_canal",
+    ),
+})
+df_kpc = _loaded["kpc"]
+df_atividades = _loaded["atividades"]
+df_vg_diario = _loaded["vg_diario"]
+df_kpc_prev = _loaded["kpc_prev"]
+df_atividades_prev = _loaded["atividades_prev"]
 
 # ---------------------------------------------------------------------------
 # Filtro de canal — mesma regra da Visão Geral / ROAS-CAC:

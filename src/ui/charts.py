@@ -48,6 +48,9 @@ def _base_layout(height: int = 320, unified: bool = False) -> dict:
             font=dict(color=PALETTE["text"], family="Inter"),
         ),
         hovermode="x unified" if unified else "closest",
+        transition=dict(duration=650, easing="cubic-in-out"),
+        # Suaviza redesenhos (filtro/métrica) sem atrapalhar o 1º paint CSS.
+        uirevision="reconecta",
     )
 
 

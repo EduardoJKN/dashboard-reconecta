@@ -15,8 +15,8 @@ def get_engine() -> Engine:
     return create_engine(
         settings.dsn,
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=5,
+        pool_size=8,
+        max_overflow=8,
         future=True,
     )
 

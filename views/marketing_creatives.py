@@ -182,41 +182,38 @@ def _load_p1_data(
     pd.DataFrame, pd.DataFrame, dict, dict, str | None,
 ]:
     """Performance Meta: view + mart (atual e anterior para deltas)."""
-    errors: list[str] = []
-    prev_ini, prev_fim = _prev_period(ctx.data_ini, ctx.data_fim)
+    from src.marketing_safe import parallel_safe_runs
 
-    df_all, e1 = _fetch_df(
-        "bi.vw_mkt_criativos",
-        lambda: get_mkt_criativos(ctx.data_ini, ctx.data_fim),
-        ctx.data_ini, ctx.data_fim,
-    )
-    df_all = _normalize_criativos_df(df_all)
+    prev_ini, prev_fim = _prev_period(ctx.data_ini, ctx.data_fim)
+    loaded = parallel_safe_runs({
+        "cri": (
+            lambda: get_mkt_criativos(ctx.data_ini, ctx.data_fim),
+            "bi.vw_mkt_criativos",
+        ),
+        "cri_prev": (
+            lambda: get_mkt_criativos(prev_ini, prev_fim),
+            "bi.vw_mkt_criativos (periodo anterior)",
+        ),
+        "res": (
+            lambda: get_mkt_criativos_resultados(ctx.data_ini, ctx.data_fim),
+            "odam.mart_ad_funnel_daily (criativos)",
+        ),
+        "res_prev": (
+            lambda: get_mkt_criativos_resultados(prev_ini, prev_fim),
+            "odam.mart_ad_funnel_daily (criativos, periodo anterior)",
+        ),
+    })
+    df_all = _normalize_criativos_df(loaded["cri"])
     df = ctx.apply_filters(df_all, _COL_MAP)
 
-    df_prev_all, e2 = _fetch_df(
-        "bi.vw_mkt_criativos (periodo anterior)",
-        lambda: get_mkt_criativos(prev_ini, prev_fim),
-        prev_ini, prev_fim,
-    )
-    df_prev_all = _normalize_criativos_df(df_prev_all)
+    df_prev_all = _normalize_criativos_df(loaded["cri_prev"])
     df_prev = (
         ctx.refilter(df_prev_all, _COL_MAP)
         if not df_prev_all.empty else df_prev_all
     )
 
-    df_resultados, e3 = _fetch_df(
-        "odam.mart_ad_funnel_daily (criativos)",
-        lambda: get_mkt_criativos_resultados(ctx.data_ini, ctx.data_fim),
-        ctx.data_ini, ctx.data_fim,
-    )
-    df_resultados_prev, e4 = _fetch_df(
-        "odam.mart_ad_funnel_daily (criativos, periodo anterior)",
-        lambda: get_mkt_criativos_resultados(prev_ini, prev_fim),
-        prev_ini, prev_fim,
-    )
-    for e in (e1, e2, e3, e4):
-        if e:
-            errors.append(e)
+    df_resultados = loaded["res"]
+    df_resultados_prev = loaded["res_prev"]
 
     df_res_f = _restrict_resultados_aos_ads(df_resultados, df)
     df_res_prev_f = _restrict_resultados_aos_ads(df_resultados_prev, df_prev)
@@ -224,7 +221,7 @@ def _load_p1_data(
     kp = criativos_kpis(df_prev, df_res_prev_f)
     return (
         df_all, df, df_prev, df_res_f, df_res_prev_f,
-        df_resultados, k, kp, "; ".join(errors) or None,
+        df_resultados, k, kp, None,
     )
 
 

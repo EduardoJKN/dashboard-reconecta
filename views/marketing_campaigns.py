@@ -151,26 +151,25 @@ def _load_primary_data(
     ctx: PageContext,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str | None]:
     """P1: campanhas + leads canal diario."""
-    errors: list[str] = []
-    df_camp_all, e1 = _fetch_df(
-        "bi.vw_mkt_campanhas",
-        lambda: get_mkt_campanhas(ctx.data_ini, ctx.data_fim),
-        ctx.data_ini, ctx.data_fim,
-    )
-    df_leads_canal_diario_all, e2 = _fetch_df(
-        "bi_mkt.vw_visao_geral_canal_base (canal-diario)",
-        lambda: get_mkt_campanhas_leads_canal_diario(ctx.data_ini, ctx.data_fim),
-        ctx.data_ini, ctx.data_fim,
-    )
-    if e1:
-        errors.append(e1)
-    if e2:
-        errors.append(e2)
+    from src.marketing_safe import parallel_safe_runs
+
+    loaded = parallel_safe_runs({
+        "camp": (
+            lambda: get_mkt_campanhas(ctx.data_ini, ctx.data_fim),
+            "bi.vw_mkt_campanhas",
+        ),
+        "leads": (
+            lambda: get_mkt_campanhas_leads_canal_diario(ctx.data_ini, ctx.data_fim),
+            "bi_mkt.vw_visao_geral_canal_base (canal-diario)",
+        ),
+    })
+    df_camp_all = loaded["camp"]
+    df_leads_canal_diario_all = loaded["leads"]
     col_map = {"canal": "canal"}
     df_camp = (
         ctx.refilter(df_camp_all, col_map) if not df_camp_all.empty else df_camp_all
     )
-    return df_camp, df_leads_canal_diario_all, df_camp_all, "; ".join(errors) or None
+    return df_camp, df_leads_canal_diario_all, df_camp_all, None
 
 
 def _compute_top_kpis(

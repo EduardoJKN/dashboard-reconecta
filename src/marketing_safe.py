@@ -67,6 +67,41 @@ def safe_run(
         raise
 
 
+def parallel_safe_runs(
+    specs: dict[str, tuple[Callable[[], pd.DataFrame], str]],
+    *,
+    max_workers: int | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Versão paralela de vários `safe_run`.
+
+    `specs[name] = (callable_sem_args, view_label)`.
+    Views ausentes viram DataFrame vazio + warning; demais erros sobem.
+    """
+    from src.parallel_fetch import fetch_named
+
+    tasks = {name: (fn, ()) for name, (fn, _label) in specs.items()}
+    results, errors = fetch_named(tasks, max_workers=max_workers)
+    out: dict[str, pd.DataFrame] = {}
+    for name, (_fn, view_label) in specs.items():
+        err = errors.get(name)
+        if err is None:
+            val = results.get(name)
+            out[name] = val if isinstance(val, pd.DataFrame) else pd.DataFrame()
+            continue
+        if isinstance(err, (ProgrammingError, OperationalError)) and looks_like_missing_relation(err):
+            st.warning(
+                f"Fonte/consulta `{view_label}` ainda indisponível no banco "
+                f"(view ausente, schema ou permissão). Detalhes no terminal do "
+                f"Streamlit. Ajuste a query/objeto e recarregue a página."
+            )
+            out[name] = pd.DataFrame()
+            continue
+        print(f"[ERRO parallel_safe_runs:{view_label}]", repr(err))
+        print(traceback.format_exc())
+        raise err
+    return out
+
+
 def require_columns(df: pd.DataFrame, cols: tuple[str, ...],
                     ctx_label: str) -> bool:
     """Confere colunas; mostra aviso e retorna False se faltar alguma."""

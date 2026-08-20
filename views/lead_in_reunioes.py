@@ -62,6 +62,7 @@ from src.lead_in_transforms import (
     lead_in_resumo_styler,
     lead_in_tabela_detalhe,
 )
+from src.parallel_fetch import fetch_named
 from src.repositories import (
     get_executivas_churn_pos_venda,
     get_executivas_oficiais,
@@ -91,46 +92,24 @@ ctx = start_page(
 
 perf_set_context(data_ini=ctx.data_ini, data_fim=ctx.data_fim)
 
-try:
-    df_raw = perf_fetch_df(
-        "get_lead_in_reunioes_consultas_v2",
-        lambda: get_lead_in_reunioes_consultas_v2(ctx.data_ini, ctx.data_fim),
-        ctx.data_ini,
-        ctx.data_fim,
-    )
-    df_pre = perf_fetch_df(
-        "get_prevendas_sdrs_oficiais",
-        get_prevendas_sdrs_oficiais,
-        None,
-        None,
-    )
-    df_email_sdr = perf_fetch_df(
-        "get_lead_in_email_sdr_lookup",
-        lambda: get_lead_in_email_sdr_lookup(ctx.data_ini, ctx.data_fim),
-        ctx.data_ini,
-        ctx.data_fim,
-    )
-    df_churn_all = perf_fetch_df(
-        "get_executivas_churn_pos_venda",
-        get_executivas_churn_pos_venda,
-        None,
-        None,
-    )
-    df_oficiais = perf_fetch_df(
-        "get_executivas_oficiais",
-        get_executivas_oficiais,
-        None,
-        None,
-    )
-    df_churn_deal_pre = perf_fetch_df(
-        "get_lead_in_churn_deal_pre",
-        get_lead_in_churn_deal_pre,
-        None,
-        None,
-    )
-except Exception as e:
-    st.error(f"Falha ao consultar Lead In & Reuniões: {e}")
+_r, _e = fetch_named({
+    "raw": (get_lead_in_reunioes_consultas_v2, (ctx.data_ini, ctx.data_fim)),
+    "pre": (get_prevendas_sdrs_oficiais, ()),
+    "email_sdr": (get_lead_in_email_sdr_lookup, (ctx.data_ini, ctx.data_fim)),
+    "churn_all": (get_executivas_churn_pos_venda, ()),
+    "oficiais": (get_executivas_oficiais, ()),
+    "churn_deal_pre": (get_lead_in_churn_deal_pre, ()),
+})
+if _e:
+    _err = next(iter(_e.values()))
+    st.error(f"Falha ao consultar Lead In & Reuniões: {_err}")
     st.stop()
+df_raw = _r["raw"]
+df_pre = _r["pre"]
+df_email_sdr = _r["email_sdr"]
+df_churn_all = _r["churn_all"]
+df_oficiais = _r["oficiais"]
+df_churn_deal_pre = _r["churn_deal_pre"]
 
 with perf_timed_block("pandas: churn filtrar + agregar"):
     df_churn_period = churn_pos_filtrar_periodo(df_churn_all, ctx.data_ini, ctx.data_fim)

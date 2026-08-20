@@ -56,7 +56,7 @@ def _month_params(data_ini: date, data_fim: date) -> dict:
     }
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo executivas…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
     from src.transforms import (
         executivas_alinhar_novos_com_vendas,
@@ -129,7 +129,7 @@ def get_executivas_for_funil(
     return df, EXECUTIVAS_VERSION_V1, None
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo vendas oficiais (Campanhas)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_mkt_campanhas_vendas_oficiais(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Total CRM de vendas novas para Campanhas (__todos__).
 
@@ -141,7 +141,7 @@ def get_mkt_campanhas_vendas_oficiais(data_ini: date, data_fim: date) -> pd.Data
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Por Executiva…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_one_page_por_executiva(data_ini: date,
                                data_fim: date,
                                modo: str = "ativas") -> pd.DataFrame:
@@ -164,7 +164,7 @@ def get_one_page_por_executiva(data_ini: date,
     return run_sql_file("one_page_por_executiva.sql", params)
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo SDR × Closer da One Page…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_one_page_sdr_closer(
     data_ini: date,
     data_fim: date,
@@ -189,7 +189,7 @@ def get_one_page_sdr_closer(
     return run_sql_file("one_page_sdr_closer.sql", params)
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Novos (forma venda) da One Page…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_one_page_novos_forma_venda(data_ini: date, data_fim: date) -> dict:
     """Sub-stats Em call / Follow do card Novos (One Page).
 
@@ -210,7 +210,7 @@ def get_one_page_novos_forma_venda(data_ini: date, data_fim: date) -> dict:
     }
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo indicações (fonte) da One Page…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_one_page_indicacoes_fonte(data_ini: date, data_fim: date) -> int:
     """Card Indic. da One Page — ganhos com `fonte_de_lead = 'Indicação'`.
 
@@ -227,7 +227,7 @@ def get_one_page_indicacoes_fonte(data_ini: date, data_fim: date) -> int:
     return int(val) if val is not None else 0
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo SDR × Closer…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
     # Migrado de bi.vw_compatibilidade_sdr_closer (defasada e com regra
     # divergente) para zoho_deals + zoho_users diretos. Janela = dia exato
@@ -251,7 +251,7 @@ def get_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo investimento…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_investimento_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
     df = run_sql_file("investimento_diario.sql", _date_params(data_ini, data_fim))
     if not df.empty:
@@ -264,7 +264,7 @@ def get_tipos_venda() -> pd.DataFrame:
     return run_sql_file("tipos_venda_time.sql")
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo funil de leads…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_funil_leads_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
     df = run_sql_file("funil_leads_diario.sql", _date_params(data_ini, data_fim))
     if not df.empty:
@@ -274,7 +274,7 @@ def get_funil_leads_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo leads…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_leads_visao_geral(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Leads únicos/dia para o card 'Leads Totais' da Visão Geral comercial.
 
@@ -295,7 +295,7 @@ def get_leads_visao_geral(data_ini: date, data_fim: date) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo One Page (Pré-vendas por fonte)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_one_page_prevendas_por_fonte(data_ini: date,
                                      data_fim: date) -> pd.DataFrame:
     """Série diária por FONTE de Pré-vendas (regra `origem_final` Looker).
@@ -327,7 +327,7 @@ def get_one_page_prevendas_por_fonte(data_ini: date,
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo One Page (regra legada)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_one_page_legacy_diario(
     data_ini: date,
     data_fim: date,
@@ -452,7 +452,7 @@ def get_one_page_legacy_diario_benchmark_batch_v2(
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo média móvel de vendas…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_media_movel_vendas() -> float:
     """Média móvel de vendas ganhas — sempre relativa a CURRENT_DATE.
     NÃO recebe filtro de período (replica fórmula do Looker)."""
@@ -469,7 +469,7 @@ def get_media_movel_vendas() -> float:
 # Closer (matriz SDR × Closer): `zoho_activities.owner` resolvido via
 # `zoho_users` (NULL → 'Sem Closer').
 # ---------------------------------------------------------------------------
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (diário)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_overview_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
     df = run_sql_file(
         "prevendas_overview_diario.sql", _date_params(data_ini, data_fim)
@@ -479,7 +479,7 @@ def get_prevendas_overview_diario(data_ini: date, data_fim: date) -> pd.DataFram
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo leads por funil de origem…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_leads_por_origem(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Leads do período (daily-distinct por email) quebrados por
     funil_origem. Soma bate com o card 'Leads totais' da Visão Geral
@@ -489,7 +489,7 @@ def get_prevendas_leads_por_origem(data_ini: date, data_fim: date) -> pd.DataFra
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (detalhe diário)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_leads_detalhe_diario(
     data_ini: date,
     data_fim: date,
@@ -538,12 +538,12 @@ def get_executivas_comparecimento_ajustado(
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pré-vendas…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_sdrs_oficiais() -> pd.DataFrame:
     return run_sql_file("prevendas_sdrs_oficiais.sql")
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo lookup email → SDR (Lead In)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_lead_in_email_sdr_lookup(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Candidatos email → SDR (base ext_reconecta.leads + CRM)."""
     df = run_sql_file("lead_in_email_sdr_lookup.sql", _date_params(data_ini, data_fim))
@@ -552,7 +552,7 @@ def get_lead_in_email_sdr_lookup(data_ini: date, data_fim: date) -> pd.DataFrame
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Lead In & Reuniões…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_lead_in_reunioes_consultas(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Consultas (`activity_type = 'Consulta'`) no período por data da reunião."""
     return _load_lead_in_reunioes_consultas(data_ini, data_fim)
@@ -582,7 +582,7 @@ def _load_lead_in_reunioes_consultas_sql(
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Lead In & Reuniões…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_lead_in_reunioes_consultas_v2(data_ini: date, data_fim: date) -> pd.DataFrame:
     """Consultas v2 — mesma semântica da v1, SQL otimizado."""
     return _load_lead_in_reunioes_consultas_sql(
@@ -604,13 +604,13 @@ def get_lead_in_reunioes_consultas_agenda_v2(data_ini: date, data_fim: date) -> 
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo campos de pré (deals Churn)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_lead_in_churn_deal_pre() -> pd.DataFrame:
     """`prevendas_raw` + `deal_sdr_nome` por deal `stage = 'Churn'`."""
     return run_sql_file("lead_in_churn_deal_pre.sql")
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Vendas…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_oficiais() -> pd.DataFrame:
     """Time ativo de Vendas (`fdw_reconecta.executivas_vendas WHERE ativo='y'`).
 
@@ -623,7 +623,7 @@ def get_executivas_oficiais() -> pd.DataFrame:
     return executivas_oficiais_com_extras(run_sql_file("executivas_oficiais.sql"))
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro completo de Vendas…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_oficiais_todas() -> pd.DataFrame:
     """Cadastro ativo + histórico (`executivas_oficiais_todas.sql`).
 
@@ -636,13 +636,13 @@ def get_executivas_oficiais_todas() -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo cadastro oficial de Pós-venda…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_pos_vendas_oficiais() -> pd.DataFrame:
     """Cadastro pós-venda (`assistencial.executivas_pos_vendas`, ativos + históricos)."""
     return run_sql_file("executivas_pos_vendas_oficiais.sql")
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo agendamentos do funil…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_funil_agendamentos(data_ini: date, data_fim: date) -> pd.DataFrame:
     """1 linha por activity — mesma regra de `agendamentos` na view executivas."""
     df = run_sql_file(
@@ -655,7 +655,7 @@ def get_executivas_funil_agendamentos(data_ini: date, data_fim: date) -> pd.Data
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Lead In & Agendamentos…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_lead_in_triagem(data_ini: date, data_fim: date) -> pd.DataFrame:
     """1 linha por deal criado no período — triagem + stage + closer."""
     df = run_sql_file(
@@ -666,7 +666,7 @@ def get_executivas_lead_in_triagem(data_ini: date, data_fim: date) -> pd.DataFra
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo indicações…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_indicacoes(data_ini: date, data_fim: date) -> pd.DataFrame:
     """1 linha por deal com `fonte_de_lead = 'Indicação'` criado no período."""
     df = run_sql_file(
@@ -682,7 +682,7 @@ def get_executivas_indicacoes(data_ini: date, data_fim: date) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo agendamentos criados (indicações)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_indicacoes_agend_criados(
     data_ini: date, data_fim: date,
 ) -> pd.DataFrame:
@@ -699,7 +699,7 @@ def get_executivas_indicacoes_agend_criados(
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo churns (stage Churn)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_churn_pos_venda() -> pd.DataFrame:
     """1 linha por deal `stage = 'Churn'` — card/ranking Churn (não a aba pós-venda)."""
     df = run_sql_file("executivas_churn_pos_venda.sql")
@@ -710,7 +710,7 @@ def get_executivas_churn_pos_venda() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo cancelamentos (Consulta cancelada)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_cancelamentos_pos_venda() -> pd.DataFrame:
     """1 linha por activity Consulta cancelada (com e-mail resolvido)."""
     df = run_sql_file("executivas_cancelamentos_pos_venda.sql")
@@ -721,7 +721,7 @@ def get_executivas_cancelamentos_pos_venda() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo contatos de pós por e-mail…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_pos_contatos_email() -> pd.DataFrame:
     """União de fontes de pós indexadas por email_norm."""
     df = run_sql_file("executivas_pos_contatos_email.sql")
@@ -730,7 +730,7 @@ def get_executivas_pos_contatos_email() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas (diário por SDR)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_overview_diario_por_sdr(data_ini: date,
                                           data_fim: date) -> pd.DataFrame:
     df = run_sql_file(
@@ -742,7 +742,7 @@ def get_prevendas_overview_diario_por_sdr(data_ini: date,
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo Pré-vendas por SDR…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_por_sdr(data_ini: date, data_fim: date) -> pd.DataFrame:
     # CP3-B: v2 otimizada (escopo de deals/leads no período). Legado:
     # `prevendas_por_sdr.sql` — regressão via scripts/benchmark_prevendas_por_sdr.py
@@ -751,7 +751,7 @@ def get_prevendas_por_sdr(data_ini: date, data_fim: date) -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo qualificação × comparecimento…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_qualif_comparecimento(data_ini: date,
                                       data_fim: date) -> pd.DataFrame:
     """Agendamentos classificáveis (Recepção / Reunião Agendada) com flag de
@@ -768,7 +768,7 @@ def get_prevendas_qualif_comparecimento(data_ini: date,
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo oportunidades por SDR…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_oportunidades_sdr(data_ini: date,
                                     data_fim: date) -> pd.DataFrame:
     """Oportunidades (deals criados no período) × Agendamentos (activities
@@ -783,7 +783,7 @@ def get_prevendas_oportunidades_sdr(data_ini: date,
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo cohort de agendamentos…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_cohort_agendamentos(data_ini: date,
                                       data_fim: date) -> pd.DataFrame:
     """Cohort de agendamentos por dia de geração do deal.
@@ -802,7 +802,7 @@ def get_prevendas_cohort_agendamentos(data_ini: date,
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo cohort de agendamentos (leads)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_cohort_leads(data_ini: date,
                                data_fim: date) -> pd.DataFrame:
     """Cohort de agendamentos por dia de geração do LEAD (daily-distinct
@@ -820,14 +820,14 @@ def get_prevendas_cohort_leads(data_ini: date,
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo matriz Pré-vendas SDR × Closer…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
     return run_sql_file(
         "prevendas_sdr_closer.sql", _date_params(data_ini, data_fim)
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo classificação de comparecimentos…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_comparecimentos_classif(data_ini: date,
                                           data_fim: date) -> pd.DataFrame:
     # CP3-B: v2 otimizada (escopo de deals/leads no período). Legado:
@@ -839,7 +839,7 @@ def get_prevendas_comparecimentos_classif(data_ini: date,
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo SLA (amostra)…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_sla(data_ini: date, data_fim: date) -> pd.DataFrame:
     """⚠ Cobertura PARCIAL: apenas ~39% dos leads têm `sla` preenchido em
     abr/2026. Não usar como ranking individual nem como SLA contratual."""
@@ -848,7 +848,7 @@ def get_prevendas_sla(data_ini: date, data_fim: date) -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo notificações de vendas…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_prevendas_notificacoes_vendas(data_ini: date,
                                       data_fim: date) -> pd.DataFrame:
     """Notificações de welcome/onboarding (Customer Success) com
@@ -867,7 +867,7 @@ def get_prevendas_notificacoes_vendas(data_ini: date,
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo leads repassados para SDRs…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_notificacoes_leads_sdr(data_ini: date,
                                data_fim: date) -> pd.DataFrame:
     """Leads daily-distinct com tentativa de associação ao SDR responsável.
@@ -887,7 +887,7 @@ def get_notificacoes_leads_sdr(data_ini: date,
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo tempo de ciclo de venda…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_executivas_ciclo_venda(data_ini: date,
                                data_fim: date) -> pd.DataFrame:
     """Deals ganhos no período com timestamps para ciclo de venda (Executivas).
@@ -907,7 +907,7 @@ def get_executivas_ciclo_venda(data_ini: date,
     return df
 
 
-@st.cache_data(ttl=_TTL, show_spinner="Lendo jornada do lead até a venda…")
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_jornada_lead_venda(data_ini: date,
                            data_fim: date) -> pd.DataFrame:
     """Deals ganhos no período com os 5 timestamps da jornada para o

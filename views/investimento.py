@@ -1,5 +1,6 @@
 import streamlit as st
 
+from src.parallel_fetch import fetch_named
 from src.repositories import get_executivas, get_investimento_diario
 from src.transforms import investimento_totais, roas_diario, roas_resumo
 from src.ui.charts import line
@@ -22,12 +23,16 @@ ctx = start_page(
     right_text="Eficiência de mídia",
 )
 
-try:
-    df_inv = get_investimento_diario(ctx.data_ini, ctx.data_fim)
-    df_exec = get_executivas(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.error(f"Falha ao consultar: {e}")
+_r, _e = fetch_named({
+    "inv": (get_investimento_diario, (ctx.data_ini, ctx.data_fim)),
+    "exec": (get_executivas, (ctx.data_ini, ctx.data_fim)),
+})
+if _e:
+    _err = next(iter(_e.values()))
+    st.error(f"Falha ao consultar: {_err}")
     st.stop()
+df_inv = _r["inv"]
+df_exec = _r["exec"]
 
 if df_inv.empty:
     st.warning("Sem investimento registrado no período.")

@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.marketing_queries import get_mkt_social
-from src.marketing_safe import safe_run
+from src.marketing_safe import parallel_safe_runs
 from src.marketing_transforms import (
     social_diario,
     social_kpis,
@@ -35,20 +35,24 @@ col_map = {"tipo_midia": "tipo_midia"}
 # ---------------------------------------------------------------------------
 # Carga (período atual + período anterior para deltas)
 # ---------------------------------------------------------------------------
-df_all = safe_run(
-    lambda: get_mkt_social(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_social",
-)
-df = ctx.apply_filters(df_all, col_map) if not df_all.empty else df_all
-
 dias = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias - 1)
 
-df_prev_all = safe_run(
-    lambda: get_mkt_social(prev_ini, prev_fim),
-    view_label="bi.vw_mkt_social",
-)
+_loaded = parallel_safe_runs({
+    "cur": (
+        lambda: get_mkt_social(ctx.data_ini, ctx.data_fim),
+        "bi.vw_mkt_social",
+    ),
+    "prev": (
+        lambda: get_mkt_social(prev_ini, prev_fim),
+        "bi.vw_mkt_social",
+    ),
+})
+df_all = _loaded["cur"]
+df = ctx.apply_filters(df_all, col_map) if not df_all.empty else df_all
+
+df_prev_all = _loaded["prev"]
 df_prev = (
     ctx.refilter(df_prev_all, col_map) if not df_prev_all.empty else df_prev_all
 )

@@ -45,6 +45,7 @@ from src.team_classification import classify_sdr, is_known_sdr
 from src.ui.charts import bar_ranked, funnel
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
+from src.parallel_fetch import fetch_named
 from src.ui.prevendas_ranking_cost import (
     INDICADORES_OPORT_METRIC_COLS,
     RANKING_AVG_COST_LABELS,
@@ -89,59 +90,63 @@ ctx = start_page(
     filters=["sdr", "tipo_sdr"],
 )
 
-
-try:
-    df_diario = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
-    df_detalhe = get_prevendas_leads_detalhe_diario(ctx.data_ini, ctx.data_fim)
-    df_sdr    = get_prevendas_por_sdr(ctx.data_ini, ctx.data_fim)
-    df_sdrs_oficiais = get_prevendas_sdrs_oficiais()
-except Exception as e:
-    st.error(f"Falha ao consultar Pré-vendas: {e}")
+_r, _e = fetch_named({
+    "diario": (get_prevendas_overview_diario, (ctx.data_ini, ctx.data_fim)),
+    "detalhe": (get_prevendas_leads_detalhe_diario, (ctx.data_ini, ctx.data_fim)),
+    "sdr": (get_prevendas_por_sdr, (ctx.data_ini, ctx.data_fim)),
+    "sdrs_oficiais": (get_prevendas_sdrs_oficiais, ()),
+    "leads_origem": (get_prevendas_leads_por_origem, (ctx.data_ini, ctx.data_fim)),
+    "leads_periodo": (get_mkt_visao_geral_periodo, (ctx.data_ini, ctx.data_fim)),
+    "inv": (get_investimento_diario, (ctx.data_ini, ctx.data_fim)),
+})
+_hard_err = next(
+    (_e[k] for k in ("diario", "detalhe", "sdr", "sdrs_oficiais") if k in _e),
+    None,
+)
+if _hard_err is not None:
+    st.error(f"Falha ao consultar Pré-vendas: {_hard_err}")
     st.stop()
+df_diario = _r["diario"]
+df_detalhe = _r["detalhe"]
+df_sdr = _r["sdr"]
+df_sdrs_oficiais = _r["sdrs_oficiais"]
 
 # Leads quebrados por funil_origem (daily-distinct, mesma regra do card
 # "Leads totais"). Alimenta o breakdown acoplado ao card. Falha silenciosa:
 # se a query nova quebrar, breakdown some sem derrubar a página.
-try:
-    df_leads_origem = get_prevendas_leads_por_origem(
-        ctx.data_ini, ctx.data_fim
-    )
-except Exception:
+df_leads_origem = _r.get("leads_origem")
+if "leads_origem" in _e or df_leads_origem is None:
     df_leads_origem = pd.DataFrame()
 
 # Recortes de classificação do card "Leads totais" — mesma fonte/regra da
 # Visão Geral Marketing (mkt_visao_geral_periodo.sql, period-distinct por
 # bucket). Falha silenciosa: se o Marketing estiver indisponível, o hint
 # do card cai pra "—" sem quebrar a página.
-try:
-    df_leads_periodo = get_mkt_visao_geral_periodo(ctx.data_ini, ctx.data_fim)
-    if df_leads_periodo is not None and not df_leads_periodo.empty:
-        row = df_leads_periodo.iloc[0]
-        leads_mais_12_card = int(row.get("leads_mais_12", 0) or 0)
-        leads_menos_12_card = int(row.get("leads_menos_12", 0) or 0)
-        leads_nao_atua_card = int(row.get("leads_nao_atua", 0) or 0)
-    else:
-        leads_mais_12_card = leads_menos_12_card = leads_nao_atua_card = None
-except Exception:
+df_leads_periodo = _r.get("leads_periodo")
+if "leads_periodo" in _e or df_leads_periodo is None:
+    leads_mais_12_card = leads_menos_12_card = leads_nao_atua_card = None
+elif not df_leads_periodo.empty:
+    row = df_leads_periodo.iloc[0]
+    leads_mais_12_card = int(row.get("leads_mais_12", 0) or 0)
+    leads_menos_12_card = int(row.get("leads_menos_12", 0) or 0)
+    leads_nao_atua_card = int(row.get("leads_nao_atua", 0) or 0)
+else:
     leads_mais_12_card = leads_menos_12_card = leads_nao_atua_card = None
 
 # Investido — `bi.vw_investimento_diario` (soma do período + dias distintos).
 # CP2: dias vêm da própria série de investimento (equivalente à contagem
 # via `dashboard_executivas`, validado nos períodos de teste).
 # Não responde a filtros de SDR/Tipo SDR (investimento é global).
-try:
-    df_inv_periodo = get_investimento_diario(ctx.data_ini, ctx.data_fim)
-    if df_inv_periodo is not None and not df_inv_periodo.empty:
-        k_investido = {
-            "investimento": float(df_inv_periodo["investimento_total"].sum()),
-            "dias": int(
-                pd.to_datetime(df_inv_periodo["data_ref"]).dt.date.nunique()
-            ),
-        }
-    else:
-        k_investido = {"investimento": 0, "dias": 0}
-except Exception:
+df_inv_periodo = _r.get("inv")
+if "inv" in _e or df_inv_periodo is None or getattr(df_inv_periodo, "empty", True):
     k_investido = {"investimento": 0, "dias": 0}
+else:
+    k_investido = {
+        "investimento": float(df_inv_periodo["investimento_total"].sum()),
+        "dias": int(
+            pd.to_datetime(df_inv_periodo["data_ref"]).dt.date.nunique()
+        ),
+    }
 
 df_sdr_anotado = prevendas_anotar_sdr(df_sdr)
 df_sdr_filt = ctx.apply_filters(

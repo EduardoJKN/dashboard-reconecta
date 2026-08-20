@@ -30,7 +30,7 @@ from src.marketing_queries import (
     get_mkt_visao_geral_kpis_canal,
 )
 from src.transforms import _safe_div
-from src.marketing_safe import safe_run
+from src.marketing_safe import parallel_safe_runs, safe_run
 from src.marketing_transforms import (
     CANAIS_PADRAO,
     agregar_paginas_variantes,
@@ -70,31 +70,37 @@ ctx.apply_filters(filtro_canais_padrao(CANAIS_PADRAO), col_map)
 # ---------------------------------------------------------------------------
 # Cargas (período atual + anterior para deltas)
 # ---------------------------------------------------------------------------
-df_overview_all = safe_run(
-    lambda: get_mkt_overview(ctx.data_ini, ctx.data_fim),
-    view_label="bi.vw_mkt_overview",
-)
-df_growth_mart_by_canal = safe_run(
-    lambda: get_mkt_growth_daily_by_canal(ctx.data_ini, ctx.data_fim),
-    view_label="odam.mart_ad_funnel_daily (growth · por canal)",
-)
-df_roas_all = safe_run(
-    lambda: get_mkt_roas(ctx.data_ini, ctx.data_fim),
-    view_label="bi.mv_mkt_roas",
-)
-
 dias = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias - 1)
 
-df_overview_prev_all = safe_run(
-    lambda: get_mkt_overview(prev_ini, prev_fim),
-    view_label="bi.vw_mkt_overview",
-)
-df_growth_mart_prev_by_canal = safe_run(
-    lambda: get_mkt_growth_daily_by_canal(prev_ini, prev_fim),
-    view_label="odam.mart_ad_funnel_daily (growth · por canal)",
-)
+_batch1 = parallel_safe_runs({
+    "overview": (
+        lambda: get_mkt_overview(ctx.data_ini, ctx.data_fim),
+        "bi.vw_mkt_overview",
+    ),
+    "growth_mart": (
+        lambda: get_mkt_growth_daily_by_canal(ctx.data_ini, ctx.data_fim),
+        "odam.mart_ad_funnel_daily (growth · por canal)",
+    ),
+    "roas": (
+        lambda: get_mkt_roas(ctx.data_ini, ctx.data_fim),
+        "bi.mv_mkt_roas",
+    ),
+    "overview_prev": (
+        lambda: get_mkt_overview(prev_ini, prev_fim),
+        "bi.vw_mkt_overview",
+    ),
+    "growth_mart_prev": (
+        lambda: get_mkt_growth_daily_by_canal(prev_ini, prev_fim),
+        "odam.mart_ad_funnel_daily (growth · por canal)",
+    ),
+})
+df_overview_all = _batch1["overview"]
+df_growth_mart_by_canal = _batch1["growth_mart"]
+df_roas_all = _batch1["roas"]
+df_overview_prev_all = _batch1["overview_prev"]
+df_growth_mart_prev_by_canal = _batch1["growth_mart_prev"]
 
 # ---------------------------------------------------------------------------
 # Aplica filtro de canal (Opção A)
@@ -146,30 +152,38 @@ kp = growth_kpis(df_overview_prev, df_growth_mart_prev)
 #     não tem dimensão de canal, então mantém a rastreada pra preservar o
 #     filtro do header
 # ---------------------------------------------------------------------------
-df_leads_canal_diario = safe_run(
-    lambda: get_mkt_campanhas_leads_canal_diario(ctx.data_ini, ctx.data_fim),
-    view_label="bi_mkt.vw_visao_geral_canal_base (canal-diario)",
-)
-df_leads_canal_diario_prev = safe_run(
-    lambda: get_mkt_campanhas_leads_canal_diario(prev_ini, prev_fim),
-    view_label="bi_mkt.vw_visao_geral_canal_base (canal-diario)",
-)
-df_kpc_canal = safe_run(
-    lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
-    view_label="mkt_visao_geral_kpis_canal",
-)
-df_kpc_canal_prev = safe_run(
-    lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
-    view_label="mkt_visao_geral_kpis_canal",
-)
-df_atividades_canal = safe_run(
-    lambda: get_mkt_growth_atividades_canal(ctx.data_ini, ctx.data_fim),
-    view_label="mkt_growth_atividades_canal",
-)
-df_atividades_canal_prev = safe_run(
-    lambda: get_mkt_growth_atividades_canal(prev_ini, prev_fim),
-    view_label="mkt_growth_atividades_canal",
-)
+df_batch2 = parallel_safe_runs({
+    "leads_canal_diario": (
+        lambda: get_mkt_campanhas_leads_canal_diario(ctx.data_ini, ctx.data_fim),
+        "bi_mkt.vw_visao_geral_canal_base (canal-diario)",
+    ),
+    "leads_canal_diario_prev": (
+        lambda: get_mkt_campanhas_leads_canal_diario(prev_ini, prev_fim),
+        "bi_mkt.vw_visao_geral_canal_base (canal-diario)",
+    ),
+    "kpc_canal": (
+        lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
+        "mkt_visao_geral_kpis_canal",
+    ),
+    "kpc_canal_prev": (
+        lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
+        "mkt_visao_geral_kpis_canal",
+    ),
+    "atividades_canal": (
+        lambda: get_mkt_growth_atividades_canal(ctx.data_ini, ctx.data_fim),
+        "mkt_growth_atividades_canal",
+    ),
+    "atividades_canal_prev": (
+        lambda: get_mkt_growth_atividades_canal(prev_ini, prev_fim),
+        "mkt_growth_atividades_canal",
+    ),
+})
+df_leads_canal_diario = df_batch2["leads_canal_diario"]
+df_leads_canal_diario_prev = df_batch2["leads_canal_diario_prev"]
+df_kpc_canal = df_batch2["kpc_canal"]
+df_kpc_canal_prev = df_batch2["kpc_canal_prev"]
+df_atividades_canal = df_batch2["atividades_canal"]
+df_atividades_canal_prev = df_batch2["atividades_canal_prev"]
 
 
 def _override_oficial(k_dict, df_leads_d, df_kpc, df_act, canais_sel,

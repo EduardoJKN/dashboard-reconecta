@@ -13,6 +13,7 @@ from src.prevendas_transforms import (
     prevendas_normalizar_detalhe,
     prevendas_overview_kpis,
 )
+from src.parallel_fetch import fetch_named
 from src.repositories import (
     get_prevendas_comparecimentos_classif,
     get_prevendas_leads_detalhe_diario,
@@ -32,15 +33,22 @@ ctx = start_page(
     filters=["sdr", "tipo_sdr"],
 )
 
-try:
-    df_classif       = get_prevendas_comparecimentos_classif(ctx.data_ini, ctx.data_fim)
-    df_diario        = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
-    df_sdr           = get_prevendas_por_sdr(ctx.data_ini, ctx.data_fim)
-    df_detalhe       = get_prevendas_leads_detalhe_diario(ctx.data_ini, ctx.data_fim)
-    df_sdrs_oficiais = get_prevendas_sdrs_oficiais()
-except Exception as e:
-    st.error(f"Falha ao consultar Pré-vendas: {e}")
+_r, _e = fetch_named({
+    "classif": (get_prevendas_comparecimentos_classif, (ctx.data_ini, ctx.data_fim)),
+    "diario": (get_prevendas_overview_diario, (ctx.data_ini, ctx.data_fim)),
+    "sdr": (get_prevendas_por_sdr, (ctx.data_ini, ctx.data_fim)),
+    "detalhe": (get_prevendas_leads_detalhe_diario, (ctx.data_ini, ctx.data_fim)),
+    "sdrs_oficiais": (get_prevendas_sdrs_oficiais, ()),
+})
+if _e:
+    _err = next(iter(_e.values()))
+    st.error(f"Falha ao consultar Pré-vendas: {_err}")
     st.stop()
+df_classif = _r["classif"]
+df_diario = _r["diario"]
+df_sdr = _r["sdr"]
+df_detalhe = _r["detalhe"]
+df_sdrs_oficiais = _r["sdrs_oficiais"]
 
 df_sdr = prevendas_anotar_sdr(df_sdr)
 df_sdr_filt = ctx.apply_filters(df_sdr, {"sdr": "sdr", "tipo_sdr": "tipo_sdr"})

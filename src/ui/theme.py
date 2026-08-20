@@ -1550,4 +1550,78 @@ section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"][aria-current="
   padding: 12px 4px;
   text-align: center;
 }}
+
+/* Streamlit pode pintar 2 faixas vinho no DOM enquanto o script ainda
+   corre (rerun + spinner de cache). Mantém só a primeira. */
+.stElementContainer:has(.page-header-title) ~ .stElementContainer:has(.page-header-title),
+[data-testid="stElementContainer"]:has(.page-header-title) ~ [data-testid="stElementContainer"]:has(.page-header-title),
+[data-testid="stHorizontalBlock"]:has(.page-header-title) ~ [data-testid="stHorizontalBlock"]:has(.page-header-title) {{
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}}
+
+/* Entrada dos gráficos em toda a app: fade/slide + linha se desenhando. */
+@keyframes rc-chart-in {{
+  from {{ opacity: 0; transform: translateY(8px); }}
+  to {{ opacity: 1; transform: translateY(0); }}
+}}
+@keyframes rc-trace-in {{
+  from {{ opacity: 0; }}
+  to {{ opacity: 1; }}
+}}
+@keyframes rc-line-draw {{
+  to {{ stroke-dashoffset: 0; }}
+}}
+@keyframes rc-marker-pop {{
+  from {{ opacity: 0; transform: scale(0.35); }}
+  to {{ opacity: 1; transform: scale(1); }}
+}}
+.js-plotly-plot {{
+  animation: rc-chart-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}}
+.js-plotly-plot .barlayer,
+.js-plotly-plot .pielayer,
+.js-plotly-plot .funnellayer,
+.js-plotly-plot .heatmaplayer,
+.js-plotly-plot .ternarylayer {{
+  animation: rc-trace-in 0.7s ease-out both;
+}}
+.js-plotly-plot .scatterlayer {{
+  animation: rc-trace-in 0.35s ease-out both;
+}}
+.js-plotly-plot .scatterlayer path.js-line {{
+  stroke-dasharray: 2400;
+  stroke-dashoffset: 2400;
+  animation: rc-line-draw 1.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}}
+.js-plotly-plot .scatterlayer .points path,
+.js-plotly-plot .scatterlayer path.point {{
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: rc-marker-pop 0.45s ease-out 0.55s both;
+}}
+@media (prefers-reduced-motion: reduce) {{
+  .js-plotly-plot,
+  .js-plotly-plot .barlayer,
+  .js-plotly-plot .scatterlayer,
+  .js-plotly-plot .pielayer,
+  .js-plotly-plot .funnellayer,
+  .js-plotly-plot .heatmaplayer,
+  .js-plotly-plot .ternarylayer,
+  .js-plotly-plot .scatterlayer path.js-line,
+  .js-plotly-plot .scatterlayer .points path,
+  .js-plotly-plot .scatterlayer path.point {{
+    animation: none !important;
+    stroke-dasharray: none !important;
+    stroke-dashoffset: 0 !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }}
+}}
 """

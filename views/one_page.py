@@ -45,6 +45,7 @@ import streamlit as st
 
 from src.prevendas_transforms import prevendas_overview_kpis
 from src.one_page_funnel import aplicacoes_kpis
+from src.parallel_fetch import fetch_named
 from src.repositories import (
     get_executivas,
     get_investimento_diario,
@@ -1823,17 +1824,23 @@ def load_onepage_marketing(
     """Marketing — regra legada (typeform + anúncios)."""
     try:
         t0 = time.perf_counter()
-        df_one = get_one_page_legacy_diario(
-            data_ini, data_fim,
-            excluir_testes_aplicacoes=excluir_testes_aplicacoes,
-        )
-        _op_log_query("one_page_legacy_diario (atual)", t0)
-        t0 = time.perf_counter()
-        df_one_prev = get_one_page_legacy_diario(
-            prev_ini, prev_fim,
-            excluir_testes_aplicacoes=excluir_testes_aplicacoes,
-        )
-        _op_log_query("one_page_legacy_diario (anterior)", t0)
+        _r, _e = fetch_named({
+            "one": (
+                get_one_page_legacy_diario,
+                (data_ini, data_fim),
+                {"excluir_testes_aplicacoes": excluir_testes_aplicacoes},
+            ),
+            "one_prev": (
+                get_one_page_legacy_diario,
+                (prev_ini, prev_fim),
+                {"excluir_testes_aplicacoes": excluir_testes_aplicacoes},
+            ),
+        })
+        _op_log_query("one_page_legacy_diario (parallel)", t0)
+        if _e:
+            raise next(iter(_e.values()))
+        df_one = _r["one"]
+        df_one_prev = _r["one_prev"]
         return _MarketingSectionData(
             k_apl=aplicacoes_kpis(df_one),
             k_apl_prev=aplicacoes_kpis(df_one_prev),
@@ -1883,11 +1890,15 @@ def load_onepage_prevendas(
     empty_fonte = {_FONTE_INBOUND: dict(base_fonte), _FONTE_SS: dict(base_fonte)}
     try:
         t0 = time.perf_counter()
-        df_prev_dia = get_prevendas_overview_diario(data_ini, data_fim)
-        _op_log_query("prevendas_overview_diario", t0)
-        t0 = time.perf_counter()
-        df_prev_fonte = get_one_page_prevendas_por_fonte(data_ini, data_fim)
-        _op_log_query("one_page_prevendas_por_fonte", t0)
+        _r, _e = fetch_named({
+            "diario": (get_prevendas_overview_diario, (data_ini, data_fim)),
+            "fonte": (get_one_page_prevendas_por_fonte, (data_ini, data_fim)),
+        })
+        _op_log_query("prevendas_overview + por_fonte (parallel)", t0)
+        if _e:
+            raise next(iter(_e.values()))
+        df_prev_dia = _r["diario"]
+        df_prev_fonte = _r["fonte"]
         return _PrevendasSectionData(
             k_prev=prevendas_overview_kpis(df_prev_dia),
             por_fonte=_prev_por_fonte(df_prev_fonte),
@@ -1918,42 +1929,49 @@ def load_onepage_vendas_financeiro(
     """Vendas / Financeiro — executivas, investimento e auxiliares."""
     try:
         t0 = time.perf_counter()
-        df_exec = get_executivas(data_ini, data_fim)
-        _op_log_query("executivas (atual)", t0)
-        t0 = time.perf_counter()
-        df_inv = get_investimento_diario(data_ini, data_fim)
-        _op_log_query("investimento_diario (atual)", t0)
-        t0 = time.perf_counter()
-        df_exec_prev = get_executivas(prev_ini, prev_fim)
-        _op_log_query("executivas (anterior)", t0)
-        t0 = time.perf_counter()
-        df_inv_prev = get_investimento_diario(prev_ini, prev_fim)
-        _op_log_query("investimento_diario (anterior)", t0)
+        _r, _e = fetch_named({
+            "exec": (get_executivas, (data_ini, data_fim)),
+            "inv": (get_investimento_diario, (data_ini, data_fim)),
+            "exec_prev": (get_executivas, (prev_ini, prev_fim)),
+            "inv_prev": (get_investimento_diario, (prev_ini, prev_fim)),
+            "indicacoes": (get_one_page_indicacoes_fonte, (data_ini, data_fim)),
+            "indicacoes_prev": (get_one_page_indicacoes_fonte, (prev_ini, prev_fim)),
+            "novos_forma": (get_one_page_novos_forma_venda, (data_ini, data_fim)),
+            "media_movel": (get_media_movel_vendas, ()),
+        })
+        _op_log_query("vendas_financeiro (parallel)", t0)
+
+        _hard = next(
+            (_e[k] for k in ("exec", "inv", "exec_prev", "inv_prev") if k in _e),
+            None,
+        )
+        if _hard is not None:
+            raise _hard
+
+        df_exec = _r["exec"]
+        df_inv = _r["inv"]
+        df_exec_prev = _r["exec_prev"]
+        df_inv_prev = _r["inv_prev"]
         k_vendas = visao_geral_kpis(df_exec, df_inv)
         k_vendas_prev = visao_geral_kpis(df_exec_prev, df_inv_prev)
-        try:
-            t0 = time.perf_counter()
-            k_vendas["indicacoes"] = get_one_page_indicacoes_fonte(data_ini, data_fim)
-            k_vendas_prev["indicacoes"] = get_one_page_indicacoes_fonte(
-                prev_ini, prev_fim,
-            )
-            _op_log_query("indicacoes_fonte", t0)
-        except Exception as e:
-            st.warning(f"Falha ao consultar Indic. (fonte): {e}")
+
+        if "indicacoes" in _e or "indicacoes_prev" in _e:
+            _ind_err = _e.get("indicacoes") or _e.get("indicacoes_prev")
+            st.warning(f"Falha ao consultar Indic. (fonte): {_ind_err}")
+        else:
+            k_vendas["indicacoes"] = _r["indicacoes"]
+            k_vendas_prev["indicacoes"] = _r["indicacoes_prev"]
+
         novos_forma = {"em_call": 0, "follow": 0}
-        try:
-            t0 = time.perf_counter()
-            novos_forma = get_one_page_novos_forma_venda(data_ini, data_fim)
-            _op_log_query("novos_forma_venda", t0)
-        except Exception as e:
-            st.warning(f"Falha ao consultar Novos (forma venda): {e}")
+        if "novos_forma" in _e:
+            st.warning(f"Falha ao consultar Novos (forma venda): {_e['novos_forma']}")
+        elif _r.get("novos_forma") is not None:
+            novos_forma = _r["novos_forma"]
+
         media_movel_val = None
-        try:
-            t0 = time.perf_counter()
-            media_movel_val = get_media_movel_vendas()
-            _op_log_query("media_movel_vendas", t0)
-        except Exception:
-            pass
+        if "media_movel" not in _e:
+            media_movel_val = _r.get("media_movel")
+
         return _VendasSectionData(
             k_vendas=k_vendas,
             k_vendas_prev=k_vendas_prev,
@@ -2694,28 +2712,50 @@ dias_periodo = (ctx.data_fim - ctx.data_ini).days + 1
 prev_fim = ctx.data_ini - timedelta(days=1)
 prev_ini = prev_fim - timedelta(days=dias_periodo - 1)
 
+with st.spinner("Carregando One Page..."):
+    with _op_timed_block("One Page prefetch"):
+        _prefetched, _pref_err = fetch_named({
+            "mkt": (
+                load_onepage_marketing_cached,
+                (ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
+                 excluir_testes_aplicacoes),
+            ),
+            "prev": (
+                load_onepage_prevendas_cached,
+                (ctx.data_ini, ctx.data_fim),
+            ),
+            "vendas": (
+                load_onepage_vendas_financeiro_cached,
+                (ctx.data_ini, ctx.data_fim, prev_ini, prev_fim),
+            ),
+        })
+
 col_mkt, col_prev, col_vendas = st.columns([1.0, 1.25, 1.05], gap="medium")
 
 with col_mkt:
-    with st.spinner("Carregando Marketing..."):
-        with _op_timed_block("Marketing"):
-            _mkt_data = _marketing_from_cache(
-                load_onepage_marketing_cached(
-                    ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
-                    excluir_testes_aplicacoes,
-                ),
+    with _op_timed_block("Marketing"):
+        if "mkt" in _pref_err or _prefetched.get("mkt") is None:
+            empty = aplicacoes_kpis(pd.DataFrame())
+            _mkt_data = _MarketingSectionData(
+                k_apl=empty,
+                k_apl_prev=empty,
+                error=f"Falha ao consultar Marketing: {_pref_err.get('mkt')}",
             )
+        else:
+            _mkt_data = _marketing_from_cache(_prefetched["mkt"])
     if _mkt_data.error:
         st.error(_mkt_data.error)
     else:
         _render_onepage_marketing(_mkt_data)
 
 with col_prev:
-    with st.spinner("Carregando Pré-vendas..."):
-        with _op_timed_block("Pré-vendas"):
-            _prev_data = _prevendas_from_cache(
-                load_onepage_prevendas_cached(ctx.data_ini, ctx.data_fim),
+    with _op_timed_block("Pré-vendas"):
+        if "prev" in _pref_err or _prefetched.get("prev") is None:
+            _prev_data = _PrevendasSectionData(
+                error=f"Falha ao consultar Pré-vendas: {_pref_err.get('prev')}",
             )
+        else:
+            _prev_data = _prevendas_from_cache(_prefetched["prev"])
     if _prev_data.error:
         st.error(_prev_data.error)
     else:
@@ -2723,13 +2763,18 @@ with col_prev:
         _render_onepage_prevendas(_prev_data, inv_total=_inv_total)
 
 with col_vendas:
-    with st.spinner("Carregando Vendas / Financeiro..."):
-        with _op_timed_block("Vendas / Financeiro"):
-            _vendas_data = _vendas_from_cache(
-                load_onepage_vendas_financeiro_cached(
-                    ctx.data_ini, ctx.data_fim, prev_ini, prev_fim,
+    with _op_timed_block("Vendas / Financeiro"):
+        if "vendas" in _pref_err or _prefetched.get("vendas") is None:
+            _vendas_data = _VendasSectionData(
+                k_vendas=visao_geral_kpis(pd.DataFrame(), pd.DataFrame()),
+                k_vendas_prev=visao_geral_kpis(pd.DataFrame(), pd.DataFrame()),
+                error=(
+                    f"Falha ao consultar Vendas (executivas/investimento): "
+                    f"{_pref_err.get('vendas')}"
                 ),
             )
+        else:
+            _vendas_data = _vendas_from_cache(_prefetched["vendas"])
     if _vendas_data.error:
         st.error(_vendas_data.error)
     else:

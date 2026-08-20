@@ -1,7 +1,15 @@
 from datetime import timedelta
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 import pandas as pd
 import streamlit as st
+
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+except ImportError:  # pragma: no cover
+    add_script_run_ctx = None
+    get_script_run_ctx = None
 
 from src.repositories import (
     get_executivas,
@@ -71,30 +79,68 @@ ctx = start_page(
 col_map = {"closer": "executiva", "times": "time_vendas"}
 
 # ---------------------------------------------------------------------------
-# Carga
+# Carga — queries independentes em paralelo (wall-clock ≈ a mais lenta).
+# Detalhe/ciclo já sobem em background e são lidos mais abaixo.
 # ---------------------------------------------------------------------------
-try:
-    df_exec_all = get_executivas(ctx.data_ini, ctx.data_fim)
-    df_inv_all = get_investimento_diario(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.error(f"Falha ao consultar Postgres: {e}")
+def _home_fetch(fn, *args):
+    try:
+        if add_script_run_ctx and get_script_run_ctx:
+            ctx_st = get_script_run_ctx()
+            if ctx_st is not None:
+                add_script_run_ctx(threading.current_thread(), ctx_st)
+        return fn(*args), None
+    except Exception as exc:
+        return None, exc
+
+
+dias_periodo = (ctx.data_fim - ctx.data_ini).days + 1
+prev_fim = ctx.data_ini - timedelta(days=1)
+prev_ini = prev_fim - timedelta(days=dias_periodo - 1)
+
+_pool = ThreadPoolExecutor(max_workers=8)
+f_exec = _pool.submit(_home_fetch, get_executivas, ctx.data_ini, ctx.data_fim)
+f_inv = _pool.submit(
+    _home_fetch, get_investimento_diario, ctx.data_ini, ctx.data_fim,
+)
+f_leads = _pool.submit(
+    _home_fetch, get_leads_visao_geral, ctx.data_ini, ctx.data_fim,
+)
+f_mm = _pool.submit(_home_fetch, get_media_movel_vendas)
+f_oficiais = _pool.submit(_home_fetch, get_executivas_oficiais)
+f_oficiais_todas = _pool.submit(_home_fetch, get_executivas_oficiais_todas)
+f_churn = _pool.submit(_home_fetch, get_executivas_churn_pos_venda)
+f_exec_prev = _pool.submit(_home_fetch, get_executivas, prev_ini, prev_fim)
+f_inv_prev = _pool.submit(
+    _home_fetch, get_investimento_diario, prev_ini, prev_fim,
+)
+f_leads_prev = _pool.submit(
+    _home_fetch, get_leads_visao_geral, prev_ini, prev_fim,
+)
+f_detalhe = _pool.submit(
+    _home_fetch, get_vendas_leads_detalhe_diario, ctx.data_ini, ctx.data_fim,
+)
+f_ciclo = _pool.submit(
+    _home_fetch, get_executivas_ciclo_venda, ctx.data_ini, ctx.data_fim,
+)
+
+df_exec_all, err_exec = f_exec.result()
+df_inv_all, err_inv = f_inv.result()
+if err_exec or err_inv:
+    _pool.shutdown(wait=False)
+    st.error(f"Falha ao consultar Postgres: {err_exec or err_inv}")
     st.stop()
 
 # Leads — fonte oficial (ext_reconecta.leads + lead→deal priority match
 # para resolver closer/time). Substitui bi.vw_funil_leads_diario, que não
 # tinha dimensão de closer/time e não respondia aos filtros da página.
-# Validado abr/2026: total=854, Leidianne=156, Marcelo=180, Hawinne=63.
-try:
-    df_leads_all = get_leads_visao_geral(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.warning(f"Falha ao consultar leads: {e}")
+df_leads_all, err_leads = f_leads.result()
+if err_leads:
+    st.warning(f"Falha ao consultar leads: {err_leads}")
     df_leads_all = None
 
-# Média móvel de vendas (sempre últimos 21 dias absolutos)
-try:
-    media_movel_val = get_media_movel_vendas()
-except Exception as e:
-    st.warning(f"Falha ao consultar média móvel de vendas: {e}")
+media_movel_val, err_mm = f_mm.result()
+if err_mm:
+    st.warning(f"Falha ao consultar média móvel de vendas: {err_mm}")
     media_movel_val = None
 
 df_exec_bruto = ctx.apply_filters(df_exec_all, col_map)
@@ -127,16 +173,13 @@ df_exec_bruto = ctx.apply_filters(df_exec_all, col_map)
 # Fallback silencioso: FDW indisponível → `df_exec_filtrado` fica igual
 # ao bruto e exibe caption avisando o ranking sem filtro de time oficial.
 # ---------------------------------------------------------------------------
-try:
-    _df_oficiais_home = get_executivas_oficiais()
-    _falha_oficiais_home = False
-except Exception:
+_df_oficiais_home, err_oficiais = f_oficiais.result()
+_falha_oficiais_home = err_oficiais is not None
+if _falha_oficiais_home:
     _df_oficiais_home = None
-    _falha_oficiais_home = True
 
-try:
-    _df_oficiais_todas_home = get_executivas_oficiais_todas()
-except Exception:
+_df_oficiais_todas_home, err_oficiais_todas = f_oficiais_todas.result()
+if err_oficiais_todas:
     _df_oficiais_todas_home = None
 
 if _df_oficiais_home is not None and not _df_oficiais_home.empty:
@@ -152,45 +195,38 @@ else:
         )
 
 if df_exec_bruto.empty:
+    _pool.shutdown(wait=False)
     st.warning("Nenhum registro para o filtro atual.")
     st.stop()
 
 _times_sel_home_churn = list(ctx.selections.get("times") or [])
 _closers_sel_home_churn = list(ctx.selections.get("closer") or [])
-try:
-    _df_churn_all_home = get_executivas_churn_pos_venda()
-except Exception:
+_df_churn_all_home, err_churn = f_churn.result()
+if err_churn or _df_churn_all_home is None:
     _df_churn_all_home = pd.DataFrame()
 
 # Período anterior (mesmo tamanho) para os deltas. Mantém as duas
 # bases pareadas (apples-to-apples): KPIs comparam bruto×bruto,
 # rankings comparam filtrado×filtrado.
-dias_periodo = (ctx.data_fim - ctx.data_ini).days + 1
-prev_fim = ctx.data_ini - timedelta(days=1)
-prev_ini = prev_fim - timedelta(days=dias_periodo - 1)
-try:
-    df_exec_prev_bruto = ctx.refilter(
-        get_executivas(prev_ini, prev_fim), col_map,
-    )
+df_exec_prev_raw, err_exec_prev = f_exec_prev.result()
+df_inv_prev, err_inv_prev = f_inv_prev.result()
+if err_exec_prev or err_inv_prev or df_exec_prev_raw is None:
+    df_exec_prev_bruto    = df_exec_bruto.iloc[0:0]
+    df_exec_prev_filtrado = df_exec_filtrado.iloc[0:0]
+    df_inv_prev = df_inv_all.iloc[0:0]
+else:
+    df_exec_prev_bruto = ctx.refilter(df_exec_prev_raw, col_map)
     if _df_oficiais_home is not None and not _df_oficiais_home.empty:
         df_exec_prev_filtrado = executivas_filtrar_time_oficial(
             df_exec_prev_bruto, _df_oficiais_home,
         )
     else:
         df_exec_prev_filtrado = df_exec_prev_bruto
-    df_inv_prev = get_investimento_diario(prev_ini, prev_fim)
-except Exception:
-    df_exec_prev_bruto    = df_exec_bruto.iloc[0:0]
-    df_exec_prev_filtrado = df_exec_filtrado.iloc[0:0]
-    df_inv_prev = df_inv_all.iloc[0:0]
+    if df_inv_prev is None:
+        df_inv_prev = df_inv_all.iloc[0:0]
 
-# Leads do período anterior (para delta) — mesmo refilter que o atual
-try:
-    df_leads_prev_all = (
-        get_leads_visao_geral(prev_ini, prev_fim)
-        if df_leads_all is not None else None
-    )
-except Exception:
+df_leads_prev_all, err_leads_prev = f_leads_prev.result()
+if err_leads_prev or df_leads_all is None:
     df_leads_prev_all = None
 
 k = visao_geral_kpis(df_exec_bruto, df_inv_all)
@@ -356,10 +392,11 @@ def _safe_pct(num, den) -> float:
 # Carga do detalhe nome-a-nome — cache compartilhado com Pré-vendas via
 # get_vendas_leads_detalhe_diario → get_prevendas_leads_detalhe_diario.
 # ---------------------------------------------------------------------------
-try:
-    df_detalhe_home = get_vendas_leads_detalhe_diario(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.error(f"Falha ao carregar detalhe linha-a-linha: {e}")
+df_detalhe_home, err_detalhe = f_detalhe.result()
+if err_detalhe:
+    st.error(f"Falha ao carregar detalhe linha-a-linha: {err_detalhe}")
+    df_detalhe_home = pd.DataFrame()
+elif df_detalhe_home is None:
     df_detalhe_home = pd.DataFrame()
 
 det_norm = vendas_normalizar_detalhe(df_detalhe_home)
@@ -451,9 +488,9 @@ ranking_home = executivas_ranking_com_churn(
     executivas_ranking(df_ranking_base_home),
     _churn_por_exec_home,
 )
-try:
-    _df_ciclo_raw_home = get_executivas_ciclo_venda(ctx.data_ini, ctx.data_fim)
-except Exception:
+_df_ciclo_raw_home, err_ciclo = f_ciclo.result()
+_pool.shutdown(wait=False)
+if err_ciclo or _df_ciclo_raw_home is None:
     _df_ciclo_raw_home = pd.DataFrame()
 _df_ciclo_home = ciclo_venda_filtrar(
     ciclo_venda_preparar(_df_ciclo_raw_home),

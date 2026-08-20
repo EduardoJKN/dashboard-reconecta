@@ -85,45 +85,41 @@ def _load_primary_kpis(
     canal_ativo: bool,
 ) -> tuple[dict, dict, pd.DataFrame | None, str | None]:
     """Carrega fontes dos KPIs (atual + anterior). Reutiliza kpis_canal se canal ativo."""
-    errors: list[str] = []
+    from src.marketing_safe import parallel_safe_runs
 
     if canal_ativo:
-        df_kpc_cur, e1 = _fetch_df(
-            "mkt_visao_geral_kpis_canal",
-            lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
-            ctx.data_ini, ctx.data_fim,
-        )
-        df_kpc_prev, e2 = _fetch_df(
-            "mkt_visao_geral_kpis_canal",
-            lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
-            prev_ini, prev_fim,
-        )
-        if e1:
-            errors.append(e1)
-        if e2:
-            errors.append(e2)
+        loaded = parallel_safe_runs({
+            "cur": (
+                lambda: get_mkt_visao_geral_kpis_canal(ctx.data_ini, ctx.data_fim),
+                "mkt_visao_geral_kpis_canal",
+            ),
+            "prev": (
+                lambda: get_mkt_visao_geral_kpis_canal(prev_ini, prev_fim),
+                "mkt_visao_geral_kpis_canal",
+            ),
+        })
+        df_kpc_cur = loaded["cur"]
+        df_kpc_prev = loaded["prev"]
         canais_sel = list(ctx.selections.get("canal") or [])
         k = visao_geral_kpis_canal(df_kpc_cur, canais_sel)
         kp = visao_geral_kpis_canal(df_kpc_prev, canais_sel)
-        return k, kp, df_kpc_cur, "; ".join(errors) or None
+        return k, kp, df_kpc_cur, None
 
-    df_period_cur, e1 = _fetch_df(
-        "mkt_visao_geral_periodo",
-        lambda: get_mkt_visao_geral_periodo(ctx.data_ini, ctx.data_fim),
-        ctx.data_ini, ctx.data_fim,
-    )
-    df_period_prev, e2 = _fetch_df(
-        "mkt_visao_geral_periodo",
-        lambda: get_mkt_visao_geral_periodo(prev_ini, prev_fim),
-        prev_ini, prev_fim,
-    )
-    if e1:
-        errors.append(e1)
-    if e2:
-        errors.append(e2)
+    loaded = parallel_safe_runs({
+        "cur": (
+            lambda: get_mkt_visao_geral_periodo(ctx.data_ini, ctx.data_fim),
+            "mkt_visao_geral_periodo",
+        ),
+        "prev": (
+            lambda: get_mkt_visao_geral_periodo(prev_ini, prev_fim),
+            "mkt_visao_geral_periodo",
+        ),
+    })
+    df_period_cur = loaded["cur"]
+    df_period_prev = loaded["prev"]
     k = visao_geral_kpis(df_period_cur)
     kp = visao_geral_kpis(df_period_prev)
-    return k, kp, None, "; ".join(errors) or None
+    return k, kp, None, None
 
 
 def _load_daily_trend(ctx: PageContext) -> tuple[pd.DataFrame, str | None]:

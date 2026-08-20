@@ -28,6 +28,7 @@ from src.ui.charts import bar_simple
 from src.ui.components import metric_card_v2, section_title
 from src.ui.page import start_page
 from src.ui.theme import PALETTE, int_br, pct
+from src.parallel_fetch import fetch_named
 
 SEM_SDR_DISPLAY = "Sem SDR identificado"
 
@@ -149,18 +150,22 @@ def _render_jornada_chart(stats: pd.DataFrame, metric_col: str) -> go.Figure:
     return fig
 
 
+
 ctx = start_page(
     title="Notificações de Vendas",
     subtitle="Notificações + leads repassados, com tentativa de associação ao SDR",
     filters=["sdr", "tipo_sdr"],
 )
 
-try:
-    df_notif_raw = get_prevendas_notificacoes_vendas(ctx.data_ini, ctx.data_fim)
-    df_leads_raw = get_notificacoes_leads_sdr(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.error(f"Falha ao consultar dados: {e}")
+_r, _e = fetch_named({
+    "notif": (get_prevendas_notificacoes_vendas, (ctx.data_ini, ctx.data_fim)),
+    "leads": (get_notificacoes_leads_sdr, (ctx.data_ini, ctx.data_fim)),
+})
+if _e:
+    st.error(f"Falha ao consultar dados: {next(iter(_e.values()))}")
     st.stop()
+df_notif_raw = _r["notif"]
+df_leads_raw = _r["leads"]
 
 df_leads = _anotar_sdr(df_leads_raw, sdr_col="sdr")
 df_notif = _anotar_sdr(df_notif_raw, sdr_col="sdr_ss")

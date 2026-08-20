@@ -116,6 +116,7 @@ from src.ui.components import (
 )
 from src.ui.page import start_page
 from src.ui.theme import brl, int_br, pct
+from src.parallel_fetch import fetch_named
 
 # ---------------------------------------------------------------------------
 # Seletor local de classificação — escolhe quais colunas da view alimentam
@@ -304,11 +305,20 @@ ctx = start_page(
     right_text="Análise detalhada",
 )
 
-try:
-    df_all = get_executivas(ctx.data_ini, ctx.data_fim)
-except Exception as e:
-    st.error(f"Falha ao consultar: {e}")
+_r, _e = fetch_named({
+    "exec": (get_executivas, (ctx.data_ini, ctx.data_fim)),
+    "oficiais": (get_executivas_oficiais, ()),
+    "oficiais_todas": (get_executivas_oficiais_todas, ()),
+    "churn": (get_executivas_churn_pos_venda, ()),
+    "comp_aj": (get_executivas_comparecimento_ajustado, (ctx.data_ini, ctx.data_fim)),
+    "funil_ag": (get_executivas_funil_agendamentos, (ctx.data_ini, ctx.data_fim)),
+    "detalhe": (get_vendas_leads_detalhe_diario, (ctx.data_ini, ctx.data_fim)),
+    "ciclo": (get_executivas_ciclo_venda, (ctx.data_ini, ctx.data_fim)),
+})
+if _e.get("exec"):
+    st.error(f"Falha ao consultar: {_e['exec']}")
     st.stop()
+df_all = _r["exec"]
 
 df_bruto = ctx.apply_filters(df_all, {"times": "time_vendas"})
 
@@ -335,16 +345,13 @@ df_bruto = ctx.apply_filters(df_all, {"times": "time_vendas"})
 # Fallback silencioso: FDW indisponível → `df_filtrado` cai pro bruto e
 # caption avisa que os RANKINGS estão sem o filtro do time oficial.
 # ---------------------------------------------------------------------------
-try:
-    _df_oficiais = get_executivas_oficiais()
-    _falha_oficiais = False
-except Exception:
+_df_oficiais = _r.get("oficiais")
+_falha_oficiais = "oficiais" in _e or _df_oficiais is None
+if _falha_oficiais:
     _df_oficiais = None
-    _falha_oficiais = True
 
-try:
-    _df_oficiais_todas = get_executivas_oficiais_todas()
-except Exception:
+_df_oficiais_todas = _r.get("oficiais_todas")
+if "oficiais_todas" in _e:
     _df_oficiais_todas = None
 
 if _df_oficiais is not None and not _df_oficiais.empty:
@@ -364,9 +371,8 @@ if df_bruto.empty:
 # Churn (stage Churn) — card do funil + métrica do Top Closers; independente
 # da aba Clientes Cancelados com Pós Vendas — deals stage = 'Churn'.
 _times_sel_churn = list(ctx.selections.get("times") or [])
-try:
-    _df_churn_all = get_executivas_churn_pos_venda()
-except Exception:
+_df_churn_all = _r.get("churn")
+if "churn" in _e or _df_churn_all is None:
     _df_churn_all = pd.DataFrame()
 _df_churn_recorte = executivas_churn_filtrar_recorte(
     _df_churn_all, ctx.data_ini, ctx.data_fim, _times_sel_churn,
@@ -374,11 +380,8 @@ _df_churn_recorte = executivas_churn_filtrar_recorte(
 _churn_funil_total = executivas_churn_total(_df_churn_recorte)
 
 # Comparecimento ajustado (teste) — activities com flags; não substitui a view.
-try:
-    _df_comp_aj_raw = get_executivas_comparecimento_ajustado(
-        ctx.data_ini, ctx.data_fim,
-    )
-except Exception:
+_df_comp_aj_raw = _r.get("comp_aj")
+if "comp_aj" in _e or _df_comp_aj_raw is None:
     _df_comp_aj_raw = pd.DataFrame()
 _times_comp_aj = list(ctx.selections.get("times") or [])
 _df_comp_aj_raw = cancelamentos_pos_filtrar_times(_df_comp_aj_raw, _times_comp_aj)
@@ -394,6 +397,18 @@ _comp_aj_debug_horario = _comp_aj_bundle["debug_horario"]
 _comp_aj_resumo_ocorridas = _comp_aj_bundle["resumo_ocorridas"]
 _comp_aj_conferencia = _comp_aj_bundle["conferencia"]
 _comp_aj_validacao = _comp_aj_bundle["validacao"]
+
+# Pré-carregados em paralelo no topo (reusados no Top Closers / ciclo / funil).
+_df_detalhe_prefetch = _r.get("detalhe")
+if "detalhe" in _e or _df_detalhe_prefetch is None:
+    _df_detalhe_prefetch = pd.DataFrame()
+_df_ciclo_prefetch = _r.get("ciclo")
+if "ciclo" in _e or _df_ciclo_prefetch is None:
+    _df_ciclo_prefetch = pd.DataFrame()
+_df_funil_ag_raw = _r.get("funil_ag")
+_df_funil_ag_error = _e.get("funil_ag")
+if _df_funil_ag_raw is None:
+    _df_funil_ag_raw = pd.DataFrame()
 
 # ---------------------------------------------------------------------------
 # Seletor local de classificação (NÃO usa ctx.apply_filters — o sistema
@@ -443,17 +458,7 @@ pct_receb = _safe_pct(rec_v, mont_v) if tem_fin else None
 # Breakdown do card Reunião Agendada — mesma base da aba Lead In & Agendamentos
 # (zoho_activities + stage do deal; não usa deals criados no período).
 _times_sel_funil_card = list(ctx.selections.get("times") or [])
-try:
-    # `_df_funil_ag_raw` é reaproveitado no `tab_lead_triagem` (ver linha
-    # ~2005) — evita repetir o lookup no `@st.cache_data` no mesmo rerun.
-    # `_df_funil_ag_error` propaga a exceção para o ponto downstream que
-    # antes refazia a query e exibia `st.error(...)` (preserva o feedback
-    # visual original sem refazer a chamada).
-    _df_funil_ag_raw = get_executivas_funil_agendamentos(ctx.data_ini, ctx.data_fim)
-    _df_funil_ag_error = None
-except Exception as _exc:
-    _df_funil_ag_raw = pd.DataFrame()
-    _df_funil_ag_error = _exc
+# `_df_funil_ag_raw` / `_df_funil_ag_error` já vieram do prefetch paralelo.
 _df_funil_ag_card = cancelamentos_pos_filtrar_times(
     _df_funil_ag_raw, _times_sel_funil_card,
 )
@@ -903,14 +908,11 @@ with tab_rank:
         return metric_base
 
     # ------------------------------------------------------------------------
-    # Carga do detalhe nome-a-nome (mesma query do detalhe de Pré-vendas;
-    # `get_vendas_leads_detalhe_diario` delega pro cache compartilhado).
+    # Detalhe nome-a-nome — prefetch paralelo no topo da página.
     # ------------------------------------------------------------------------
-    try:
-        df_detalhe = get_vendas_leads_detalhe_diario(ctx.data_ini, ctx.data_fim)
-    except Exception as e:
-        st.error(f"Falha ao carregar detalhe linha-a-linha: {e}")
-        df_detalhe = pd.DataFrame()
+    if "detalhe" in _e:
+        st.error(f"Falha ao carregar detalhe linha-a-linha: {_e['detalhe']}")
+    df_detalhe = _df_detalhe_prefetch
 
     det_norm = vendas_normalizar_detalhe(df_detalhe)
 
@@ -1081,13 +1083,11 @@ with tab_rank:
             )
 
     # -------------------------------------------------------------------------
-    # Tempo de ciclo de venda — deals ganhos (SQL dedicado + agregação Python)
+    # Tempo de ciclo de venda — prefetch paralelo no topo da página.
     # -------------------------------------------------------------------------
-    try:
-        _df_ciclo_raw = get_executivas_ciclo_venda(ctx.data_ini, ctx.data_fim)
-    except Exception as e:
-        st.error(f"Falha ao carregar tempo de ciclo de venda: {e}")
-        _df_ciclo_raw = pd.DataFrame()
+    if "ciclo" in _e:
+        st.error(f"Falha ao carregar tempo de ciclo de venda: {_e['ciclo']}")
+    _df_ciclo_raw = _df_ciclo_prefetch
     _df_ciclo_prep = ciclo_venda_preparar(_df_ciclo_raw)
     _seg_ciclo_rank = (
         classif_sel

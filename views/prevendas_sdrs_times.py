@@ -36,6 +36,7 @@ from src.prevendas_transforms import (
     prevendas_qualif_resumo_splits,
     prevendas_ranking_sdr,
 )
+from src.parallel_fetch import fetch_named
 from src.repositories import (
     get_executivas,
     get_investimento_diario,
@@ -61,23 +62,33 @@ ctx = start_page(
     filters=["sdr", "tipo_sdr"],
 )
 
-try:
-    df_sdr           = get_prevendas_por_sdr(ctx.data_ini, ctx.data_fim)
-    df_diario        = get_prevendas_overview_diario(ctx.data_ini, ctx.data_fim)
-    df_detalhe       = get_prevendas_leads_detalhe_diario(ctx.data_ini, ctx.data_fim)
-    df_qualif        = get_prevendas_qualif_comparecimento(ctx.data_ini, ctx.data_fim)
-    df_sdrs_oficiais = get_prevendas_sdrs_oficiais()
-except Exception as e:
-    st.error(f"Falha ao consultar Pré-vendas: {e}")
+_r, _e = fetch_named({
+    "sdr": (get_prevendas_por_sdr, (ctx.data_ini, ctx.data_fim)),
+    "diario": (get_prevendas_overview_diario, (ctx.data_ini, ctx.data_fim)),
+    "detalhe": (get_prevendas_leads_detalhe_diario, (ctx.data_ini, ctx.data_fim)),
+    "qualif": (get_prevendas_qualif_comparecimento, (ctx.data_ini, ctx.data_fim)),
+    "sdrs_oficiais": (get_prevendas_sdrs_oficiais, ()),
+    "inv": (get_investimento_diario, (ctx.data_ini, ctx.data_fim)),
+    "exec_inv": (get_executivas, (ctx.data_ini, ctx.data_fim)),
+})
+_hard_err = next(
+    (_e[k] for k in ("sdr", "diario", "detalhe", "qualif", "sdrs_oficiais") if k in _e),
+    None,
+)
+if _hard_err is not None:
+    st.error(f"Falha ao consultar Pré-vendas: {_hard_err}")
     st.stop()
+df_sdr = _r["sdr"]
+df_diario = _r["diario"]
+df_detalhe = _r["detalhe"]
+df_qualif = _r["qualif"]
+df_sdrs_oficiais = _r["sdrs_oficiais"]
 
 # Investido — mesma fonte/cálculo da One Page e Visão Geral Pré-vendas.
-try:
-    df_inv_periodo = get_investimento_diario(ctx.data_ini, ctx.data_fim)
-    df_exec_inv = get_executivas(ctx.data_ini, ctx.data_fim)
-    k_investido = visao_geral_kpis(df_exec_inv, df_inv_periodo)
-except Exception:
+if "inv" in _e or "exec_inv" in _e or _r.get("inv") is None or _r.get("exec_inv") is None:
     k_investido = {"investimento": 0, "dias": 0}
+else:
+    k_investido = visao_geral_kpis(_r["exec_inv"], _r["inv"])
 _investido_total = float(k_investido.get("investimento") or 0)
 
 # Aplica filtros do header (sdr e tipo_sdr) — anota tipo antes pra que o
