@@ -263,9 +263,27 @@ _OP_CARD_CSS = """
     margin-top: 1px;
     line-height: 1.05;
 }
+/* Montante / Investido — valores BRL longos: escala com a largura do card */
+.op-card.hero.op-row-vendas-hero .op-value {
+    font-size: clamp(0.92rem, 6.8cqw, 1.48rem);
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    padding: 0 2px;
+    box-sizing: border-box;
+}
+/* Receita / Vendido (full width, mas valor longo) */
+.op-card.compact.op-row-vendas-footer .op-value {
+    font-size: clamp(0.88rem, 4.6cqw, 1.12rem);
+    letter-spacing: -0.015em;
+}
 /* Cards médios (CPA, Média móvel, Ticket, Apl. ±12, Agend. INB/SS…) */
 .op-card:not(.hero):not(.compact) .op-value {
     font-size: 1.28rem;
+}
+/* Ticket / CPA com BRL — evita corte em coluna estreita */
+.op-card.op-row-vendas-mid:not(.hero):not(.compact) .op-value {
+    font-size: clamp(0.82rem, 6.2cqw, 1.2rem);
+    letter-spacing: -0.015em;
 }
 /* Cards pequenos (Novos, Asc., Renov., Indic., Receita/Vendido) */
 .op-card.compact .op-value {
@@ -279,10 +297,10 @@ _OP_CARD_CSS = """
         font-size: clamp(0.82rem, 7.5cqw, 1.28rem);
     }
 }
-/* Hero — reduz só em cards muito estreitos (< 200px), não por coluna estreita */
-@container op-card (max-width: 200px) {
-    .op-card.hero .op-value {
-        font-size: clamp(0.92rem, 8cqw, 1.95rem);
+/* Hero — reduz em cards estreitos (Montante/Investido já usam clamp próprio) */
+@container op-card (max-width: 280px) {
+    .op-card.hero:not(.op-row-vendas-hero) .op-value {
+        font-size: clamp(0.95rem, 8cqw, 1.65rem);
     }
 }
 @container op-card (max-width: 200px) {
@@ -482,6 +500,50 @@ _OP_CARD_CSS = """
     .op-badge-extra-value {
         font-size: clamp(0.65rem, 5cqw, 0.86rem);
     }
+}
+
+/* Pré-vendas (3 colunas): % Agend. / Custo empilhados pra caber inteiros */
+.op-card.op-row-prev-pair .op-badges {
+    gap: 2px 6px;
+}
+.op-card.op-row-prev-pair .op-badge-label {
+    font-size: 0.5rem;
+    letter-spacing: 0.2px;
+    overflow: visible;
+    text-overflow: clip;
+}
+.op-card.op-row-prev-pair .op-badge-value {
+    font-size: 0.82rem;
+}
+.op-card.op-row-prev-pair .op-badge-extras {
+    gap: 3px;
+    margin-top: 3px;
+    padding-top: 3px;
+}
+.op-card.op-row-prev-pair .op-badge-extra {
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0;
+}
+.op-card.op-row-prev-pair .op-badge-extra-label,
+.op-card.op-row-prev-pair .onepage-metric-row .op-badge-extra-label {
+    font-size: 0.48rem;
+    letter-spacing: 0.15px;
+    text-align: center;
+    width: 100%;
+    flex: 0 0 auto;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
+}
+.op-card.op-row-prev-pair .op-badge-extra-value,
+.op-card.op-row-prev-pair .onepage-metric-row .op-badge-extra-value {
+    font-size: 0.68rem;
+    text-align: center;
+    width: 100%;
+    flex: 0 0 auto;
+    overflow: visible;
 }
 /* Em call / Follow inline — outros cards (Agend. INBOUND/SS). */
 .op-badge-extras.op-badge-extras-inline {
@@ -2206,10 +2268,10 @@ def _render_onepage_prevendas(
         tot = fonte["agendamentos"]
 
         def _ag_extras(n: float) -> list[tuple[str, str]]:
-            extras = [("% Agend.", pct(_safe_div(n, tot) * 100))]
+            extras = [("% Ag.", pct(_safe_div(n, tot) * 100))]
             if show_custo:
                 extras.append(
-                    ("Custo / Ag.", brl(_safe_div(inv_total, n), casas=2)),
+                    ("Custo", brl(_safe_div(inv_total, n), casas=2)),
                 )
             return extras
 
