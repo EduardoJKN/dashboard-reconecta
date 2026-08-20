@@ -2197,13 +2197,22 @@ def _render_onepage_prevendas(
     op_spacer("parent")
 
     fontes_ag = (
-        ("Agend. INBOUND", inb, "IN", "agendamentos Inbound"),
-        ("Agend. SS", ss, "SS", "agendamentos Fábrica"),
-        ("Agend. INDIC.", ind_f, "IND", "agendamentos Indicação"),
+        ("Agend. INBOUND", inb, "IN", "agendamentos Inbound", True),
+        ("Agend. SS", ss, "SS", "agendamentos Fábrica", False),
+        ("Agend. INDIC.", ind_f, "IND", "agendamentos Indicação", False),
     )
     r = st.columns(3, gap="small")
-    for col, (title, fonte, suf, hint) in zip(r, fontes_ag):
+    for col, (title, fonte, suf, hint, show_custo) in zip(r, fontes_ag):
         tot = fonte["agendamentos"]
+
+        def _ag_extras(n: float) -> list[tuple[str, str]]:
+            extras = [("% Agend.", pct(_safe_div(n, tot) * 100))]
+            if show_custo:
+                extras.append(
+                    ("Custo / Ag.", brl(_safe_div(inv_total, n), casas=2)),
+                )
+            return extras
+
         with col:
             one_page_metric_card(
                 title,
@@ -2211,14 +2220,10 @@ def _render_onepage_prevendas(
                 hint=hint,
                 row_class="op-row-prev-pair",
                 badges=[
-                    (f"Agend. -12 {suf}", int_br(fonte["agendamentos_menos_12"]), [
-                        ("% Agend.", pct(_safe_div(fonte["agendamentos_menos_12"], tot) * 100)),
-                        ("Custo / Ag.", brl(_safe_div(inv_total, fonte["agendamentos_menos_12"]), casas=2)),
-                    ]),
-                    (f"Agend. +12 {suf}", int_br(fonte["agendamentos_mais_12"]), [
-                        ("% Agend.", pct(_safe_div(fonte["agendamentos_mais_12"], tot) * 100)),
-                        ("Custo / Ag.", brl(_safe_div(inv_total, fonte["agendamentos_mais_12"]), casas=2)),
-                    ]),
+                    (f"Agend. -12 {suf}", int_br(fonte["agendamentos_menos_12"]),
+                     _ag_extras(fonte["agendamentos_menos_12"])),
+                    (f"Agend. +12 {suf}", int_br(fonte["agendamentos_mais_12"]),
+                     _ag_extras(fonte["agendamentos_mais_12"])),
                 ],
             )
 
