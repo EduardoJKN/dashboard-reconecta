@@ -1189,7 +1189,10 @@ def _prev_por_fonte(df_fonte: pd.DataFrame) -> dict:
         m: 0.0
         for m in ("agendamentos", "agendamentos_vencidos",
                   "agendamentos_mais_12", "agendamentos_menos_12",
-                  "agendamentos_criados", "agendamentos_ate_hoje",
+                  "agendamentos_criados",
+                  "agendamentos_criados_mais_12",
+                  "agendamentos_criados_menos_12",
+                  "agendamentos_ate_hoje",
                   "agendamentos_mais_12_ate_hoje",
                   "agendamentos_menos_12_ate_hoje",
                   "comparecimentos", "comparecimentos_ate_hoje",
@@ -2005,7 +2008,10 @@ def load_onepage_prevendas(
         for m in (
             "agendamentos", "agendamentos_vencidos",
             "agendamentos_mais_12", "agendamentos_menos_12",
-            "agendamentos_criados", "agendamentos_ate_hoje",
+            "agendamentos_criados",
+            "agendamentos_criados_mais_12",
+            "agendamentos_criados_menos_12",
+            "agendamentos_ate_hoje",
             "agendamentos_mais_12_ate_hoje", "agendamentos_menos_12_ate_hoje",
             "comparecimentos", "comparecimentos_ate_hoje",
             "vendas", "montante", "receita",
@@ -2243,33 +2249,82 @@ def _render_onepage_prevendas(
     inb = data.por_fonte[_FONTE_INBOUND]
     ss = data.por_fonte[_FONTE_SS]
     ind_f = data.por_fonte[_FONTE_INDICACOES]
-    ag_bruto = int(k_prev.get("agendamentos", 0))
-    ag_venc = int(k_prev.get("vencidas", 0))
-    ag_exib = int(k_prev.get("agendamentos_exibidos", max(ag_bruto - ag_venc, 0)))
-    one_page_metric_card(
-        "Agendamentos",
-        int_br(ag_exib),
-        hint=f"vencidos: {int_br(ag_venc)}",
-        accent=True,
-        hero=True,
-        badges=[
-            ("Custo / Ag.", brl(_safe_div(inv_total, ag_exib), casas=2)),
-        ],
+
+    prev_ag_opt = st.segmented_control(
+        "Visão agendamentos",
+        options=["Agend. criados", "Agendamentos"],
+        default="Agend. criados",
+        key="op_prev_ag_metric_v2",
+        label_visibility="collapsed",
+        required=True,
     )
+    modo_criados = prev_ag_opt == "Agend. criados"
+
+    if modo_criados:
+        # Soma das fontes (regra Looker: created_time + anti-retro + 1 deal/dia).
+        ag_exib = int(
+            inb.get("agendamentos_criados", 0)
+            + ss.get("agendamentos_criados", 0)
+            + ind_f.get("agendamentos_criados", 0)
+        )
+        one_page_metric_card(
+            "Agend. criados",
+            int_br(ag_exib),
+            hint="created_time · sem lançamento retroativo",
+            accent=True,
+            hero=True,
+            badges=[
+                ("Custo / Ag.", brl(_safe_div(inv_total, ag_exib), casas=2)),
+            ],
+        )
+        key_tot = "agendamentos_criados"
+        key_m12 = "agendamentos_criados_mais_12"
+        key_n12 = "agendamentos_criados_menos_12"
+        label_hero_hint = {
+            "IN": "criados Inbound",
+            "SS": "criados Fábrica",
+            "IND": "criados Indicação",
+        }
+    else:
+        ag_bruto = int(k_prev.get("agendamentos", 0))
+        ag_venc = int(k_prev.get("vencidas", 0))
+        ag_exib = int(k_prev.get("agendamentos_exibidos", max(ag_bruto - ag_venc, 0)))
+        one_page_metric_card(
+            "Agendamentos",
+            int_br(ag_exib),
+            hint=f"vencidos: {int_br(ag_venc)}",
+            accent=True,
+            hero=True,
+            badges=[
+                ("Custo / Ag.", brl(_safe_div(inv_total, ag_exib), casas=2)),
+            ],
+        )
+        key_tot = "agendamentos"
+        key_m12 = "agendamentos_mais_12"
+        key_n12 = "agendamentos_menos_12"
+        label_hero_hint = {
+            "IN": "agendamentos Inbound",
+            "SS": "agendamentos Fábrica",
+            "IND": "agendamentos Indicação",
+        }
+
     op_spacer("parent")
 
+    prefix = "Criados" if modo_criados else "Agend."
     fontes_ag = (
-        ("Agend. INBOUND", inb, "IN", "agendamentos Inbound", True),
-        ("Agend. SS", ss, "SS", "agendamentos Fábrica", False),
-        ("Agend. INDIC.", ind_f, "IND", "agendamentos Indicação", False),
+        (f"{prefix} INBOUND", inb, "IN", label_hero_hint["IN"], True),
+        (f"{prefix} SS", ss, "SS", label_hero_hint["SS"], False),
+        (f"{prefix} INDIC.", ind_f, "IND", label_hero_hint["IND"], False),
     )
     r = st.columns(3, gap="small")
     for col, (title, fonte, suf, hint, show_custo) in zip(r, fontes_ag):
-        tot = fonte["agendamentos"]
+        tot = float(fonte.get(key_tot, 0) or 0)
+        n12 = float(fonte.get(key_n12, 0) or 0)
+        m12 = float(fonte.get(key_m12, 0) or 0)
 
-        def _ag_extras(n: float) -> list[tuple[str, str]]:
-            extras = [("% Ag.", pct(_safe_div(n, tot) * 100))]
-            if show_custo:
+        def _ag_extras(n: float, *, _tot=tot, _show=show_custo) -> list[tuple[str, str]]:
+            extras = [("% Ag.", pct(_safe_div(n, _tot) * 100))]
+            if _show:
                 extras.append(
                     ("Custo", brl(_safe_div(inv_total, n), casas=2)),
                 )
@@ -2282,10 +2337,8 @@ def _render_onepage_prevendas(
                 hint=hint,
                 row_class="op-row-prev-pair",
                 badges=[
-                    (f"Agend. -12 {suf}", int_br(fonte["agendamentos_menos_12"]),
-                     _ag_extras(fonte["agendamentos_menos_12"])),
-                    (f"Agend. +12 {suf}", int_br(fonte["agendamentos_mais_12"]),
-                     _ag_extras(fonte["agendamentos_mais_12"])),
+                    (f"-12 {suf}", int_br(n12), _ag_extras(n12)),
+                    (f"+12 {suf}", int_br(m12), _ag_extras(m12)),
                 ],
             )
 
@@ -2538,32 +2591,113 @@ def _render_onepage_tendencias_priory(df_one: pd.DataFrame) -> None:
             st.plotly_chart(fig, use_container_width=True, key="op_chart_inv_dia")
 
 
+def _serie_ag_diario_from_fonte(df_fonte: pd.DataFrame) -> pd.DataFrame:
+    """Agrega pré-vendas por fonte → série diária (criados + líquidos ±12)."""
+    if df_fonte is None or df_fonte.empty or "data_ref" not in df_fonte.columns:
+        return pd.DataFrame()
+    cols = [
+        c for c in (
+            "agendamentos", "agendamentos_mais_12", "agendamentos_menos_12",
+            "agendamentos_criados",
+            "agendamentos_criados_mais_12",
+            "agendamentos_criados_menos_12",
+        )
+        if c in df_fonte.columns
+    ]
+    if not cols:
+        return pd.DataFrame()
+    out = (
+        df_fonte.groupby("data_ref", as_index=False)[cols]
+        .sum(numeric_only=True)
+        .sort_values("data_ref")
+    )
+    return out
+
+
 def _render_onepage_tendencias_extra(
     df_prev_dia: pd.DataFrame,
+    df_prev_fonte: pd.DataFrame,
     df_exec: pd.DataFrame,
 ) -> None:
-    """Gráficos secundários — agendamentos e funil ag/comp/vendas."""
+    """Gráficos secundários — agendamentos (±12 / % +12) e tipos de venda."""
     g_left2, g_right2 = st.columns(2, gap="large")
     with g_left2:
-        st.markdown("**Agendamentos × +12 / -12**")
-        if df_prev_dia is None or df_prev_dia.empty:
-            st.info("Sem série diária de Pré-vendas no período.")
+        chart_ag_opt = st.segmented_control(
+            "Visão gráfico agendamentos",
+            options=["Agend. criados", "Agendamentos"],
+            default="Agend. criados",
+            key="op_chart_ag_metric_v2",
+            label_visibility="collapsed",
+            required=True,
+        )
+        modo_criados = chart_ag_opt == "Agend. criados"
+        titulo = (
+            "Agend. criados × +12 / -12"
+            if modo_criados
+            else "Agendamentos × +12 / -12"
+        )
+        st.markdown(f"**{titulo}**")
+
+        df_fonte_dia = _serie_ag_diario_from_fonte(df_prev_fonte)
+        if modo_criados:
+            if df_fonte_dia.empty or "agendamentos_criados" not in df_fonte_dia.columns:
+                st.info("Sem série diária de agendamentos criados no período.")
+                df_plot = None
+            else:
+                df_plot = df_fonte_dia.copy()
+                df_plot["ag_total"] = df_plot["agendamentos_criados"]
+                df_plot["ag_mais_12"] = df_plot.get(
+                    "agendamentos_criados_mais_12", 0
+                )
+                df_plot["ag_menos_12"] = df_plot.get(
+                    "agendamentos_criados_menos_12", 0
+                )
+                nome_tot, nome_m12, nome_n12 = (
+                    "Ag. criados", "Ag. criados +12", "Ag. criados -12",
+                )
         else:
-            df_pd = df_prev_dia.sort_values("data_ref").copy()
-            df_pd["agendamentos_menos_12_aprox"] = (
-                df_pd["agendamentos"] - df_pd["agendamentos_mais_12"]
-            ).clip(lower=0)
-            _traces = [
-                ("Agendamentos",     "agendamentos",                op_theme_color("gold"),     None,   2.5, 5),
-                ("Ag. +12",          "agendamentos_mais_12",        op_theme_color("plus_12"),  "dash", 2.0, 4),
-                ("Ag. -12 (aprox.)", "agendamentos_menos_12_aprox", op_theme_color("minus_12"), "dot",  2.0, 4),
+            if df_prev_dia is not None and not df_prev_dia.empty:
+                df_plot = df_prev_dia.sort_values("data_ref").copy()
+                df_plot["ag_total"] = df_plot["agendamentos"]
+                df_plot["ag_mais_12"] = df_plot.get("agendamentos_mais_12", 0)
+                if "agendamentos_menos_12" in df_plot.columns:
+                    df_plot["ag_menos_12"] = df_plot["agendamentos_menos_12"]
+                else:
+                    df_plot["ag_menos_12"] = (
+                        df_plot["ag_total"] - df_plot["ag_mais_12"]
+                    ).clip(lower=0)
+                nome_tot, nome_m12, nome_n12 = (
+                    "Agendamentos", "Ag. +12", "Ag. -12",
+                )
+            elif not df_fonte_dia.empty:
+                df_plot = df_fonte_dia.copy()
+                df_plot["ag_total"] = df_plot["agendamentos"]
+                df_plot["ag_mais_12"] = df_plot.get("agendamentos_mais_12", 0)
+                df_plot["ag_menos_12"] = df_plot.get("agendamentos_menos_12", 0)
+                nome_tot, nome_m12, nome_n12 = (
+                    "Agendamentos", "Ag. +12", "Ag. -12",
+                )
+            else:
+                st.info("Sem série diária de Pré-vendas no período.")
+                df_plot = None
+
+        if df_plot is not None and not df_plot.empty:
+            tot = pd.to_numeric(df_plot["ag_total"], errors="coerce").fillna(0)
+            m12 = pd.to_numeric(df_plot["ag_mais_12"], errors="coerce").fillna(0)
+            df_plot["pct_mais_12"] = [
+                (_safe_div(a, b) * 100) for a, b in zip(m12, tot)
+            ]
+            _count_traces = [
+                (nome_tot, "ag_total", op_theme_color("gold"), None, 2.5, 5),
+                (nome_m12, "ag_mais_12", op_theme_color("plus_12"), "dash", 2.0, 4),
+                (nome_n12, "ag_menos_12", op_theme_color("minus_12"), "dot", 2.0, 4),
             ]
             fig = go.Figure()
-            for name, col, color, dash, w, msz in _traces:
-                series = df_pd[col]
+            for name, col, color, dash, w, msz in _count_traces:
+                series = df_plot[col]
                 fmt_series = [int_br(v) for v in series]
                 fig.add_trace(go.Scatter(
-                    x=df_pd["data_ref"], y=series, name=name,
+                    x=df_plot["data_ref"], y=series, name=name,
                     customdata=[[v] for v in fmt_series],
                     hovertemplate="%{customdata[0]}<extra></extra>",
                     mode="lines+markers+text",
@@ -2574,41 +2708,75 @@ def _render_onepage_tendencias_extra(
                     line=dict(color=color, width=w, dash=dash),
                     marker=dict(size=msz),
                 ))
+            pct_series = df_plot["pct_mais_12"]
+            fmt_pct = [pct(v) for v in pct_series]
+            fig.add_trace(go.Scatter(
+                x=df_plot["data_ref"], y=pct_series, name="% +12",
+                customdata=[[v] for v in fmt_pct],
+                hovertemplate="%{customdata[0]}<extra></extra>",
+                mode="lines+markers",
+                yaxis="y2",
+                line=dict(color=op_theme_color("green"), width=2.2, dash="dashdot"),
+                marker=dict(size=4, symbol="diamond"),
+            ))
             fig.update_layout(**_base_layout(height=320, unified=True))
+            fig.update_layout(
+                yaxis2=dict(
+                    title="% +12",
+                    overlaying="y",
+                    side="right",
+                    range=[0, 100],
+                    ticksuffix="%",
+                    showgrid=False,
+                    zeroline=False,
+                    tickfont=dict(color=op_theme_color("text_subtle"), size=10),
+                    title_font=dict(color=op_theme_color("muted"), size=11),
+                ),
+            )
             _style_axes(fig)
             style_temporal(fig)
             op_chart_apply_theme(fig)
             st.plotly_chart(fig, use_container_width=True, key="op_chart_ag_12")
+
     with g_right2:
-        st.markdown("**Agendamentos × Comparecimentos × Vendas**")
-        if (df_prev_dia is None or df_prev_dia.empty
-                or df_exec is None or df_exec.empty):
-            st.info("Sem dados de Pré-vendas e/ou Vendas no período.")
+        st.markdown("**Tipos de venda**")
+        mix_cols = [
+            c for c in (
+                "novos", "ascensoes", "renovacoes",
+                "upgrades", "eventos", "ingressos",
+            )
+            if df_exec is not None and not df_exec.empty and c in df_exec.columns
+        ]
+        if not mix_cols:
+            st.info("Sem série diária de tipos de venda no período.")
         else:
-            vendas_dia = df_exec.groupby("data_ref", as_index=False)["vendas"].sum()
-            merged = (
-                df_prev_dia[["data_ref", "agendamentos", "comparecimentos"]]
-                .merge(vendas_dia, on="data_ref", how="outer")
-                .fillna(0)
+            vendas_dia = (
+                df_exec.groupby("data_ref", as_index=False)[mix_cols]
+                .sum(numeric_only=True)
                 .sort_values("data_ref")
             )
-            _traces = [
-                ("Agendamentos", "agendamentos",    op_theme_color("gold"),       None,  2.5, 5),
-                ("Comparec.",    "comparecimentos", op_theme_color("wine_light"), None,  2.5, 5),
-                ("Vendas",       "vendas",          op_theme_color("green"),      "dot", 2.5, 5),
+            _tipo_traces = [
+                ("Novos", "novos", op_theme_color("gold"), None, 2.5, 5),
+                ("Asc.", "ascensoes", op_theme_color("wine_light"), None, 2.2, 4),
+                ("Renov.", "renovacoes", op_theme_color("plus_12"), "dash", 2.0, 4),
+                ("Upg.", "upgrades", op_theme_color("green"), None, 2.2, 4),
+                ("Evt.", "eventos", op_theme_color("minus_12"), "dot", 2.0, 4),
+                ("Ing.", "ingressos", "#a78bfa", "dashdot", 2.0, 4),
             ]
             fig = go.Figure()
-            for name, col, color, dash, w, msz in _traces:
-                series = merged[col]
+            for name, col, color, dash, w, msz in _tipo_traces:
+                if col not in vendas_dia.columns:
+                    continue
+                series = vendas_dia[col]
                 fmt_series = [int_br(v) for v in series]
                 fig.add_trace(go.Scatter(
-                    x=merged["data_ref"], y=series, name=name,
+                    x=vendas_dia["data_ref"], y=series, name=name,
                     customdata=[[v] for v in fmt_series],
                     hovertemplate="%{customdata[0]}<extra></extra>",
                     mode="lines+markers+text",
                     text=annotate_adaptive(series, int_br),
                     textposition="top center",
-                    textfont=dict(color=op_theme_color("text_subtle"), size=10, family="Inter"),
+                    textfont=dict(color=op_theme_color("text_subtle"), size=9, family="Inter"),
                     cliponaxis=False,
                     line=dict(color=color, width=w, dash=dash),
                     marker=dict(size=msz),
@@ -2617,7 +2785,7 @@ def _render_onepage_tendencias_extra(
             _style_axes(fig)
             style_temporal(fig)
             op_chart_apply_theme(fig)
-            st.plotly_chart(fig, use_container_width=True, key="op_chart_funil")
+            st.plotly_chart(fig, use_container_width=True, key="op_chart_tipos_venda")
 
 
 def _render_onepage_tabelas(
@@ -2957,7 +3125,9 @@ with st.expander("Tendências diárias", expanded=True):
     with st.spinner("Carregando gráficos de funil..."):
         with _op_timed_block("Gráficos de funil"):
             _render_onepage_tendencias_extra(
-                _prev_data.df_prev_dia, _vendas_data.df_exec,
+                _prev_data.df_prev_dia,
+                _prev_data.df_prev_fonte,
+                _vendas_data.df_exec,
             )
 
 with st.spinner("Carregando tabelas analíticas..."):

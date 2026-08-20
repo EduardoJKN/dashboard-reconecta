@@ -132,6 +132,7 @@ acts AS (
         a.what_id                       AS deal_id,
         a.start_datetime::date          AS data_reuniao,
         a.created_time::date            AS data_criacao,
+        a.created_time                  AS created_ts,
         a.status_reuniao
     FROM zoho_activities a
     WHERE a.activity_type IN ('Consulta', 'Indicação')
@@ -157,16 +158,44 @@ acts_reuniao AS (
     JOIN deal_flags df ON df.deal_id = a.deal_id
     WHERE a.data_reuniao BETWEEN :data_ini AND :data_fim
 ),
-acts_criacao AS (
-    -- Activities criadas no período (alimenta `agendamentos_criados`).
-    -- Mesma regra de INNER JOIN — órfãs ficam de fora.
+-- ---------------------------------------------------------------------------
+-- Agendamentos CRIADOS (regra Looker):
+--   - eixo = created_time::date no período
+--   - anti-retroativo: start_datetime::date >= created_time::date
+--   - criação até "hoje" (America/Sao_Paulo)
+--   - 1 deal por dia (DISTINCT ON data_criacao, deal_id — mais recente)
+-- ---------------------------------------------------------------------------
+acts_criacao_raw AS (
     SELECT
         a.activity_id,
+        a.deal_id,
         a.data_criacao,
-        df.fonte
+        a.created_ts,
+        df.fonte,
+        (df.classif_final = 'Atua +12')  AS tem_mais_12,
+        (df.classif_final = 'Atua -12')  AS tem_menos_12
     FROM acts a
     JOIN deal_flags df ON df.deal_id = a.deal_id
     WHERE a.data_criacao BETWEEN :data_ini AND :data_fim
+      AND a.data_reuniao IS NOT NULL
+      AND a.data_reuniao >= a.data_criacao
+      AND a.data_criacao
+          <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date
+),
+acts_criacao AS (
+    SELECT DISTINCT ON (data_criacao, deal_id)
+        activity_id,
+        deal_id,
+        data_criacao,
+        fonte,
+        tem_mais_12,
+        tem_menos_12
+    FROM acts_criacao_raw
+    ORDER BY
+        data_criacao,
+        deal_id,
+        created_ts DESC NULLS LAST,
+        activity_id DESC
 ),
 -- ---------------------------------------------------------------------------
 -- 4) Agregados por (data_ref, fonte)
@@ -222,7 +251,9 @@ criacao_dia AS (
     SELECT
         data_criacao                                                   AS data_ref,
         fonte,
-        COUNT(DISTINCT activity_id)::bigint                            AS agendamentos_criados
+        COUNT(*)::bigint                                               AS agendamentos_criados,
+        COUNT(*) FILTER (WHERE tem_mais_12)::bigint                    AS agendamentos_criados_mais_12,
+        COUNT(*) FILTER (WHERE tem_menos_12)::bigint                   AS agendamentos_criados_menos_12
     FROM acts_criacao
     GROUP BY data_criacao, fonte
 ),
@@ -289,6 +320,8 @@ SELECT
     k.fonte,
     COALESCE(o.oportunidades, 0)::bigint                              AS oportunidades,
     COALESCE(c.agendamentos_criados, 0)::bigint                       AS agendamentos_criados,
+    COALESCE(c.agendamentos_criados_mais_12, 0)::bigint               AS agendamentos_criados_mais_12,
+    COALESCE(c.agendamentos_criados_menos_12, 0)::bigint              AS agendamentos_criados_menos_12,
     COALESCE(a.agendamentos, 0)::bigint                               AS agendamentos,
     COALESCE(a.agendamentos_vencidos, 0)::bigint                      AS agendamentos_vencidos,
     COALESCE(a.agendamentos_mais_12, 0)::bigint                       AS agendamentos_mais_12,

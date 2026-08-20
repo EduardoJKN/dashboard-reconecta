@@ -324,11 +324,12 @@ def get_one_page_prevendas_por_fonte(data_ini: date,
     descartam activities órfãs (`what_id` sem deal pareado).
 
     Colunas: data_ref, fonte, oportunidades, agendamentos_criados,
-    agendamentos (líquido), agendamentos_vencidos, ±12 buckets,
-    *_ate_hoje variants (só start_datetime <= CURRENT_DATE),
-    perc_agendamentos_mais_12, comparecimentos, comparecimentos_ate_hoje,
-    perc_comparecimento, perc_comparecimento_ate_hoje, vendas,
-    montante, receita.
+    agendamentos_criados_mais_12/menos_12 (regra Looker: created_time +
+    anti-retroativo + 1 deal/dia), agendamentos (líquido),
+    agendamentos_vencidos, ±12 buckets, *_ate_hoje variants
+    (só start_datetime <= CURRENT_DATE), perc_agendamentos_mais_12,
+    comparecimentos, comparecimentos_ate_hoje, perc_comparecimento,
+    perc_comparecimento_ate_hoje, vendas, montante, receita.
 
     Validado abr/2026: Fábrica 132 / Inbound 383 / Outbound 3 (= 518
     agend líquidos = consolidado prev_dia).
