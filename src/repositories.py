@@ -57,17 +57,22 @@ def _month_params(data_ini: date, data_fim: date) -> dict:
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_executivas(
+    data_ini: date,
+    data_fim: date,
+    _novos_mix_rules: str = "novos_preserva_mix_v2",
+) -> pd.DataFrame:
     from src.transforms import (
-        executivas_alinhar_novos_com_vendas,
         executivas_aplicar_time_vendas_overrides,
     )
 
     # v2: Time do Marcelo Executivas (Dayana/Karine) — literal p/ invalidar
     # cache quando a regra de time_vendas muda (Streamlit não hasheia imports).
     _time_vendas_rules = "marcelo_executivas_v2"
-    # v1: novos = max(novos, vendas) — Ganho sem data_hora_compra.
-    _novos_align_rules = "novos_max_vendas_v1"
+    # `_novos_mix_rules` entra na assinatura para invalidar o cache do
+    # Streamlit: `novos` vem só da coluna de Novo cliente. A view BI já
+    # entrega `vendas` = total de ganhos; copiar isso para `novos` inflava
+    # o mix.
     # v2: extras do mix (upgrade, evento, ingresso) via trat_negocios_rw.
     _upgrades_mix_rules = "tipos_extra_trat_negocios_v2"
 
@@ -75,9 +80,8 @@ def get_executivas(data_ini: date, data_fim: date) -> pd.DataFrame:
     if not df.empty:
         df["data_ref"] = pd.to_datetime(df["data_ref"])
         df = executivas_aplicar_time_vendas_overrides(df)
-        df = executivas_alinhar_novos_com_vendas(df)
         df.attrs["time_vendas_rules"] = _time_vendas_rules
-        df.attrs["novos_align_rules"] = _novos_align_rules
+        df.attrs["novos_mix_rules"] = _novos_mix_rules
         df.attrs["upgrades_mix_rules"] = _upgrades_mix_rules
     return df
 
