@@ -33,22 +33,18 @@ SDR_UNKNOWN_LABEL = "SDR não classificado"
 CLOSER_UNKNOWN_LABEL = "Closer não classificado"
 
 # ---------------------------------------------------------------------------
-# Listas canônicas (composição validada com a operação · maio/2026)
+# Listas canônicas (composição Slack · agosto/2026)
 # ---------------------------------------------------------------------------
 # Notas de matching:
 #   - Pré-vendas: nomes em duas palavras (substring contígua) pra evitar
-#     falsos positivos. "Laura Garcia" não casa "Laura Silva"; "Isabela
-#     Lopes" não casa "Isabela Lobato" nem "Isabella Lopes Ribeiro";
-#     "Camilla Lyra" não casa "Camila Lyra" (1 vs 2 'l').
-#   - Ingrid: no banco aparece como "Ingrid Lorrayne" (nome curto).
-#     "Ingrid Lorrayne" também casa "Ingrid Lorrayne Carvalho de Morais"
-#     (substring) caso a versão estendida apareça depois.
-#   - Social Seller (singular, alinhado com a operação): "Estefany
-#     Nascimento" não casa "Estefany Bastos" (versão antiga, fora da
-#     composição); "Isabella Esbell" não casa "Isabella Lopes Ribeiro".
-#   - Letícia Garcia de Freitas (1 venda em maio/2026) NÃO está na
-#     composição → vira "SDR não classificado". "Laura Garcia" não casa
-#     "Letícia Garcia de Freitas".
+#     falsos positivos. "Laura Garcia" casa "Laura Garcia de Freitas"
+#     (Slack: Laura Freitas) e NÃO casa "Laura Silva". "Isabela Lopes"
+#     não casa "Isabela Lobato" nem "Isabella Lopes Ribeiro".
+#   - Ingrid: no banco/Slack aparece como "Ingrid Lorrayne Carvalho de
+#     Morais"; o token "Ingrid Lorrayne" casa a forma curta e a estendida.
+#   - Social Seller: Geovanna Souza e Gabriela Matos (Slack).
+#   - Letícia Freitas (Letícia Garcia de Freitas) é gestora do setor —
+#     NÃO entra na composição. "Laura Garcia" não casa o nome dela.
 TIMES_CLOSER: dict[str, list[str]] = {
     "Time Leidianne": ["Hawinne", "Thaís", "Andrezza", "Nathally"],
     "Time Marcelo":   ["Nathan", "Leonardo Melo Patriota", "Leandro Alves",
@@ -69,9 +65,8 @@ TIME_VENDAS_VISUAL_OUTROS = "Outros / sem time visual"
 
 TIPOS_SDR: dict[str, list[str]] = {
     "Pré-vendas":    ["Laura Garcia", "Isabela Lopes", "Mayana Silva",
-                      "Camilla Lyra", "Ingrid Lorrayne"],
-    "Social Seller": ["Geovanna Souza", "Estefany Nascimento",
-                      "Isabella Esbell"],
+                      "Ingrid Lorrayne"],
+    "Social Seller": ["Geovanna Souza", "Gabriela Matos"],
 }
 
 CLOSER_TIME_LABELS: list[str] = list(TIMES_CLOSER.keys()) + [CLOSER_UNKNOWN_LABEL]

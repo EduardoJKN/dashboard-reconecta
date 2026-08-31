@@ -26,7 +26,7 @@
 --   - 276 (47%) com `executiva_vendas`
 --
 -- ⚠ Limitações:
---   - Social Sellers (Geovanna, Estefany, Isabella Esbell) NÃO aparecem
+--   - Social Sellers (Geovanna Souza, Gabriela Matos) NÃO aparecem
 --     como sdr_ss desses deals — não significa ausência de atuação.
 --   - 274 (~34%) sem match: provavelmente deals do pipeline pós-venda
 --     (IDs Zoho separados dos deals comerciais).

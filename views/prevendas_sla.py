@@ -571,8 +571,8 @@ else:
 st.caption(
     "**Limitações.** *Notificações*: cruzamento com `zoho.crm_negocios` por "
     "priority `id_negocio > email` cobre ~66% das notificações no histórico "
-    "completo; **Social Sellers** (Geovanna Souza, Estefany Nascimento, "
-    "Isabella Esbell) raramente aparecem como `sdr_ss` desses deals — não "
+    "completo; **Social Sellers** (Geovanna Souza, Gabriela Matos) "
+    "raramente aparecem como `sdr_ss` desses deals — não "
     "significa ausência de atuação. *Leads repassados*: SDR vem da cascata "
     "`activity.prevendas > deal.sdr_ss`; leads que ainda não viraram deal "
     "ou cuja atividade ainda não foi registrada aparecem como **Sem SDR "
