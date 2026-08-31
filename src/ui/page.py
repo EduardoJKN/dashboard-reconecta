@@ -25,6 +25,8 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from src.team_classification import TIPOS_SDR
+
 from .components import filter_label
 
 # =============================================================================
@@ -244,11 +246,16 @@ _FILTER_LABELS: dict[str, str] = {
     "time_closer": "Time Closer",
 }
 
+# Labels canônicos do Tipo SDR — sempre pré-marcados no header.
+# "Sem SDR" e "SDR não classificado" ficam disponíveis no dropdown,
+# mas só entram no recorte se o usuário marcar.
+_TIPO_SDR_DEFAULTS: tuple[str, ...] = tuple(TIPOS_SDR.keys())
+# Sessões antigas tinham `_filter_tipo_sdr = []` (= Todos). Sem esta
+# seed, o novo default não entra até o usuário abrir uma sessão nova.
+_TIPO_SDR_DEFAULT_SEED = "_tipo_sdr_canonical_default_v1"
+
 _FILTER_DEFAULTS: dict[str, str] = {
-    # tipo_sdr abre vazio (= "Todos") — pedido do user. As categorias
-    # "Sem SDR" e "SDR não classificado" só aparecem quando o usuário
-    # explicitamente seleciona algo no filtro.
-    "tipo_sdr":    "none",
+    "tipo_sdr":    "canonical_sdr_types",
     "time_closer": "all_except_unknown",
     "times":       "all_except_unknown",
     "time":        "all_except_unknown",
@@ -285,6 +292,9 @@ def _resolve_default(filter_key: str, options: list[str]) -> list[str]:
         return []
     if rule == "all_except_unknown":
         return [o for o in options if not _is_unknown_label(o)]
+    if rule == "canonical_sdr_types":
+        wanted = set(_TIPO_SDR_DEFAULTS)
+        return [o for o in options if o in wanted]
     return list(options)
 
 
@@ -459,8 +469,16 @@ class PageContext:
                     if t not in opts:
                         opts.append(t)
                 opts = sorted(opts)
+            if key == "tipo_sdr":
+                for t in _TIPO_SDR_DEFAULTS:
+                    if t not in opts:
+                        opts.append(t)
+                opts = sorted(opts)
             widget_key = f"_filter_{key}"
             default_sel = _resolve_default(key, opts)
+            if key == "tipo_sdr" and not st.session_state.get(_TIPO_SDR_DEFAULT_SEED):
+                st.session_state[widget_key] = list(default_sel)
+                st.session_state[_TIPO_SDR_DEFAULT_SEED] = True
             with self._filter_cols[key]:
                 filter_label(label)
                 sel = _multiselect_compact(label, opts, widget_key, default_sel)
@@ -479,7 +497,11 @@ class PageContext:
             if not sel:
                 continue
             all_vals = df[col].dropna().astype(str).unique().tolist()
-            if len(sel) >= len(all_vals):
+            # "Marcar todos" (ou seleção que cobre 100% dos valores do df)
+            # equivale a não filtrar. Compara conjuntos — não tamanhos —
+            # pra não tratar Pré-vendas+Social Seller como "Todos" quando
+            # o df só tem "SDR não classificado" / "Sem SDR".
+            if all_vals and set(all_vals).issubset(set(sel)):
                 continue
             mask &= df[col].astype(str).isin(sel)
         return df[mask]
