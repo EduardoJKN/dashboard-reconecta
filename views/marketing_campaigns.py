@@ -108,9 +108,9 @@ _FUNIL_EXPANDER_MD = (
     "  alinhado com a regra da Visão Geral comercial.\n"
     "- **Comparecimentos:** subset dos agendamentos com "
     "  `status_reuniao = 'Concluída'`.\n"
-    "- **Vendas novas:** deal-centric — 1 row por deal (sem "
+    "- **Vendas:** deal-centric — 1 row por deal (sem "
     "  duplicação), `stage IN ('Ganho','Fechado Ganho')` e "
-    "  `tipo_venda = 'Novo cliente'`.\n"
+    "  mix de `tipo_venda` (mesmo do card Ganhos).\n"
     "- **Aplicações (etapa do funil):** `fdw_reconecta.typeform_aplicacoes` "
     "  cruzado por e-mail dos leads da campanha (`utm_campaign`); "
     "`dados_completos = TRUE`, dedupe e-mail/dia; leads `timestamp::date`, "
@@ -767,11 +767,9 @@ def _render_comparar_campanhas(ctx: PageContext, df_camp: pd.DataFrame) -> None:
             "de origem (página/variante/URL) vêm de "
             "`mkt_paginas_variantes.sql` (email-level) agregado por "
             "`utm_campaign` — mesma regra da Visão Geral. "
-            "**Vendas novas** = `zoho_deals` (Ganho/Fechado Ganho) com "
-            "`tipo_venda = 'Novo cliente'`, atribuído ao lead via priority "
-            "`zoho_id > session_id > email` (mesma regra do funil Growth — "
-            "ascensão/renovação/indicação ficam de fora do caminho de "
-            "aquisição)."
+            "**Vendas** = `zoho_deals` (Ganho/Fechado Ganho) no mix de "
+            "`tipo_venda` (mesmo do card Ganhos), atribuído ao lead via "
+            "priority `zoho_id > session_id > email`."
         )
 
         with st.expander("Detalhamento de origem da campanha"):

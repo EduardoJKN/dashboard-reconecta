@@ -210,11 +210,11 @@ def _render_visao_executiva(
         )
     with v3:
         metric_card_v2(
-            "Vendas novas",
-            int_br(k["vendas_novas_total_geral"]),
-            delta_pct=delta_pct(k["vendas_novas_total_geral"],
-                                kp["vendas_novas_total_geral"]),
-            hint="tipo_venda = 'Novo cliente'",
+            "Vendas",
+            int_br(k["vendas_total_geral"]),
+            delta_pct=delta_pct(k["vendas_total_geral"],
+                                kp["vendas_total_geral"]),
+            hint="mix de tipo_venda · Ganho/Fechado Ganho",
         )
     with v4:
         metric_card_v2(

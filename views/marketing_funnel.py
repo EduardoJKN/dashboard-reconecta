@@ -13,8 +13,8 @@ fontes oficiais já validadas em Visão Geral / Growth / ROAS-CAC:
     mkt_visao_geral_diario.sql          — série diária total geral (mesma
                                           política da Visão Geral / ROAS-CAC).
 
-Vendas = Vendas novas (`tipo_venda='Novo cliente'`) — caminho de aquisição.
-Vendas totais (todos `Ganho/Fechado Ganho`) ficam como métrica complementar.
+Vendas = mix canônico de ganhos (mesmo do card Ganhos / Time de Vendas).
+Vendas novas (`tipo_venda='Novo cliente'`) fica como métrica complementar.
 """
 from datetime import timedelta
 
@@ -166,19 +166,18 @@ with m2:
     )
 with m3:
     metric_card_v2(
-        "Vendas (totais)",
+        "Vendas",
         int_br(k["vendas"]),
         delta_pct=delta_pct(k["vendas"], kp["vendas"]),
-        hint="stage Ganho/Fechado Ganho · todos os tipos de venda",
+        hint="mix de tipo_venda · Ganho/Fechado Ganho",
+        accent=True,
     )
 with m4:
     metric_card_v2(
         "Vendas novas",
         int_br(k["vendas_novas"]),
         delta_pct=delta_pct(k["vendas_novas"], kp["vendas_novas"]),
-        hint=f"tipo_venda='Novo cliente' · "
-             f"taxa {pct(k['tx_lead_venda'], casas=1)} dos leads",
-        accent=True,
+        hint="só tipo_venda = 'Novo cliente'",
     )
 
 # ---------------------------------------------------------------------------
@@ -382,7 +381,8 @@ st.caption(
     "via `what_id` a deal pareado. Vendas / Vendas novas / Montante / "
     "Receita: `zoho_deals` com priority match `zoho_id > session_id > "
     "email`; deals sem lead correspondente entram como **Sem canal**. "
-    "**Vendas novas** = `tipo_venda='Novo cliente'` (caminho de aquisição). "
+    "**Vendas** = mix canônico de ganhos (Ganho/Fechado Ganho). "
+    "**Vendas novas** = só `tipo_venda='Novo cliente'`. "
     "Página migrada da `bi.mv_mkt_funil` (defasada) — não depende mais de "
     "REFRESH manual."
 )

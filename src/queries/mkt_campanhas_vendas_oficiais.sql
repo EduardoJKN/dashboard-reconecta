@@ -1,24 +1,23 @@
--- Total oficial de vendas novas para Campanhas (__todos__).
+-- Total oficial de vendas (mix de ganhos) para Campanhas (__todos__).
 --
 -- Finalidade: substituir int(SUM(vendas)) sobre dashboard_executivas.sql
--- (45 colunas, bi.vw_dashboard_comercial_executivas_rw) por contagem direta
--- em zoho_deals — mesmo indicador, somente leitura.
+-- por contagem direta em zoho_deals — mesmo universo do card Ganhos
+-- (Time de Vendas), somente leitura.
 --
--- Regra preservada (bi.vw_dashboard_comercial_executivas_rw):
---   stage = 'Ganho'
---   tipo_venda = 'Novo cliente'
+-- Mix canônico:
+--   stage IN ('Ganho', 'Fechado Ganho')
 --   data_hora_compra IS NOT NULL
 --   data_hora_compra::date BETWEEN :data_ini AND :data_fim
--- Equivalente a data_ganho NOT NULL com data_ganho = data_hora_compra::date
--- nos deals contados pela view (nao inclui 'Fechado Ganho').
+--   tipo_venda IN (Novo cliente, Ascensão, Renovação, Renovação antecipada,
+--                  Indicação, Upgrade, Novo cliente EVENTO) OR Ingresso%
 --
 -- Deduplicacao: 1 linha por deal_id em zoho_deals — COUNT(*) sem joins.
---
--- Nao usar SUM(vendas) de outra fonte (funil UTM, prevendas): regras e graos
--- diferem; este total e o CRM executivas agregado do periodo.
 SELECT COUNT(*)::bigint AS vendas
 FROM zoho_deals d
-WHERE d.stage = 'Ganho'
-  AND d.tipo_venda = 'Novo cliente'
+WHERE d.stage IN ('Ganho', 'Fechado Ganho')
   AND d.data_hora_compra IS NOT NULL
-  AND d.data_hora_compra::date BETWEEN :data_ini AND :data_fim;
+  AND d.data_hora_compra::date BETWEEN :data_ini AND :data_fim
+  AND (d.tipo_venda IN (
+          'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+          'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+      ) OR d.tipo_venda LIKE 'Ingresso%');

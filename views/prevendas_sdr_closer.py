@@ -175,8 +175,8 @@ with tab_closer:
 
 st.caption(
     "**Universos independentes — padrão Looker.** "
-    "**Ganhos**: `stage IN ('Ganho','Fechado Ganho') · tipo_venda='Novo "
-    "cliente' · data_hora_compra::date no período`. "
+    "**Ganhos**: `stage IN ('Ganho','Fechado Ganho') · mix de tipo_venda "
+    "(mesmo do card Ganhos) · data_hora_compra::date no período`. "
     "**Repasses**: `created_at::date no período · sdr_ss IS NOT NULL · "
     "executiva_vendas IS NOT NULL` (`hora_saida_prevendas` está zerada em "
     "100% dos deals atuais — `created_at` é o proxy autoritativo). "

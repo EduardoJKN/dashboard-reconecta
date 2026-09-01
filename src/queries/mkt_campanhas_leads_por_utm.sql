@@ -123,7 +123,10 @@ SELECT
     )::bigint                                                       AS leads_ganhos,
     COUNT(*) FILTER (
         WHERE lwd.deal_stage IN ('Ganho', 'Fechado Ganho')
-          AND lwd.deal_tipo_venda = 'Novo cliente'
+          AND (lwd.deal_tipo_venda IN (
+                  'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+                  'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+              ) OR lwd.deal_tipo_venda LIKE 'Ingresso%')
     )::bigint                                                       AS vendas_novas
 FROM distinct_email_utm deu
 LEFT JOIN last_classif c USING (email_norm)

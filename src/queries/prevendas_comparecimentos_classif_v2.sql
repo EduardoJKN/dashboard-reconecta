@@ -94,7 +94,10 @@ deals_novos AS (
     SELECT zd.id AS deal_id
     FROM zoho_deals zd
     WHERE zd.stage IN ('Ganho','Fechado Ganho')
-      AND zd.tipo_venda = 'Novo cliente'
+      AND (zd.tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR zd.tipo_venda LIKE 'Ingresso%')
       AND zd.data_hora_compra::date BETWEEN :data_ini AND :data_fim
 ),
 relevant_deal_ids AS MATERIALIZED (

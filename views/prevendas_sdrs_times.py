@@ -204,18 +204,18 @@ with c4:
         qual_split=_splits_resumo["comparec"],
     )
 with c5:
-    metric_card_v2("Vendas novas", int_br(k["vendas_novas"]),
-                   hint="tipo_venda = 'Novo cliente'")
+    metric_card_v2("Vendas", int_br(k["vendas"]),
+                   hint="mix de tipo_venda · Ganho/Fechado Ganho")
 with c6:
     metric_card_v2(
         "Conversão",
         pct(k["taxa_lead_venda_nova"]),
-        hint="vendas novas ÷ leads",
+        hint="vendas ÷ leads",
     )
 with c7:
     metric_card_v2("Ticket médio",
                    brl(k["ticket_medio"]) if k["ticket_medio"] else "—",
-                   hint="montante ÷ vendas novas")
+                   hint="montante ÷ vendas")
 with c8:
     metric_card_v2("Montante",
                    brl(k["montante"]) if k["montante"] else "—",

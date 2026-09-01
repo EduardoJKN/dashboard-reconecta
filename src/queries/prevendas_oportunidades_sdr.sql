@@ -79,7 +79,10 @@ deals_ganhos_periodo AS (
     SELECT d.id::text AS deal_id
     FROM zoho_deals d
     WHERE d.stage IN ('Ganho', 'Fechado Ganho')
-      AND d.tipo_venda = 'Novo cliente'
+      AND (d.tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR d.tipo_venda LIKE 'Ingresso%')
       AND d.data_hora_compra::date BETWEEN :data_ini AND :data_fim
 ),
 deals_relevantes AS (

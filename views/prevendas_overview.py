@@ -3,7 +3,7 @@
 Cards consolidados + Tendência diária + Funil 4 etapas + Top SDRs.
 SDR primário = `zoho_activities.prevendas` (NULL → 'Sem SDR').
 Vendas atribuídas via `what_id` da activity → deal Ganho/Fechado Ganho
-+ tipo_venda='Novo cliente' (mesma regra Visão Geral)."""
++ mix de tipo_venda (mesmo do card Ganhos)."""
 from datetime import date
 from typing import Optional
 
@@ -505,8 +505,8 @@ with c5:
         variant="resumo",
         breakdown_placeholder=True,
         help=(
-            "zoho_deals.stage = 'Ganho' · "
-            "tipo_venda = 'Novo cliente'"
+            "zoho_deals · stage IN ('Ganho','Fechado Ganho') · "
+            "mix de tipo_venda (mesmo do card Ganhos)"
         ),
     )
 
@@ -1616,8 +1616,8 @@ if carregar_indicadores_oport:
                     "agendamentos = activities Consulta/Indicação no período; "
                     "comparecimentos = activities concluídas no período "
                     "(status Concluída/Concluído); "
-                    "vendas = deals ganhos no período (stage Ganho · tipo "
-                    "Novo cliente). SDR atribuído via cascata "
+                    "vendas = deals ganhos no período (mix de tipo_venda, "
+                    "mesmo do card Ganhos). SDR atribuído via cascata "
                     "`activity.prevendas > deal.sdr_ss`. Apenas SDRs do cadastro "
                     "oficial. Conversões com denominador zero ficam em branco."
                 )
@@ -2458,7 +2458,9 @@ st.caption(
     "combinada: `zoho_deals.lead_classification = 'Atua +12'` OR "
     "`ext_reconecta.leads.classificado = 'Atua +12'` (CRM é fonte preferencial; "
     "ext entra como fallback). **Vendas** = `COUNT(DISTINCT deal_id)` com "
-    "`stage = 'Ganho'` e `tipo_venda = 'Novo cliente'`. **Leads totais** = "
+    "`stage IN ('Ganho','Fechado Ganho')` e mix de `tipo_venda` "
+    "(Novo cliente, Ascensão, Renovação, Upgrade, Evento, Ingresso…). "
+    "**Leads totais** = "
     "soma diária de e-mails únicos no período (`ext_reconecta.leads`). "
     "Os filtros `SDR` / `Tipo SDR` aplicam ao ranking Top SDRs e à tabela "
     "de detalhamento; os cards do topo refletem o total do período."

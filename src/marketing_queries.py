@@ -61,6 +61,7 @@ def _merge_funil_one_page_agend(
 @st.cache_data(ttl=_TTL, show_spinner="Lendo totais One Page do funil…")
 def get_mkt_funil_one_page_globais(
     data_ini: date, data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
 ) -> dict:
     """1 row — agendamentos, comparecimentos, vendas + decomp período/histórico."""
     try:
@@ -99,7 +100,11 @@ def get_mkt_overview(data_ini: date, data_fim: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo Visão Geral Marketing…")
-def get_mkt_visao_geral_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_mkt_visao_geral_diario(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     """Visão Geral Marketing — fonte oficial validada (regra pgAdmin).
 
     Retorna 1 linha por `data_ref` com investimento total geral, leads
@@ -113,7 +118,11 @@ def get_mkt_visao_geral_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo KPIs do período Marketing…")
-def get_mkt_visao_geral_periodo(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_mkt_visao_geral_periodo(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     """Visão Geral Marketing — KPIs do período para os cards do topo.
 
     Usa deduplicação por e-mail no período DENTRO de cada bucket de
@@ -138,7 +147,11 @@ def get_mkt_visao_geral_canal(data_ini: date, data_fim: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo KPIs por canal…")
-def get_mkt_visao_geral_kpis_canal(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_mkt_visao_geral_kpis_canal(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     """KPIs completos POR CANAL — investimento + leads + financeiro atribuído.
 
     1 linha por canal (incluindo 'Sem canal' para deals sem lead match).
@@ -198,8 +211,11 @@ def get_mkt_paginas_variantes(data_ini: date, data_fim: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo leads por campanha (UTM)…")
-def get_mkt_campanhas_leads_por_utm(data_ini: date,
-                                    data_fim: date) -> pd.DataFrame:
+def get_mkt_campanhas_leads_por_utm(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     """Leads por campanha — match `campaign_name` ↔ `utm_campaign`.
 
     1 linha por `utm_campaign` normalizado (LOWER+BTRIM) com
@@ -340,7 +356,11 @@ def get_mkt_criativos_cobertura(data_ini: date, data_fim: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo funil por criativo…")
-def get_mkt_criativo_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_mkt_criativo_funil(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     """Funil completo POR CRIATIVO (grão `ad_name` consolidado).
 
     1 linha por `ad_name_norm` no período, com mídia (invest/imp/cliques/
@@ -362,7 +382,11 @@ def get_mkt_criativo_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL, show_spinner="Lendo funil por campanha…")
-def get_mkt_campanha_funil(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_mkt_campanha_funil(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     """Funil completo POR CAMPANHA (grão `campaign_name` consolidado).
 
     Espelho de `get_mkt_criativo_funil` em outro grão: 1 linha por

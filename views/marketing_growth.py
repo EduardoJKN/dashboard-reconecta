@@ -225,28 +225,20 @@ def _override_oficial(k_dict, df_leads_d, df_kpc, df_act, canais_sel,
             k_dict["agendamentos"]    = 0.0
             k_dict["comparecimentos"] = 0.0
 
-    # Vendas oficial — APENAS NOVO CLIENTE.
-    # Para o funil Growth (caminho de aquisição), vendas conta só
-    # `tipo_venda='Novo cliente'`. Ascensão / Renovação / Indicação ficam
-    # de fora — bate com 50 (e não 57) em abril/2026.
-    #
-    # ⚠ Receita e ROAS continuam usando `receita_total_geral` (TODOS os
-    # deals Ganho/Fechado Ganho, inclusive ascensão/renovação/indicação)
-    # porque `mkt_visao_geral_kpis_canal.sql` não computa receita_novas
-    # separado. Isso cria inconsistência semântica entre CAC (sobre vendas
-    # novas) e ROAS (sobre receita total). Sinalizado na caption — pendente
-    # decisão do time se receita também deve virar "só novos".
+    # Vendas oficial — mix canônico (mesmo do card Ganhos / Time de Vendas).
+    # `vendas_novas_total_geral` (só Novo cliente) segue disponível no SQL
+    # como breakdown; o KPI de vendas e o CAC usam o total do mix.
     if df_kpc is not None and not df_kpc.empty:
         if todos_canais:
-            sub_kpc = df_kpc  # inclui Sem canal — bate com 50 / 774.182
+            sub_kpc = df_kpc
         else:
             sub_kpc = df_kpc[df_kpc["canal"].isin(canais_sel)]
         if not sub_kpc.empty:
-            vendas_novas = float(sub_kpc["vendas_novas_total_geral"].sum())
+            vendas = float(sub_kpc["vendas_total_geral"].sum())
             receita_oficial = float(sub_kpc["receita_total_geral"].sum())
-            k_dict["vendas"]        = vendas_novas
+            k_dict["vendas"]        = vendas
             k_dict["valor_receita"] = receita_oficial
-            k_dict["cac"]           = _safe_div(invest_atual, vendas_novas)
+            k_dict["cac"]           = _safe_div(invest_atual, vendas)
             k_dict["roas"]          = _safe_div(receita_oficial, invest_atual)
 
 
@@ -454,14 +446,12 @@ st.caption(
     "`start_datetime` na janela; comparecimento exige "
     "`status_reuniao='Concluída'`). Match canal via priority "
     "`zoho_id > session_id > email`. "
-    "**Vendas**: apenas `tipo_venda = 'Novo cliente'` em `zoho_deals` "
-    "(stages Ganho/Fechado Ganho) com priority match por canal — "
-    "ascensão / renovação / indicação ficam fora do funil de aquisição. "
+    "**Vendas**: mix canônico de ganhos em `zoho_deals` "
+    "(stages Ganho/Fechado Ganho · Novo cliente, Ascensão, Renovação, "
+    "Upgrade, Evento, Ingresso…) com priority match por canal — "
+    "mesma regra do card Ganhos no Time de Vendas. "
     "Atividades/reuniões podem ser maiores que leads únicos quando o "
     "mesmo lead reagenda — o funil prioriza avanço de leads. "
-    "⚠ **Receita e ROAS** ainda incluem ascensão/renovação/indicação "
-    "(`SUM(receita)` de todos os deals Ganho); CAC já usa só vendas "
-    "novas — pendente alinhar receita/ROAS com a mesma regra. "
     f"{_filter_msg}"
 )
 

@@ -62,21 +62,43 @@ WITH deals_validos AS (
         d.data_hora_compra::date    AS data_venda_ref,
         CASE
             WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN btrim(d.amount) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END                         AS montante,
         CASE
             WHEN NULLIF(btrim(d.receita), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN btrim(d.receita) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END                         AS receita
     FROM zoho_deals d
     WHERE d.sdr_ss IS NOT NULL
@@ -121,7 +143,10 @@ vendas_por_par AS (
         SUM(dv.receita)::numeric   AS receita
     FROM deals_validos dv
     WHERE dv.stage IN ('Ganho','Fechado Ganho')
-      AND dv.tipo_venda = 'Novo cliente'
+      AND (dv.tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR dv.tipo_venda LIKE 'Ingresso%')
       AND dv.data_venda_ref BETWEEN :data_ini AND :data_fim
     GROUP BY dv.sdr_id, dv.closer_id
 ),

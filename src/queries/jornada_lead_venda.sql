@@ -9,8 +9,8 @@
 -- recomputar.
 --
 -- Universo: deals ganhos NO PERÍODO (data_hora_compra entre :data_ini e
--- :data_fim, stage IN ('Ganho','Fechado Ganho'), tipo_venda = 'Novo
--- cliente'). Mesma regra de `prevendas_overview_diario_por_sdr.sql`.
+-- :data_fim, stage IN ('Ganho','Fechado Ganho'), mix de tipo_venda).
+-- Mesma regra de `prevendas_overview_diario.sql` / card Ganhos.
 -- Cada Δt é avaliado independentemente — um deal sem comparecimento
 -- aparece com `ts_comparecimento = NULL` mas contribui para Lead→Deal
 -- e Lead→Venda. Isso evita misturar populações.
@@ -38,7 +38,10 @@ WITH deals_ganhos AS (
         zd.sdr_ss                 AS sdr_ss
     FROM zoho_deals zd
     WHERE zd.stage IN ('Ganho', 'Fechado Ganho')
-      AND zd.tipo_venda = 'Novo cliente'
+      AND (zd.tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR zd.tipo_venda LIKE 'Ingresso%')
       AND zd.data_hora_compra::date BETWEEN :data_ini AND :data_fim
 ),
 -- Para cada deal ganho, captura o lead mais cedo que casa pela cascata

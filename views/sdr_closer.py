@@ -144,8 +144,8 @@ with tab_closer:
 
 st.caption(
     "**Universos independentes — padrão Looker.** "
-    "**Ganhos**: `stage IN ('Ganho','Fechado Ganho') · tipo_venda='Novo "
-    "cliente' · data_hora_compra::date no período`. "
+    "**Ganhos**: `stage IN ('Ganho','Fechado Ganho') · mix de tipo_venda "
+    "(mesmo do card Ganhos) · data_hora_compra::date no período`. "
     "**Repasses**: `created_at::date no período · sdr_ss IS NOT NULL · "
     "executiva_vendas IS NOT NULL`. Um deal pode ser repassado num mês e "
     "ganho em outro. "

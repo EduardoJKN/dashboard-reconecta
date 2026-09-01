@@ -69,10 +69,13 @@ def _deal_ids(data_ini: date, data_fim: date) -> set[str]:
     sql = text("""
         SELECT d.id::text
         FROM zoho_deals d
-        WHERE d.stage = 'Ganho'
-          AND d.tipo_venda = 'Novo cliente'
+        WHERE d.stage IN ('Ganho', 'Fechado Ganho')
           AND d.data_hora_compra IS NOT NULL
           AND d.data_hora_compra::date BETWEEN :data_ini AND :data_fim
+          AND (d.tipo_venda IN (
+                  'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+                  'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+              ) OR d.tipo_venda LIKE 'Ingresso%')
     """)
     with get_engine().connect() as conn:
         rows = conn.execute(sql, {"data_ini": data_ini, "data_fim": data_fim}).fetchall()

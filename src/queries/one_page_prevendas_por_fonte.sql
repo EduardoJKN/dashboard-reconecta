@@ -305,7 +305,10 @@ deals_dia AS (
         )::numeric                                                      AS receita
     FROM deal_flags
     WHERE stage IN ('Ganho', 'Fechado Ganho')
-      AND tipo_venda = 'Novo cliente'
+      AND (tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR tipo_venda LIKE 'Ingresso%')
       AND data_venda_ref BETWEEN :data_ini AND :data_fim
     GROUP BY data_venda_ref, fonte
 ),

@@ -54,9 +54,24 @@ leads_periodo AS (
 ),
 deals_periodo AS (
     SELECT
-        SUM(zd.amount::numeric)::numeric                                AS montante_total_geral,
-        SUM(zd.receita::numeric)::numeric                               AS receita_total_geral,
-        COUNT(DISTINCT zd.id)::bigint                                   AS vendas_total_geral,
+        SUM(zd.amount::numeric) FILTER (
+            WHERE (zd.tipo_venda IN (
+                'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+                'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+            ) OR zd.tipo_venda LIKE 'Ingresso%')
+        )::numeric                                                       AS montante_total_geral,
+        SUM(zd.receita::numeric) FILTER (
+            WHERE (zd.tipo_venda IN (
+                'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+                'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+            ) OR zd.tipo_venda LIKE 'Ingresso%')
+        )::numeric                                                       AS receita_total_geral,
+        COUNT(DISTINCT zd.id) FILTER (
+            WHERE (zd.tipo_venda IN (
+                'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+                'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+            ) OR zd.tipo_venda LIKE 'Ingresso%')
+        )::bigint                                                       AS vendas_total_geral,
         COUNT(DISTINCT zd.id) FILTER (
             WHERE zd.tipo_venda = 'Novo cliente'
         )::bigint                                                       AS vendas_novas_total_geral

@@ -47,21 +47,43 @@ WITH deals_validos AS (
         d.data_hora_compra::date    AS data_venda_ref,
         CASE
             WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN btrim(d.amount) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END                         AS montante,
         CASE
             WHEN NULLIF(btrim(d.receita), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN btrim(d.receita) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END                         AS receita
     FROM zoho_deals d
     WHERE d.executiva_vendas IS NOT NULL

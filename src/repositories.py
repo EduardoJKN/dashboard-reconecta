@@ -134,11 +134,16 @@ def get_executivas_for_funil(
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_mkt_campanhas_vendas_oficiais(data_ini: date, data_fim: date) -> pd.DataFrame:
-    """Total CRM de vendas novas para Campanhas (__todos__).
+def get_mkt_campanhas_vendas_oficiais(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
+    """Total CRM de vendas (mix de ganhos) para Campanhas (__todos__).
 
     Leve substituto de int(SUM(vendas)) sobre dashboard_executivas.sql —
-    cache separado de get_executivas."""
+    cache separado de get_executivas.
+    """
     return run_sql_file(
         "mkt_campanhas_vendas_oficiais.sql",
         _date_params(data_ini, data_fim),
@@ -489,7 +494,11 @@ def get_media_movel_vendas() -> float:
 # `zoho_users` (NULL → 'Sem Closer').
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_prevendas_overview_diario(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_prevendas_overview_diario(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     df = run_sql_file(
         "prevendas_overview_diario.sql", _date_params(data_ini, data_fim)
     )
@@ -750,8 +759,11 @@ def get_executivas_pos_contatos_email() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_prevendas_overview_diario_por_sdr(data_ini: date,
-                                          data_fim: date) -> pd.DataFrame:
+def get_prevendas_overview_diario_por_sdr(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     df = run_sql_file(
         "prevendas_overview_diario_por_sdr.sql",
         _date_params(data_ini, data_fim),
@@ -762,7 +774,11 @@ def get_prevendas_overview_diario_por_sdr(data_ini: date,
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_prevendas_por_sdr(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_prevendas_por_sdr(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     # CP3-B: v2 otimizada (escopo de deals/leads no período). Legado:
     # `prevendas_por_sdr.sql` — regressão via scripts/benchmark_prevendas_por_sdr.py
     return run_sql_file(
@@ -788,8 +804,11 @@ def get_prevendas_qualif_comparecimento(data_ini: date,
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_prevendas_oportunidades_sdr(data_ini: date,
-                                    data_fim: date) -> pd.DataFrame:
+def get_prevendas_oportunidades_sdr(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     """Oportunidades (deals criados no período) × Agendamentos (activities
     no período), agrupado por (sdr, classif_bucket).
 
@@ -840,15 +859,22 @@ def get_prevendas_cohort_leads(data_ini: date,
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_prevendas_sdr_closer(data_ini: date, data_fim: date) -> pd.DataFrame:
+def get_prevendas_sdr_closer(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     return run_sql_file(
         "prevendas_sdr_closer.sql", _date_params(data_ini, data_fim)
     )
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_prevendas_comparecimentos_classif(data_ini: date,
-                                          data_fim: date) -> pd.DataFrame:
+def get_prevendas_comparecimentos_classif(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     # CP3-B: v2 otimizada (escopo de deals/leads no período). Legado:
     # `prevendas_comparecimentos_classif.sql` — regressão via
     # scripts/benchmark_prevendas_comparecimentos_classif.py
@@ -927,8 +953,11 @@ def get_executivas_ciclo_venda(data_ini: date,
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_jornada_lead_venda(data_ini: date,
-                           data_fim: date) -> pd.DataFrame:
+def get_jornada_lead_venda(
+    data_ini: date,
+    data_fim: date,
+    _ganhos_mix_rules: str = "mix_tipo_venda_v1",
+) -> pd.DataFrame:
     """Deals ganhos no período com os 5 timestamps da jornada para o
     Python calcular Δt (média/mediana). Detalhes em
     `src/queries/jornada_lead_venda.sql`."""

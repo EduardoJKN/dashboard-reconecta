@@ -92,7 +92,10 @@ pv_deals_vendas AS (
     FROM pv_base_dados bd
     INNER JOIN zoho_deals d ON d.id = bd.deal_id
     WHERE d.stage IN ('Ganho', 'Fechado Ganho')
-      AND d.tipo_venda = 'Novo cliente'
+      AND (d.tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR d.tipo_venda LIKE 'Ingresso%')
       AND d.data_hora_compra::date BETWEEN :data_ini AND :data_fim
 ),
 agend_agg AS (

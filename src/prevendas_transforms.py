@@ -388,11 +388,11 @@ def prevendas_ranking_sdr(df_sdr: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
     out["taxa_lead_venda"] = out.apply(
-        lambda r: _safe_div(r["vendas_novas"], r["agendamentos"]) * 100,
+        lambda r: _safe_div(r["vendas"], r["agendamentos"]) * 100,
         axis=1,
     )
     out["ticket_medio"] = out.apply(
-        lambda r: _safe_div(r["montante"], r["vendas_novas"]),
+        lambda r: _safe_div(r["montante"], r["vendas"]),
         axis=1,
     )
     for c in cols:
@@ -455,11 +455,11 @@ def prevendas_ranking_sdr_oficiais(df_sdr: pd.DataFrame,
         axis=1,
     )
     agg["taxa_lead_venda"] = agg.apply(
-        lambda r: _safe_div(r["vendas_novas"], r["agendamentos"]) * 100,
+        lambda r: _safe_div(r["vendas"], r["agendamentos"]) * 100,
         axis=1,
     )
     agg["ticket_medio"] = agg.apply(
-        lambda r: _safe_div(r["montante"], r["vendas_novas"]),
+        lambda r: _safe_div(r["montante"], r["vendas"]),
         axis=1,
     )
     for c in cols:
@@ -1047,7 +1047,7 @@ def prevendas_por_tipo(df_sdr: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
     agg["ticket_medio"] = agg.apply(
-        lambda r: _safe_div(r["montante"], r["vendas_novas"]),
+        lambda r: _safe_div(r["montante"], r["vendas"]),
         axis=1,
     )
     return agg[cols].sort_values("agendamentos", ascending=False).reset_index(drop=True)

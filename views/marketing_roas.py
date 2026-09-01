@@ -15,9 +15,8 @@ Fontes alinhadas com a Visão Geral Marketing e Growth:
                                               diária — mesma política da
                                               Visão Geral.
 
-ROAS = Montante total / Investimento. CAC = Investimento / Vendas novas
-(`tipo_venda='Novo cliente'` — caminho de aquisição). Mesmas regras dos
-demais painéis de marketing — métricas 'totais', não 'atribuídas via UTM'.
+ROAS = Montante total / Investimento. CAC = Investimento / Vendas
+(mix canônico de ganhos, mesmo do Time de Vendas).
 """
 from datetime import timedelta
 
@@ -137,7 +136,7 @@ with c2:
         "CAC",
         brl(k["cac"], casas=2) if k["cac"] else "—",
         delta_pct=delta_pct(k["cac"], kp["cac"]),
-        hint="invest ÷ vendas novas",
+        hint="invest ÷ vendas (mix de ganhos)",
     )
 with c3:
     metric_card_v2(
@@ -247,12 +246,12 @@ with col_roas:
         )
 
 with col_cac:
-    section_title("CAC por canal", "menor = melhor · só canais com vendas novas")
-    # CAC = invest / vendas novas. Sem vendas novas, CAC=0 seria visualmente
-    # "ótimo" mas é informativamente errado. Filtramos vendas_novas > 0.
-    by_canal_cac = by_canal[by_canal["vendas_novas"] > 0]
+    section_title("CAC por canal", "menor = melhor · só canais com vendas")
+    # CAC = invest / vendas (mix). Sem vendas, CAC=0 seria visualmente
+    # "ótimo" mas é informativamente errado. Filtramos vendas > 0.
+    by_canal_cac = by_canal[by_canal["vendas"] > 0]
     if by_canal_cac.empty:
-        st.info("Nenhum canal com vendas novas no período.")
+        st.info("Nenhum canal com vendas no período.")
     else:
         st.plotly_chart(
             bar_simple(by_canal_cac, x="canal", y="cac", height=280, money=True),
@@ -300,7 +299,6 @@ st.caption(
     "`zoho_id > session_id > email` para atribuição por canal — deals sem "
     "lead correspondente entram como **Sem canal**. "
     "**ROAS = Montante total ÷ Investimento.** **CAC = Investimento ÷ "
-    "Vendas novas** (`tipo_venda='Novo cliente'` — caminho de aquisição; "
-    "ascensão / renovação / indicação ficam fora). Receita inclui todos os "
-    "deals Ganho do período."
+    "Vendas** (mix canônico de ganhos, mesmo do Time de Vendas). "
+    "Receita inclui os mesmos deals do mix."
 )

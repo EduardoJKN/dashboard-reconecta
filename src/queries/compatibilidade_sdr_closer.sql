@@ -56,7 +56,10 @@ WITH ganhos_periodo AS (
     FROM zoho_deals d
     WHERE d.data_hora_compra::date BETWEEN :mes_ini AND :mes_fim
       AND d.stage IN ('Ganho', 'Fechado Ganho')
-      AND d.tipo_venda = 'Novo cliente'
+      AND (d.tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR d.tipo_venda LIKE 'Ingresso%')
 ),
 repasses_periodo AS (
     SELECT d.id::text AS deal_id
@@ -129,21 +132,43 @@ base AS (
         )                                                     AS closer,
         CASE
             WHEN NULLIF(TRIM(d.amount), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN TRIM(d.amount) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END                                                   AS montante,
         CASE
             WHEN NULLIF(TRIM(d.receita), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN TRIM(d.receita) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END                                                   AS receita,
         (dr.deal_id IN (SELECT deal_id FROM ganhos_periodo))   AS is_ganho,
         (dr.deal_id IN (SELECT deal_id FROM repasses_periodo)) AS is_repasse,

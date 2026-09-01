@@ -74,26 +74,53 @@ deals_direct AS (
                 THEN 'deal.sdr_ss'
             ELSE 'Sem SDR'
         END AS fonte_sdr,
-        CASE WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
-        ELSE REPLACE(
-                 REPLACE(
-                    REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
-                     '.', ''),
-                 ',', '.'
-             )::numeric
+        CASE
+            WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN btrim(d.amount) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END AS montante,
-        CASE WHEN NULLIF(btrim(d.receita), '') IS NULL THEN 0::numeric
-        ELSE REPLACE(
-                 REPLACE(
-                    REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
-                     '.', ''),
-                 ',', '.'
-             )::numeric
+        CASE
+            WHEN NULLIF(btrim(d.receita), '') IS NULL THEN 0::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN btrim(d.receita) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END AS receita
     FROM zoho_deals d
     LEFT JOIN zoho_users u ON u.id::text = d.sdr_ss::text
-    WHERE d.stage = 'Ganho'
-      AND d.tipo_venda = 'Novo cliente'
+    WHERE d.stage IN ('Ganho', 'Fechado Ganho')
+      AND (d.tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR d.tipo_venda LIKE 'Ingresso%')
       AND d.data_hora_compra::date BETWEEN :data_ini AND :data_fim
 ),
 relevant_deal_ids AS (

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .ganhos_mix import is_tipo_venda_ganho
 from .transforms import _safe_div  # reutiliza helper de vendas
 
 
@@ -888,7 +889,7 @@ def roas_kpis(df_kpc: pd.DataFrame,
 
     Fórmulas (recalculadas no agregado, não média):
       roas           = montante / invest
-      cac            = invest / vendas_novas       (caminho de aquisição)
+      cac            = invest / vendas             (mix de ganhos)
       cpl            = invest / leads
       cpl_qualif     = invest / qualif
       ticket_medio   = receita / vendas
@@ -915,7 +916,7 @@ def roas_kpis(df_kpc: pd.DataFrame,
         out["montante"] = montante
         out["valor_receita"] = receita
         out["roas"] = _safe_div(montante, invest)
-        out["cac"] = _safe_div(invest, vendas_novas)
+        out["cac"] = _safe_div(invest, vendas)
         out["ticket_medio"] = _safe_div(receita, vendas)
 
     # Leads/qualif vêm do canal-diario (regra last_row + canal_final).
@@ -1013,7 +1014,7 @@ def roas_por_canal(df_kpc: pd.DataFrame,
         lambda r: _safe_div(r["valor_venda"], r["investimento"]), axis=1
     )
     agg["cac"] = agg.apply(
-        lambda r: _safe_div(r["investimento"], r["vendas_novas"]), axis=1
+        lambda r: _safe_div(r["investimento"], r["vendas"]), axis=1
     )
     agg["cpl"] = agg.apply(
         lambda r: _safe_div(r["investimento"], r["leads"]), axis=1
@@ -1352,8 +1353,8 @@ def funil_kpis_oficial(df_kpc: pd.DataFrame,
       tx_qualificacao   = qualif / leads * 100
       tx_lead_agend     = agend / leads * 100
       tx_agend_compar   = compar / agend * 100
-      tx_compar_venda   = vendas_novas / compar * 100
-      tx_lead_venda     = vendas_novas / leads * 100
+      tx_compar_venda   = vendas / compar * 100
+      tx_lead_venda     = vendas / leads * 100
       cpl               = invest / leads
       cpl_qualificado   = invest / qualif
       ticket_medio      = receita / vendas
@@ -1386,15 +1387,15 @@ def funil_kpis_oficial(df_kpc: pd.DataFrame,
         out["investimento"], out["leads"], out["leads_qualificados"],
         out["agendamentos"], out["comparecimentos"],
     )
-    novas, vendas, receita = (
-        out["vendas_novas"], out["vendas"], out["valor_receita"]
+    vendas, receita = (
+        out["vendas"], out["valor_receita"]
     )
 
     out["tx_qualificacao"] = _safe_div(qualif, leads) * 100
     out["tx_lead_agend"]   = _safe_div(agend, leads) * 100
     out["tx_agend_compar"] = _safe_div(compar, agend) * 100
-    out["tx_compar_venda"] = _safe_div(novas, compar) * 100
-    out["tx_lead_venda"]   = _safe_div(novas, leads) * 100
+    out["tx_compar_venda"] = _safe_div(vendas, compar) * 100
+    out["tx_lead_venda"]   = _safe_div(vendas, leads) * 100
     out["cpl"]             = _safe_div(invest, leads)
     out["cpl_qualificado"] = _safe_div(invest, qualif)
     out["ticket_medio"]    = _safe_div(receita, vendas)
@@ -1404,21 +1405,21 @@ def funil_kpis_oficial(df_kpc: pd.DataFrame,
 def funil_estagios_oficial(k: dict) -> tuple[list[str], list[float]]:
     """6 etapas do funil de marketing oficial:
         Investimento → Leads → Qualificados → Agendamentos →
-        Comparecimentos → Vendas novas
+        Comparecimentos → Vendas
 
     Investimento entra como R$ (escala diferente das contagens) — a UI
     decide se renderiza como Plotly funnel separado ou como um valor de
     contexto. Mesma estrutura de `funil_estagios` legado, apenas com etapas
-    alinhadas à regra oficial Visão Geral / Growth (Vendas = Novo cliente)."""
+    alinhadas à regra oficial Visão Geral / Growth (Vendas = mix de ganhos)."""
     labels = ["Investimento", "Leads", "Qualificados",
-              "Agendamentos", "Comparecimentos", "Vendas novas"]
+              "Agendamentos", "Comparecimentos", "Vendas"]
     values = [
         float(k.get("investimento", 0) or 0),
         float(k.get("leads", 0) or 0),
         float(k.get("leads_qualificados", 0) or 0),
         float(k.get("agendamentos", 0) or 0),
         float(k.get("comparecimentos", 0) or 0),
-        float(k.get("vendas_novas", 0) or 0),
+        float(k.get("vendas", 0) or 0),
     ]
     return labels, values
 
@@ -4205,7 +4206,7 @@ def agregar_campanhas_por_utm(df_pv_raw: pd.DataFrame,
         leads_ganhos = int(emails["flag_ganho"].fillna(False).sum())
         vendas_novas = int(
             (emails["flag_ganho"].fillna(False)
-             & (emails["deal_tipo_venda"] == "Novo cliente")).sum()
+             & is_tipo_venda_ganho(emails["deal_tipo_venda"])).sum()
         )
 
         # URL exemplo = mais recente do grupo
@@ -4526,7 +4527,7 @@ def agregar_criativos_por_utm_content(
         leads_ganhos = int(emails["flag_ganho"].fillna(False).sum())
         vendas_novas = int(
             (emails["flag_ganho"].fillna(False)
-             & (emails["deal_tipo_venda"] == "Novo cliente")).sum()
+             & is_tipo_venda_ganho(emails["deal_tipo_venda"])).sum()
         )
 
         url_recente = (

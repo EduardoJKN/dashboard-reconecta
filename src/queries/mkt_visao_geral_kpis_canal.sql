@@ -147,12 +147,27 @@ deal_canal AS (
 deals_canal_agg AS (
     SELECT
         canal_final                                                            AS canal,
-        COUNT(DISTINCT deal_id)                                                AS vendas_total_geral,
+        COUNT(DISTINCT deal_id) FILTER (
+            WHERE (tipo_venda IN (
+                'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+                'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+            ) OR tipo_venda LIKE 'Ingresso%')
+        )                                                                      AS vendas_total_geral,
         COUNT(DISTINCT deal_id) FILTER (
             WHERE tipo_venda = 'Novo cliente'
         )                                                                      AS vendas_novas_total_geral,
-        SUM(amount_num)                                                        AS montante_total_geral,
-        SUM(receita_num)                                                       AS receita_total_geral
+        SUM(amount_num) FILTER (
+            WHERE (tipo_venda IN (
+                'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+                'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+            ) OR tipo_venda LIKE 'Ingresso%')
+        )                                                                      AS montante_total_geral,
+        SUM(receita_num) FILTER (
+            WHERE (tipo_venda IN (
+                'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+                'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+            ) OR tipo_venda LIKE 'Ingresso%')
+        )                                                                      AS receita_total_geral
     FROM deal_canal
     GROUP BY 1
 ),

@@ -15,8 +15,8 @@
 --   - agendamentos         = COUNT(DISTINCT activity_id) por start_datetime::date
 --   - comparecimentos      = COUNT(DISTINCT activity_id) FILTER status concluído
 --   - vencidas             = COUNT(DISTINCT activity_id) FILTER status vencida
---   - vendas               = COUNT(DISTINCT deal_id) FILTER stage='Ganho'
---                            AND tipo_venda='Novo cliente' por data_hora_compra
+--   - vendas               = COUNT(DISTINCT deal_id) FILTER stage Ganho/Fechado Ganho
+--                            AND mix de tipo_venda (card Ganhos) por data_hora_compra
 --   - montante / receita   = soma após DEDUP por deal_id (corrige fan-out
 --                            antigo que somava o montante várias vezes quando
 --                            o mesmo deal tinha N leads pareados)
@@ -104,21 +104,43 @@ base_dados AS (
         d.fonte_de_lead,
         CASE
             WHEN NULLIF(btrim(d.amount), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN btrim(d.amount) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.amount), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END AS montante,
         CASE
             WHEN NULLIF(btrim(d.receita), '') IS NULL THEN 0::numeric
-            ELSE REPLACE(
-                     REPLACE(
-                         REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
-                         '.', ''),
-                     ',', '.'
-                 )::numeric
+            -- Com virgula: formato BR (1.234,56). Sem virgula: ponto decimal
+            -- (6056.94) — NAO remover pontos (bug: 6056.94 virava 605694).
+            WHEN btrim(d.receita) LIKE '%,%' THEN
+                REPLACE(
+                    REPLACE(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9,.-]', '', 'g'),
+                        '.', ''),
+                    ',', '.'
+                )::numeric
+            ELSE
+                COALESCE(
+                    NULLIF(
+                        REGEXP_REPLACE(TRIM(d.receita), '[^0-9.-]', '', 'g'),
+                        ''
+                    )::numeric,
+                    0::numeric
+                )
         END AS receita,
         CASE
             WHEN NULLIF(btrim(d.lead_classification), '')
@@ -207,8 +229,11 @@ deals_ganhos_dedup AS (
         MAX(bd.receita)                     AS receita,
         bool_or(bd.classif_final = 'Atua +12') AS tem_mais_12
     FROM base_dados bd
-    WHERE bd.stage = 'Ganho'
-      AND bd.tipo_venda = 'Novo cliente'
+    WHERE bd.stage IN ('Ganho', 'Fechado Ganho')
+      AND (bd.tipo_venda IN (
+              'Novo cliente', 'Ascensão', 'Renovação', 'Renovação antecipada',
+              'Indicação', 'Upgrade', 'Novo cliente EVENTO'
+          ) OR bd.tipo_venda LIKE 'Ingresso%')
       AND bd.data_venda_ref BETWEEN :data_ini AND :data_fim
     GROUP BY bd.deal_id
 ),
